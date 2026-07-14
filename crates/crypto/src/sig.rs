@@ -93,10 +93,6 @@ impl SigPublicKey {
             .map_err(|_| CryptoError::InvalidEncoding("mldsa pk"))?;
         Ok(SigPublicKey { ed25519: ed, mldsa: ml })
     }
-    /// Hash de l'adresse : identifie le propriétaire d'une note sans publier la clé.
-    pub fn hash(&self) -> [u8; 32] {
-        crate::hash::blake3_domain("obscura/addr/ed25519+dilithium3-round3/v2", &self.to_bytes())
-    }
 }
 
 impl HybridSignature {
