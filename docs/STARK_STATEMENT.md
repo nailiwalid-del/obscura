@@ -17,15 +17,15 @@ Entrées PUBLIQUES :
 Témoins PRIVÉS :
   notes d'entrée        (value, owner, rho, r)
   chemins de Merkle     un par note d'entrée
-  nk                    clé de nullifier du dépensier
-  ak                    clé d'autorisation de dépense (jamais publiée)
+  shielded_secret       secret racine shielded, jamais publié
+  nk                    intermédiaire privé contraint par nk = H_nk(shielded_secret)
   notes de sortie       (value, owner, rho, r)
 
 La preuve établit :
   P1. chaque commitment d'entrée appartient à l'arbre de racine `root`
-  P2. pour chaque note d'entrée : note.owner = H(ak)   (autorité de dépense)
+  P2. pour chaque note d'entrée : note.owner = H_owner(shielded_secret)   (autorité de dépense)
   P3. chaque nullifier est correctement dérivé : nf = PRF_nk(rho ‖ commitment)
-  P4. nk est correctement liée à ak (même autorité)
+  P4. nk = H_nk(shielded_secret)   (nk contrainte par le même secret racine)
   P5. Σ valeurs d'entrée = Σ valeurs de sortie + fee
   P6. toutes les valeurs sont range-checkées dans [0, 2^64)   (pas d'overflow/underflow)
   P7. chaque output_commitment est l'engagement correct de sa note de sortie
@@ -59,7 +59,7 @@ Décision v0.2 — deux domaines de hachage explicites :
 | Domaine | Usage | Hash |
 |---|---|---|
 | **Hash consensus** | tx_digest, KDF, adresses, transcripts KEM/sig | dual BLAKE3‖SHA3 (inchangé) |
-| **Hash prouvé** | commitments de notes, arbre de Merkle, PRF nullifier | **Rescue-Prime** (circuit-friendly, disponible dans winterfell) |
+| **Hash prouvé** | commitments de notes, arbre de Merkle, `owner = H(secret)` et `nk = H(secret)`, PRF nullifier | **Rescue-Prime** (circuit-friendly, disponible dans winterfell) |
 
 Conséquence assumée : les objets prouvés perdent la double-primitive et reposent sur
 Rescue-Prime seul (fonction éponge algébrique, post-quantique comme tout hash, mais
@@ -80,13 +80,15 @@ est **exigé** là où la résistance aux collisions est *directement* sécurita
   signature n'y changerait rien (les deux signent le même digest). Implémenté
   en dual depuis la correction d'audit 2026-07.
 
-Les usages en **KDF/PRF** — `derive_key` (sous-clés AEAD, dérivation de `nk`),
-combinaison du secret KEM — reposent sur **BLAKE3 seul** (keyed / derive-key). Choix
+Les usages en **KDF/PRF** — `derive_key` (sous-clés AEAD), combinaison du secret
+KEM — reposent sur **BLAKE3 seul** (keyed / derive-key). Choix
 assumé : la défense en profondeur y est portée par les deux primitives KEM/signature
 sous-jacentes, pas par le hash ; un hash unique de 256 bits comme PRF/KDF y suffit et
-imposer le dual n'apporterait rien. Le **hash d'adresse** (`owner = H(ak)`,
-`sig.rs::hash`) est BLAKE3-256 en mode transparent ; le binding `owner ↔ ak` devient
-Rescue-Prime dans le circuit (P2). « Dual » est donc une *exigence* pour
+imposer le dual n'apporterait rien. En revanche, le **hash d'identité**
+(`owner = H_owner(shielded_secret)`, `keys.rs`) et la **dérivation de `nk`**
+(`nk = H_nk(shielded_secret)`) relèvent du **hash prouvé** (Rescue-Prime, migration
+avec le circuit), PAS d'un KDF wallet — voir la ligne « hash prouvé » ci-dessus.
+BLAKE3 domain-séparé n'y est qu'un échafaudage de dev. « Dual » est donc une *exigence* pour
 commitments + tx_digest, non une contrainte uniforme sur tout hachage consensus.
 
 ## Candidat d'implémentation

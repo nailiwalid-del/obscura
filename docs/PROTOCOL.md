@@ -32,11 +32,14 @@ Note { value: u64, owner: [u8;32], rho: [u8;32], r: [u8;32] }
 
 | Clé | Construction | Rôle |
 |---|---|---|
-| Autorisation de dépense `ak` | hybride Ed25519 + Dilithium3 | prouver l'autorité (en ZK, jamais publiée) |
+| Secret shielded `shielded_secret` | aléa 32 o, jamais publié | racine de l'identité ; témoin du circuit (P2/P4) |
 | Réception/vue | hybride X25519 + Kyber768 | déchiffrer les notes reçues |
-| Nullifier `nk` | dérivée de la graine, liée à `ak` (P4) | calculer les nullifiers |
+| Nullifier `nk` | `nk = H_nk(shielded_secret)` (**hash prouvé**) | calculer les nullifiers, liée à l'autorité (P4) |
+| Signature `spend` | hybride Ed25519 + Dilithium3 | enveloppe d'intention / anti-malléabilité sur `tx_digest` (PAS autorisation d'ownership tant que non liée au secret — phase 3) |
 
-Adresse = (hash clé d'autorisation, clé publique KEM). Jamais publiée on-chain.
+Adresse = (`owner = H_owner(shielded_secret)`, clé publique KEM). Jamais publiée on-chain.
+`owner` et `nk` appartiennent au domaine **« hash prouvé »** : BLAKE3 domain-séparé en
+v0.2 dev, migration vers Rescue-Prime avec le circuit (jamais figés en BLAKE3).
 
 ## Versioning des algorithmes (obligatoire)
 

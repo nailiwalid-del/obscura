@@ -27,7 +27,13 @@ pub fn encrypt(master: &[u8; 32], aad: &[u8], plaintext: &[u8]) -> Vec<u8> {
     let mut n1 = [0u8; AES_NONCE_LEN];
     OsRng.fill_bytes(&mut n1);
     let inner = aes
-        .encrypt(Nonce::from_slice(&n1), Payload { msg: plaintext, aad })
+        .encrypt(
+            Nonce::from_slice(&n1),
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
         .expect("chiffrement AES");
 
     // Couche externe : XChaCha20-Poly1305 sur (nonce1 ‖ inner)

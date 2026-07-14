@@ -31,6 +31,12 @@ Puis phase 4 (P2P PQ + Dandelion++ + test key privacy) et phase 5 (nœud/wallet/
 ## Décisions v0.2 (revue intégrée — ne pas régresser)
 
 - Nullifier lié au commitment : nf = PRF_nk(rho ‖ cm), domaine "obscura/nullifier/v2"
+- Identité shielded : secret racine `shielded_secret` (32 o, jamais publié, témoin
+  STARK) ; `owner = H_owner(secret)` et `nk = H_nk(secret)` sont des hachages PROUVÉS
+  (Rescue-Prime avec le circuit), pas des KDF wallet. La signature hybride `spend` =
+  enveloppe d'intention / anti-malléabilité, PAS autorisation d'ownership tant qu'elle
+  n'est pas liée au secret (phase 3). Spec :
+  `docs/superpowers/specs/2026-07-14-hierarchie-shielded-secret-design.md`
 - Merkle : profondeur 32 consensus / 16 dev (`MerkleTree::consensus()` / `new_dev()`)
 - Versioning d'algos partout : byte 0x01 = round-3 en tête des sérialisations
   KEM/sig ; la migration FIPS 203/204 = nouvelle version 0x02, PAS un simple import
@@ -40,9 +46,11 @@ Puis phase 4 (P2P PQ + Dandelion++ + test key privacy) et phase 5 (nœud/wallet/
 
 ## Notes de build
 
-- Si rustc ≥ 1.81 : migrer vers `pqcrypto-mlkem`/`pqcrypto-mldsa` (FIPS finaux),
-  deux lignes d'import dans `crypto/src/kem.rs` et `crypto/src/sig.rs` (voir PROTOCOL.md),
-  et retirer les pins de versions du Cargo.lock devenus inutiles.
+- Migration vers `pqcrypto-mlkem`/`pqcrypto-mldsa` (FIPS 203/204 finaux) : ce n'est
+  PAS un simple changement d'import. FIPS 203/204 diffèrent de Kyber/Dilithium round-3
+  (dérivation, encodages, errata NIST) → c'est une **nouvelle version d'algo `0x02`**
+  qui cohabite avec `0x01`, pas un remplacement (voir PROTOCOL.md, versioning). Prévoir
+  crates FIPS, byte de version, et vecteurs de test croisés.
 - Prototype pédagogique : pas d'audit, ne pas utiliser en production.
 
 ## Conventions
