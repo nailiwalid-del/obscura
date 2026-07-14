@@ -1,0 +1,158 @@
+//! Signature hybride : Ed25519 + ML-DSA-65 (FIPS 204).
+//! La vérification exige que LES DEUX signatures soient valides :
+//! forger exige de casser les courbes elliptiques ET les réseaux euclidiens.
+
+use crate::CryptoError;
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use pqcrypto_dilithium::dilithium3 as mldsa65;
+use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
+use rand_core::{OsRng, RngCore};
+
+pub const ED25519_SIG_LEN: usize = 64;
+
+/// Identifiant d'algorithme (versioning explicite, cf. kem.rs).
+pub const SIG_ALGO_ID: &str = "ed25519+dilithium3-round3";
+pub const SIG_ALGO_VERSION: u8 = 0x01;
+
+#[derive(Clone)]
+pub struct SigPublicKey {
+    pub ed25519: VerifyingKey,
+    pub mldsa: mldsa65::PublicKey,
+}
+
+pub struct SigKeypair {
+    pub public: SigPublicKey,
+    ed25519: SigningKey,
+    mldsa: mldsa65::SecretKey,
+}
+
+#[derive(Clone)]
+pub struct HybridSignature {
+    pub ed25519: Signature,
+    pub mldsa: mldsa65::DetachedSignature,
+}
+
+impl SigKeypair {
+    pub fn generate() -> Self {
+        let mut b = [0u8; 32];
+        OsRng.fill_bytes(&mut b);
+        let esk = SigningKey::from_bytes(&b);
+        let epk = esk.verifying_key();
+        let (mpk, msk) = mldsa65::keypair();
+        SigKeypair {
+            public: SigPublicKey { ed25519: epk, mldsa: mpk },
+            ed25519: esk,
+            mldsa: msk,
+        }
+    }
+
+    /// Signe avec les deux algorithmes (message préfixé par domaine).
+    pub fn sign(&self, domain: &str, msg: &[u8]) -> HybridSignature {
+        let m = frame(domain, msg);
+        HybridSignature {
+            ed25519: self.ed25519.sign(&m),
+            mldsa: mldsa65::detached_sign(&m, &self.mldsa),
+        }
+    }
+}
+
+fn frame(domain: &str, msg: &[u8]) -> Vec<u8> {
+    let mut m = (domain.len() as u64).to_le_bytes().to_vec();
+    m.extend_from_slice(domain.as_bytes());
+    m.extend_from_slice(&(SIG_ALGO_ID.len() as u64).to_le_bytes());
+    m.extend_from_slice(SIG_ALGO_ID.as_bytes());
+    m.extend_from_slice(msg);
+    m
+}
+
+/// Valide si et seulement si LES DEUX signatures sont valides.
+pub fn verify(pk: &SigPublicKey, domain: &str, msg: &[u8], sig: &HybridSignature) -> bool {
+    let m = frame(domain, msg);
+    let ed_ok = pk.ed25519.verify(&m, &sig.ed25519).is_ok();
+    let pq_ok = mldsa65::verify_detached_signature(&sig.mldsa, &m, &pk.mldsa).is_ok();
+    ed_ok && pq_ok
+}
+
+impl SigPublicKey {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut v = vec![SIG_ALGO_VERSION];
+        v.extend_from_slice(&self.ed25519.to_bytes());
+        v.extend_from_slice(self.mldsa.as_bytes());
+        v
+    }
+    pub fn from_bytes(b: &[u8]) -> Result<Self, CryptoError> {
+        if b.len() != 1 + 32 + mldsa65::public_key_bytes() || b[0] != SIG_ALGO_VERSION {
+            return Err(CryptoError::InvalidEncoding("SigPublicKey"));
+        }
+        let mut e = [0u8; 32];
+        e.copy_from_slice(&b[1..33]);
+        let ed = VerifyingKey::from_bytes(&e).map_err(|_| CryptoError::InvalidEncoding("ed25519 pk"))?;
+        let ml = mldsa65::PublicKey::from_bytes(&b[33..])
+            .map_err(|_| CryptoError::InvalidEncoding("mldsa pk"))?;
+        Ok(SigPublicKey { ed25519: ed, mldsa: ml })
+    }
+    /// Hash de l'adresse : identifie le propriétaire d'une note sans publier la clé.
+    pub fn hash(&self) -> [u8; 32] {
+        crate::hash::blake3_domain("obscura/addr/ed25519+dilithium3-round3/v2", &self.to_bytes())
+    }
+}
+
+impl HybridSignature {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut v = vec![SIG_ALGO_VERSION];
+        v.extend_from_slice(&self.ed25519.to_bytes());
+        v.extend_from_slice(self.mldsa.as_bytes());
+        v
+    }
+    pub fn from_bytes(b: &[u8]) -> Result<Self, CryptoError> {
+        if b.len() != 1 + ED25519_SIG_LEN + mldsa65::signature_bytes() || b[0] != SIG_ALGO_VERSION {
+            return Err(CryptoError::InvalidEncoding("HybridSignature"));
+        }
+        let mut e = [0u8; 64];
+        e.copy_from_slice(&b[1..65]);
+        let ml = mldsa65::DetachedSignature::from_bytes(&b[65..])
+            .map_err(|_| CryptoError::InvalidEncoding("mldsa sig"))?;
+        Ok(HybridSignature { ed25519: Signature::from_bytes(&e), mldsa: ml })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn roundtrip() {
+        let kp = SigKeypair::generate();
+        let sig = kp.sign("test/v1", b"message");
+        assert!(verify(&kp.public, "test/v1", b"message", &sig));
+        assert!(!verify(&kp.public, "test/v1", b"messagf", &sig));
+        assert!(!verify(&kp.public, "autre/v1", b"message", &sig));
+    }
+
+    #[test]
+    fn mauvaise_cle_rejette() {
+        let kp1 = SigKeypair::generate();
+        let kp2 = SigKeypair::generate();
+        let sig = kp1.sign("test/v1", b"message");
+        assert!(!verify(&kp2.public, "test/v1", b"message", &sig));
+    }
+
+    #[test]
+    fn signature_partielle_rejetee() {
+        // Une signature dont SEULE la partie Ed25519 est valide doit être rejetée.
+        let kp = SigKeypair::generate();
+        let sig_a = kp.sign("test/v1", b"message");
+        let sig_b = kp.sign("test/v1", b"autre message");
+        let hybride_invalide = HybridSignature { ed25519: sig_a.ed25519, mldsa: sig_b.mldsa.clone() };
+        assert!(!verify(&kp.public, "test/v1", b"message", &hybride_invalide));
+    }
+
+    #[test]
+    fn serialisation() {
+        let kp = SigKeypair::generate();
+        let sig = kp.sign("test/v1", b"m");
+        let pk2 = SigPublicKey::from_bytes(&kp.public.to_bytes()).unwrap();
+        let sig2 = HybridSignature::from_bytes(&sig.to_bytes()).unwrap();
+        assert!(verify(&pk2, "test/v1", b"m", &sig2));
+    }
+}
