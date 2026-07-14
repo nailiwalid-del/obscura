@@ -69,6 +69,26 @@ vecteurs de test croisés avec une seconde implémentation, et versioning explic
 La migration du code (merkle.rs, note.rs) se fait AVEC le circuit, jamais avant,
 pour garantir que l'arbre consensus et l'arbre prouvé sont identiques.
 
+### Précision d'implémentation (v0.2) — où `dual_hash` s'applique réellement
+
+Au sein du domaine « hash consensus », `dual_hash` (BLAKE3‖SHA3, 64 o, jamais tronqué)
+est **exigé** là où la résistance aux collisions est *directement* sécuritaire :
+
+- **commitments de notes** (`note.rs`) — binding de la note ;
+- **tx_digest** (`tx.rs`) — lie signature et preuve à CETTE transaction ; une
+  collision transférerait une signature d'une tx à une autre, et la double
+  signature n'y changerait rien (les deux signent le même digest). Implémenté
+  en dual depuis la correction d'audit 2026-07.
+
+Les usages en **KDF/PRF** — `derive_key` (sous-clés AEAD, dérivation de `nk`),
+combinaison du secret KEM — reposent sur **BLAKE3 seul** (keyed / derive-key). Choix
+assumé : la défense en profondeur y est portée par les deux primitives KEM/signature
+sous-jacentes, pas par le hash ; un hash unique de 256 bits comme PRF/KDF y suffit et
+imposer le dual n'apporterait rien. Le **hash d'adresse** (`owner = H(ak)`,
+`sig.rs::hash`) est BLAKE3-256 en mode transparent ; le binding `owner ↔ ak` devient
+Rescue-Prime dans le circuit (P2). « Dual » est donc une *exigence* pour
+commitments + tx_digest, non une contrainte uniforme sur tout hachage consensus.
+
 ## Candidat d'implémentation
 
 `winterfell` (STARK, Rust) : prouveur/vérifieur génériques, Rescue-Prime fourni,

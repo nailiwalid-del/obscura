@@ -14,7 +14,7 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
 - `crates/crypto` : hash, kem, sig, aead — testés
 - `crates/ledger` : notes engagées, nullifiers, Merkle (BLAKE3, prof. 16), tx, validation — testés
 - `docs/PROTOCOL.md` et `docs/THREAT_MODEL.md` : spécification de référence
-- `cargo test` : 23 tests verts
+- `cargo test` : 26 tests verts
 
 ## Prochaine étape : PHASE 3 — le circuit STARK EST la règle de consensus
 

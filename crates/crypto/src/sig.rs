@@ -3,7 +3,7 @@
 //! forger exige de casser les courbes elliptiques ET les réseaux euclidiens.
 
 use crate::CryptoError;
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use pqcrypto_dilithium::dilithium3 as mldsa65;
 use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
 use rand_core::{OsRng, RngCore};
@@ -68,7 +68,9 @@ fn frame(domain: &str, msg: &[u8]) -> Vec<u8> {
 /// Valide si et seulement si LES DEUX signatures sont valides.
 pub fn verify(pk: &SigPublicKey, domain: &str, msg: &[u8], sig: &HybridSignature) -> bool {
     let m = frame(domain, msg);
-    let ed_ok = pk.ed25519.verify(&m, &sig.ed25519).is_ok();
+    // `verify_strict` : rejette les S non canoniques et les clés d'ordre faible,
+    // fermant la malléabilité de signature d'Ed25519 (RFC 8032 §5.4.5 / §8).
+    let ed_ok = pk.ed25519.verify_strict(&m, &sig.ed25519).is_ok();
     let pq_ok = mldsa65::verify_detached_signature(&sig.mldsa, &m, &pk.mldsa).is_ok();
     ed_ok && pq_ok
 }

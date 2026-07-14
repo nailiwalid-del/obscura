@@ -28,7 +28,7 @@ ses notes en scannant le ledger avec sa clé de réception (KEM hybride + AEAD c
 ## Build & tests
 
 ```
-cargo test        # 23 tests : primitives, Merkle, paiement e2e, double dépense, altérations
+cargo test        # 26 tests : primitives, Merkle, paiement e2e, double dépense, altérations
 ```
 
 ## Feuille de route (v0.2 : le STARK est le centre, pas une option)

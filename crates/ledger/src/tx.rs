@@ -42,7 +42,16 @@ pub const SIG_DOMAIN: &str = "obscura/tx-sig/v1";
 
 impl Transaction {
     /// Digest canonique (exclut les signatures, couvre tout le reste).
-    pub fn digest(&self) -> [u8; 32] {
+    ///
+    /// Hash **dual** (BLAKE3‖SHA3, 64 o, jamais tronqué) : le digest lie la
+    /// signature (et, en phase 3, la preuve STARK) à CETTE transaction. Une
+    /// collision sur le digest transférerait une signature d'une tx à une autre ;
+    /// la double primitive de la signature n'y changerait rien puisque les deux
+    /// signent le MÊME digest. Le digest doit donc respecter la défense en
+    /// profondeur au même titre que les commitments (cf. STARK_STATEMENT.md,
+    /// domaine « hash consensus »). Encodage entièrement préfixé en longueur
+    /// (canonique/injectif) pour interdire toute ambiguïté de frontières.
+    pub fn digest(&self) -> [u8; 64] {
         let mut b = Vec::new();
         b.extend_from_slice(&self.fee.to_le_bytes());
         b.extend_from_slice(&(self.inputs.len() as u64).to_le_bytes());
@@ -51,6 +60,7 @@ impl Transaction {
             b.extend_from_slice(&i.commitment.to_bytes());
             b.extend_from_slice(&i.nullifier);
             b.extend_from_slice(&i.path.index.to_le_bytes());
+            b.extend_from_slice(&(i.path.siblings.len() as u64).to_le_bytes());
             for s in &i.path.siblings {
                 b.extend_from_slice(s);
             }
@@ -65,7 +75,7 @@ impl Transaction {
             b.extend_from_slice(&(o.enc_note.len() as u64).to_le_bytes());
             b.extend_from_slice(&o.enc_note);
         }
-        hash::blake3_domain("obscura/tx-digest/v1", &b)
+        hash::dual_hash("obscura/tx-digest/v1", &b)
     }
 }
 
@@ -87,9 +97,13 @@ pub fn build_transparent_transaction(
     recipients: &[(Address, u64)],
     fee: u64,
 ) -> Result<Transaction, LedgerError> {
-    let total_in: u64 = spends.iter().map(|s| s.note.value).sum();
-    let total_out: u64 = recipients.iter().map(|(_, v)| v).sum();
-    if total_in != total_out + fee {
+    // Accumulation en u128 : les montants sont des u64, mais leur somme (et
+    // `total_out + fee`) déborderait en u64 (wrap silencieux en release, panique
+    // en debug). u128 garantit qu'un total qui déborde 2^64 reste distinct et
+    // fait échouer l'équilibre au lieu de se replier sur une fausse égalité.
+    let total_in: u128 = spends.iter().map(|s| s.note.value as u128).sum();
+    let total_out: u128 = recipients.iter().map(|(_, v)| *v as u128).sum();
+    if total_in != total_out + fee as u128 {
         return Err(LedgerError::Unbalanced);
     }
 
@@ -136,5 +150,42 @@ pub fn scan_output(wallet: &WalletKeys, out: &TxOutput) -> Option<Note> {
         Some(note)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::keys::WalletKeys;
+    use crate::merkle::{MerkleTree, DEV_DEPTH};
+    use crate::note::Note;
+
+    #[test]
+    fn digest_est_dual_64_octets_et_canonique() {
+        let tx = Transaction { inputs: vec![], outputs: vec![], fee: 7 };
+        let d = tx.digest();
+        assert_eq!(d.len(), 64); // dual BLAKE3‖SHA3, jamais tronqué
+        assert_eq!(tx.digest(), d); // déterministe
+        let tx2 = Transaction { inputs: vec![], outputs: vec![], fee: 8 };
+        assert_ne!(tx2.digest(), d); // sensible au contenu
+        assert_ne!(d[..32], d[32..]); // les deux moitiés sont indépendantes
+    }
+
+    #[test]
+    fn equilibre_ne_deborde_pas() {
+        // `total_out + fee` déborderait u64 (wrap → fausse égalité avec total_in=10).
+        // L'accumulation u128 fait échouer l'équilibre au lieu de se replier dessus.
+        let alice = WalletKeys::generate();
+        let bob = WalletKeys::generate();
+        let note = Note::new(10, alice.address().owner);
+        let tree = MerkleTree::new(DEV_DEPTH);
+        let res = build_transparent_transaction(
+            &alice,
+            &tree,
+            &[SpendInfo { note, index: 0 }],
+            &[(bob.address(), u64::MAX)],
+            11,
+        );
+        assert!(matches!(res, Err(LedgerError::Unbalanced)));
     }
 }
