@@ -38,7 +38,8 @@ Note { value: u64, owner: [u8;32], rho: [u8;32], r: [u8;32] }
 | Signature `spend` | hybride Ed25519 + Dilithium3 | enveloppe d'intention / anti-malléabilité sur `tx_digest` (PAS autorisation d'ownership tant que non liée au secret — phase 3) |
 
 Adresse = (`owner = H_owner(shielded_secret)`, clé publique KEM). Jamais publiée on-chain.
-`owner` et `nk` sont des **hachages prouvés** (domaine Rescue-Prime, migration avec le circuit).
+`owner` et `nk` appartiennent au domaine **« hash prouvé »** : BLAKE3 domain-séparé en
+v0.2 dev, migration vers Rescue-Prime avec le circuit (jamais figés en BLAKE3).
 
 ## Versioning des algorithmes (obligatoire)
 

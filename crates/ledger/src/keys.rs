@@ -82,6 +82,29 @@ mod tests {
     }
 
     #[test]
+    fn derivations_deterministes_et_domaines_figes() {
+        // Secret fixe : les dérivations sont déterministes et séparées par domaine.
+        let s = [42u8; 32];
+        assert_eq!(
+            owner_from_secret(&s),
+            hash::blake3_domain("obscura/owner/v2", &s)
+        );
+        assert_eq!(nk_from_secret(&s), hash::blake3_domain("obscura/nk/v2", &s));
+        assert_ne!(owner_from_secret(&s), nk_from_secret(&s));
+
+        // Vecteurs hex figés : gèlent les domaines "obscura/{owner,nk}/v2" (hash prouvé)
+        // jusqu'à la migration Rescue-Prime. Toute rupture ici = changement de consensus.
+        assert_eq!(
+            hex::encode(owner_from_secret(&s)),
+            "5b80b1f4e8ba8686ad9a3286de1792547bd139bbe9d6c5a9c2380e888e3a41c7"
+        );
+        assert_eq!(
+            hex::encode(nk_from_secret(&s)),
+            "bfce49be96ce47ee0a22b2951a52cb7b43dc2ee40ffa95d038d17ee4cebfb4c6"
+        );
+    }
+
+    #[test]
     fn deux_wallets_ont_des_identites_distinctes() {
         let a = WalletKeys::generate();
         let b = WalletKeys::generate();
