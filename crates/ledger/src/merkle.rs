@@ -49,7 +49,10 @@ pub struct MerkleTree {
 impl MerkleTree {
     pub fn new(depth: usize) -> Self {
         assert!(depth > 0 && depth <= 48, "profondeur invalide");
-        MerkleTree { leaves: Vec::new(), depth }
+        MerkleTree {
+            leaves: Vec::new(),
+            depth,
+        }
     }
 
     /// Arbre aux paramètres consensus (profondeur 32).
@@ -71,7 +74,10 @@ impl MerkleTree {
 
     /// Ajoute un commitment, retourne son index.
     pub fn append(&mut self, c: &Commitment) -> u64 {
-        assert!((self.leaves.len() as u128) < (1u128 << self.depth), "arbre plein");
+        assert!(
+            (self.leaves.len() as u128) < (1u128 << self.depth),
+            "arbre plein"
+        );
         self.leaves.push(leaf_hash(c));
         (self.leaves.len() - 1) as u64
     }
@@ -123,7 +129,11 @@ pub fn verify_path(root: &[u8; 32], c: &Commitment, path: &MerklePath, depth: us
     let mut cur = leaf_hash(c);
     let mut idx = path.index;
     for sib in &path.siblings {
-        cur = if idx & 1 == 0 { node_hash(&cur, sib) } else { node_hash(sib, &cur) };
+        cur = if idx & 1 == 0 {
+            node_hash(&cur, sib)
+        } else {
+            node_hash(sib, &cur)
+        };
         idx >>= 1;
     }
     cur == *root

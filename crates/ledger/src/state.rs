@@ -99,10 +99,9 @@ impl LedgerState {
             if self.nullifiers.contains(&i.nullifier) || !seen.insert(i.nullifier) {
                 return Err(LedgerError::DoubleSpend);
             }
-            let pk = sig::SigPublicKey::from_bytes(&i.spend_pk)
-                .map_err(|_| LedgerError::Encoding)?;
-            let s = sig::HybridSignature::from_bytes(&i.sig)
-                .map_err(|_| LedgerError::Encoding)?;
+            let pk =
+                sig::SigPublicKey::from_bytes(&i.spend_pk).map_err(|_| LedgerError::Encoding)?;
+            let s = sig::HybridSignature::from_bytes(&i.sig).map_err(|_| LedgerError::Encoding)?;
             if !sig::verify(&pk, SIG_DOMAIN, &digest, &s) {
                 return Err(LedgerError::InvalidSignature);
             }

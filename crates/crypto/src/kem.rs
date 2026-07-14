@@ -45,8 +45,14 @@ impl KemKeypair {
         let xpk = XPublicKey::from(&xsk);
         let (mpk, msk) = mlkem768::keypair();
         KemKeypair {
-            public: KemPublicKey { x25519: *xpk.as_bytes(), mlkem: mpk },
-            secret: KemSecretKey { x25519: xsk, mlkem: msk },
+            public: KemPublicKey {
+                x25519: *xpk.as_bytes(),
+                mlkem: mpk,
+            },
+            secret: KemSecretKey {
+                x25519: xsk,
+                mlkem: msk,
+            },
         }
     }
 }
@@ -54,7 +60,8 @@ impl KemKeypair {
 /// Combine les deux secrets en liant tout le transcript (clés publiques + ciphertexts) :
 /// empêche les attaques par mélange de sessions.
 fn combine(ss1: &[u8], ss2: &[u8], eph_pk: &[u8], mlkem_ct: &[u8], pk: &KemPublicKey) -> [u8; 32] {
-    let mut t = Vec::with_capacity(ss1.len() + ss2.len() + eph_pk.len() + mlkem_ct.len() + 32 + 1184);
+    let mut t =
+        Vec::with_capacity(ss1.len() + ss2.len() + eph_pk.len() + mlkem_ct.len() + 32 + 1184);
     t.extend_from_slice(ss1);
     t.extend_from_slice(ss2);
     t.extend_from_slice(eph_pk);
@@ -73,15 +80,36 @@ pub fn encapsulate(pk: &KemPublicKey) -> (KemCiphertext, [u8; 32]) {
     let epk = XPublicKey::from(&esk);
     let ss1 = esk.diffie_hellman(&XPublicKey::from(pk.x25519));
     let (ss2, ct2) = mlkem768::encapsulate(&pk.mlkem);
-    let ss = combine(ss1.as_bytes(), ss2.as_bytes(), epk.as_bytes(), ct2.as_bytes(), pk);
-    (KemCiphertext { x25519_eph: *epk.as_bytes(), mlkem_ct: ct2 }, ss)
+    let ss = combine(
+        ss1.as_bytes(),
+        ss2.as_bytes(),
+        epk.as_bytes(),
+        ct2.as_bytes(),
+        pk,
+    );
+    (
+        KemCiphertext {
+            x25519_eph: *epk.as_bytes(),
+            mlkem_ct: ct2,
+        },
+        ss,
+    )
 }
 
 /// Décapsule avec la paire de clés du destinataire.
 pub fn decapsulate(kp: &KemKeypair, ct: &KemCiphertext) -> [u8; 32] {
-    let ss1 = kp.secret.x25519.diffie_hellman(&XPublicKey::from(ct.x25519_eph));
+    let ss1 = kp
+        .secret
+        .x25519
+        .diffie_hellman(&XPublicKey::from(ct.x25519_eph));
     let ss2 = mlkem768::decapsulate(&ct.mlkem_ct, &kp.secret.mlkem);
-    combine(ss1.as_bytes(), ss2.as_bytes(), &ct.x25519_eph, ct.mlkem_ct.as_bytes(), &kp.public)
+    combine(
+        ss1.as_bytes(),
+        ss2.as_bytes(),
+        &ct.x25519_eph,
+        ct.mlkem_ct.as_bytes(),
+        &kp.public,
+    )
 }
 
 impl KemPublicKey {
@@ -99,7 +127,10 @@ impl KemPublicKey {
         x.copy_from_slice(&b[1..33]);
         let m = mlkem768::PublicKey::from_bytes(&b[33..])
             .map_err(|_| CryptoError::InvalidEncoding("mlkem pk"))?;
-        Ok(KemPublicKey { x25519: x, mlkem: m })
+        Ok(KemPublicKey {
+            x25519: x,
+            mlkem: m,
+        })
     }
 }
 
@@ -118,7 +149,10 @@ impl KemCiphertext {
         x.copy_from_slice(&b[1..33]);
         let m = mlkem768::Ciphertext::from_bytes(&b[33..])
             .map_err(|_| CryptoError::InvalidEncoding("mlkem ct"))?;
-        Ok(KemCiphertext { x25519_eph: x, mlkem_ct: m })
+        Ok(KemCiphertext {
+            x25519_eph: x,
+            mlkem_ct: m,
+        })
     }
 }
 
@@ -139,10 +173,13 @@ mod tests {
         let kp1 = KemKeypair::generate();
         let kp2 = KemKeypair::generate();
         let (ct, ss_a) = encapsulate(&kp1.public);
-        let ss_mauvais = decapsulate(&kp2, &KemCiphertext {
-            x25519_eph: ct.x25519_eph,
-            mlkem_ct: ct.mlkem_ct.clone(),
-        });
+        let ss_mauvais = decapsulate(
+            &kp2,
+            &KemCiphertext {
+                x25519_eph: ct.x25519_eph,
+                mlkem_ct: ct.mlkem_ct.clone(),
+            },
+        );
         assert_ne!(ss_a, ss_mauvais);
     }
 

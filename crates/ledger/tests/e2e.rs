@@ -21,7 +21,10 @@ fn paiement_complet_et_double_depense() {
     let tx = build_transparent_transaction(
         &alice,
         &state.tree,
-        &[SpendInfo { note: note_alice.clone(), index: idx }],
+        &[SpendInfo {
+            note: note_alice.clone(),
+            index: idx,
+        }],
         &[(bob.address(), 60), (alice.address(), 39)],
         1,
     )
@@ -30,16 +33,27 @@ fn paiement_complet_et_double_depense() {
     state.apply_transparent(&tx).unwrap();
 
     // Bob scanne le ledger et retrouve SA note (et pas celle d'Alice).
-    let notes_bob: Vec<_> = tx.outputs.iter().filter_map(|o| scan_output(&bob, o)).collect();
+    let notes_bob: Vec<_> = tx
+        .outputs
+        .iter()
+        .filter_map(|o| scan_output(&bob, o))
+        .collect();
     assert_eq!(notes_bob.len(), 1);
     assert_eq!(notes_bob[0].value, 60);
 
-    let notes_alice: Vec<_> = tx.outputs.iter().filter_map(|o| scan_output(&alice, o)).collect();
+    let notes_alice: Vec<_> = tx
+        .outputs
+        .iter()
+        .filter_map(|o| scan_output(&alice, o))
+        .collect();
     assert_eq!(notes_alice.len(), 1);
     assert_eq!(notes_alice[0].value, 39);
 
     // Rejouer la même tx = double dépense -> rejet.
-    assert!(matches!(state.apply_transparent(&tx), Err(LedgerError::DoubleSpend)));
+    assert!(matches!(
+        state.apply_transparent(&tx),
+        Err(LedgerError::DoubleSpend)
+    ));
 }
 
 #[test]
@@ -79,5 +93,8 @@ fn alteration_de_tx_rejetee() {
 
     // Un attaquant modifie la fee après signature -> digest change -> signature invalide.
     tx.fee = 5;
-    assert!(matches!(state.apply_transparent(&tx), Err(LedgerError::InvalidSignature)));
+    assert!(matches!(
+        state.apply_transparent(&tx),
+        Err(LedgerError::InvalidSignature)
+    ));
 }

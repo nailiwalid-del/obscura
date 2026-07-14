@@ -21,7 +21,12 @@ impl Note {
         let mut r = [0u8; 32];
         OsRng.fill_bytes(&mut rho);
         OsRng.fill_bytes(&mut r);
-        Note { value, owner, rho, r }
+        Note {
+            value,
+            owner,
+            rho,
+            r,
+        }
     }
 
     /// Encodage canonique fixe (déterminisme du commitment).
@@ -46,7 +51,12 @@ impl Note {
         rho.copy_from_slice(&b[40..72]);
         let mut r = [0u8; 32];
         r.copy_from_slice(&b[72..104]);
-        Ok(Note { value: u64::from_le_bytes(value), owner, rho, r })
+        Ok(Note {
+            value: u64::from_le_bytes(value),
+            owner,
+            rho,
+            r,
+        })
     }
 
     /// Commitment dual (BLAKE3 ‖ SHA3) : hiding (grâce à r), binding (double collision-résistance).

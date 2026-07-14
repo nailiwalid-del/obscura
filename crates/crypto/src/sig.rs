@@ -40,7 +40,10 @@ impl SigKeypair {
         let epk = esk.verifying_key();
         let (mpk, msk) = mldsa65::keypair();
         SigKeypair {
-            public: SigPublicKey { ed25519: epk, mldsa: mpk },
+            public: SigPublicKey {
+                ed25519: epk,
+                mldsa: mpk,
+            },
             ed25519: esk,
             mldsa: msk,
         }
@@ -88,10 +91,14 @@ impl SigPublicKey {
         }
         let mut e = [0u8; 32];
         e.copy_from_slice(&b[1..33]);
-        let ed = VerifyingKey::from_bytes(&e).map_err(|_| CryptoError::InvalidEncoding("ed25519 pk"))?;
+        let ed =
+            VerifyingKey::from_bytes(&e).map_err(|_| CryptoError::InvalidEncoding("ed25519 pk"))?;
         let ml = mldsa65::PublicKey::from_bytes(&b[33..])
             .map_err(|_| CryptoError::InvalidEncoding("mldsa pk"))?;
-        Ok(SigPublicKey { ed25519: ed, mldsa: ml })
+        Ok(SigPublicKey {
+            ed25519: ed,
+            mldsa: ml,
+        })
     }
 }
 
@@ -110,7 +117,10 @@ impl HybridSignature {
         e.copy_from_slice(&b[1..65]);
         let ml = mldsa65::DetachedSignature::from_bytes(&b[65..])
             .map_err(|_| CryptoError::InvalidEncoding("mldsa sig"))?;
-        Ok(HybridSignature { ed25519: Signature::from_bytes(&e), mldsa: ml })
+        Ok(HybridSignature {
+            ed25519: Signature::from_bytes(&e),
+            mldsa: ml,
+        })
     }
 }
 
@@ -141,8 +151,16 @@ mod tests {
         let kp = SigKeypair::generate();
         let sig_a = kp.sign("test/v1", b"message");
         let sig_b = kp.sign("test/v1", b"autre message");
-        let hybride_invalide = HybridSignature { ed25519: sig_a.ed25519, mldsa: sig_b.mldsa.clone() };
-        assert!(!verify(&kp.public, "test/v1", b"message", &hybride_invalide));
+        let hybride_invalide = HybridSignature {
+            ed25519: sig_a.ed25519,
+            mldsa: sig_b.mldsa.clone(),
+        };
+        assert!(!verify(
+            &kp.public,
+            "test/v1",
+            b"message",
+            &hybride_invalide
+        ));
     }
 
     #[test]

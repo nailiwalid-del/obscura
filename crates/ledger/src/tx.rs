@@ -127,10 +127,18 @@ pub fn build_transparent_transaction(
         let commitment = note.commitment();
         let (kem_ct, ss) = kem::encapsulate(&addr.kem_pk);
         let enc_note = aead::encrypt(&ss, &commitment.to_bytes(), &note.to_bytes());
-        outputs.push(TxOutput { commitment, kem_ct: kem_ct.to_bytes(), enc_note });
+        outputs.push(TxOutput {
+            commitment,
+            kem_ct: kem_ct.to_bytes(),
+            enc_note,
+        });
     }
 
-    let mut tx = Transaction { inputs, outputs, fee };
+    let mut tx = Transaction {
+        inputs,
+        outputs,
+        fee,
+    };
     let digest = tx.digest();
     let sig = wallet.spend.sign(SIG_DOMAIN, &digest).to_bytes();
     for i in &mut tx.inputs {
@@ -162,11 +170,19 @@ mod tests {
 
     #[test]
     fn digest_est_dual_64_octets_et_canonique() {
-        let tx = Transaction { inputs: vec![], outputs: vec![], fee: 7 };
+        let tx = Transaction {
+            inputs: vec![],
+            outputs: vec![],
+            fee: 7,
+        };
         let d = tx.digest();
         assert_eq!(d.len(), 64); // dual BLAKE3‖SHA3, jamais tronqué
         assert_eq!(tx.digest(), d); // déterministe
-        let tx2 = Transaction { inputs: vec![], outputs: vec![], fee: 8 };
+        let tx2 = Transaction {
+            inputs: vec![],
+            outputs: vec![],
+            fee: 8,
+        };
         assert_ne!(tx2.digest(), d); // sensible au contenu
         assert_ne!(d[..32], d[32..]); // les deux moitiés sont indépendantes
     }
