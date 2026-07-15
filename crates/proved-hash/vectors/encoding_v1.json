@@ -22,5 +22,10 @@
   },
   "preambles": [
     { "domain": "Owner", "payload": [7, 8], "fields": [1, 1, 2, 7, 8, 1] }
-  ]
+  ],
+  "rescue_hash": {
+    "note": "Rp64_256 via sponge_preamble (PAD_ONE inclus). Hors-circuit ; l'egalite in-circuit est prouvee en 3a2.",
+    "hash_owner_7_8": "c68d330df414958c7e4e05b4586ff226348e5ec6fcc668e370ba589674e2bb9e",
+    "merge_merklenode_of_nc1_nc2": "46ae13fd5897b72f18777ce9de25fafdc4ddd06a335846c0a78d9d192a0d1201"
+  }
 }
