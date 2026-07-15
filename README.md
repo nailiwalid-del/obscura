@@ -40,4 +40,7 @@ cargo test        # 26 tests : primitives, Merkle, paiement e2e, double dépense
 4. ⬜ Réseau P2P chiffré PQ + Dandelion++ + test de key privacy
 5. ⬜ Nœud, wallet CLI, testnet local multi-nœuds
 
+> Phase 3 (en cours) : circuit **validity-only** — intégrité prouvée, confidentialité
+> (zero-knowledge) NON encore livrée (jalon gaté « Phase 3z »).
+
 **Prototype pédagogique — pas d'audit de sécurité, ne pas utiliser en production.**
