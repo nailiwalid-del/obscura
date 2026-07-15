@@ -7,6 +7,7 @@ pub mod amount;
 pub mod digest;
 pub mod domain;
 pub mod felt;
+pub mod rescue;
 
 use thiserror::Error;
 

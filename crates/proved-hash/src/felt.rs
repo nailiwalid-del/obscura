@@ -47,6 +47,21 @@ impl core::fmt::Debug for Felt {
     }
 }
 
+// Pont vers le corps de winter-math (Goldilocks) pour le hash prouvé (3a1).
+use winter_math::fields::f64::BaseElement;
+
+impl Felt {
+    /// Conversion exacte vers le corps de winter (déjà canonique `< p`).
+    pub fn to_winter(self) -> BaseElement {
+        BaseElement::new(self.0)
+    }
+
+    /// Depuis un BaseElement : `as_int()` renvoie la forme canonique `< p`.
+    pub fn from_winter(be: BaseElement) -> Result<Self, EncodingError> {
+        Self::from_canonical_u64(be.as_int())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -67,5 +82,13 @@ mod tests {
         assert!(Felt::from_canonical_u64(u64::MAX).is_err());
         // décodage de bytes non canoniques
         assert!(Felt::from_bytes(&P.to_le_bytes()).is_err());
+    }
+
+    #[test]
+    fn roundtrip_base_element() {
+        for x in [0u64, 1, P - 1] {
+            let f = Felt::from_canonical_u64(x).unwrap();
+            assert_eq!(Felt::from_winter(f.to_winter()).unwrap(), f);
+        }
     }
 }
