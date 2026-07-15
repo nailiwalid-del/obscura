@@ -9,6 +9,8 @@ thiserror.workspace = true
 hex.workspace = true
 serde = { workspace = true }
 zeroize.workspace = true
+winter-crypto = { workspace = true }
+winter-math = { workspace = true }
 
 [dev-dependencies]
 proptest.workspace = true
