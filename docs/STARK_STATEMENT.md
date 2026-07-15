@@ -1,5 +1,10 @@
 # Statement de preuve zk-STARK — v0.2
 
+> **Phase 3 = validity-only.** L'implémentation initiale du circuit prouve
+> l'INTÉGRITÉ (P1–P7), pas la confidentialité : un STARK n'est pas zero-knowledge
+> par défaut. Le witness-hiding est un jalon séparé et gaté (« Phase 3z »). Voir
+> `docs/superpowers/specs/2026-07-15-phase3-decision-et-3a0-design.md`.
+
 **Ce statement EST la règle de consensus d'une dépense valide.** Tout le reste du
 protocole s'organise autour de lui. Le mode transparent actuel (`apply_transparent`)
 n'est qu'un échafaudage de développement et ne définit pas la validité.
