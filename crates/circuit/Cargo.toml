@@ -1,0 +1,11 @@
+[package]
+name = "circuit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+winterfell = { workspace = true }
+winter-crypto = { workspace = true }
+winter-math = { workspace = true }
+proved-hash = { path = "../proved-hash" }
