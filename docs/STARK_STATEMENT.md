@@ -7,9 +7,15 @@
 >
 > **3a2 (fait) :** premier AIR = la **permutation** Rp64_256 (`crates/circuit`,
 > `prove`/`verify`), validée par différentiel contre le vecteur de référence Sage.
-> Le hash sponge complet (`owner = H_owner(secret)`, P2) est la tranche 3a2b.
 > Note : sur Goldilocks (64 bits), l'extension de corps **quadratique** est
 > obligatoire — sans elle la sécurité conjecturée plafonne à ~63 bits.
+>
+> **3a2b (fait) — P2 EST PROUVÉ EN CIRCUIT** : `owner = H_owner(shielded_secret)`
+> (`circuit::{prove_owner, verify_owner}`). Le sponge de `hash_elements` n'utilise
+> aucun padding (la longueur est injectée dans la capacité) et le préambule 3a0 fait
+> exactement un bloc de rate → P2 = **une** permutation. Le `shielded_secret` reste
+> témoin : **aucune assertion ne le référence**. Différentiel vert contre
+> `proved_hash::rescue::hash` (le hash du ledger).
 
 **Ce statement EST la règle de consensus d'une dépense valide.** Tout le reste du
 protocole s'organise autour de lui. Le mode transparent actuel (`apply_transparent`)
