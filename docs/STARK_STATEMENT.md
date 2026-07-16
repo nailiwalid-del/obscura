@@ -4,6 +4,12 @@
 > l'INTÉGRITÉ (P1–P7), pas la confidentialité : un STARK n'est pas zero-knowledge
 > par défaut. Le witness-hiding est un jalon séparé et gaté (« Phase 3z »). Voir
 > `docs/superpowers/specs/2026-07-15-phase3-decision-et-3a0-design.md`.
+>
+> **3a2 (fait) :** premier AIR = la **permutation** Rp64_256 (`crates/circuit`,
+> `prove`/`verify`), validée par différentiel contre le vecteur de référence Sage.
+> Le hash sponge complet (`owner = H_owner(secret)`, P2) est la tranche 3a2b.
+> Note : sur Goldilocks (64 bits), l'extension de corps **quadratique** est
+> obligatoire — sans elle la sécurité conjecturée plafonne à ~63 bits.
 
 **Ce statement EST la règle de consensus d'une dépense valide.** Tout le reste du
 protocole s'organise autour de lui. Le mode transparent actuel (`apply_transparent`)

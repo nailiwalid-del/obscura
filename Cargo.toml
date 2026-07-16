@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/crypto", "crates/ledger", "crates/proved-hash"]
+members = ["crates/crypto", "crates/ledger", "crates/proved-hash", "crates/circuit"]
 
 [workspace.package]
 version = "0.1.0"
@@ -26,6 +26,7 @@ zeroize = "1.7"
 proptest = "1"
 winter-crypto = "0.13"
 winter-math = "0.13"
+winterfell = "0.13"
 
 [profile.release]
 lto = "thin"
