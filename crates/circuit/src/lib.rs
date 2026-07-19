@@ -14,6 +14,7 @@ pub mod owner_hash;
 pub mod range_check;
 pub mod rescue_perm;
 pub mod rescue_round;
+pub mod spend;
 pub mod sponge;
 
 pub use balance::{prove_balance, verify_balance};
@@ -24,6 +25,7 @@ pub use merkle_level::{prove_merkle_level, verify_merkle_level};
 pub use merkle_path::{prove_merkle_path, verify_merkle_path};
 pub use owner_hash::{prove_owner, verify_owner};
 pub use rescue_perm::{prove_permutation, verify_permutation};
+pub use spend::{prove_spend, verify_spend, SpendNote, SpendProof};
 pub use sponge::{
     prove_nk, prove_note_commitment, prove_nullifier, prove_sponge, verify_note_commitment,
     verify_sponge,

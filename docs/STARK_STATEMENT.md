@@ -101,6 +101,22 @@
 > Le sponge évoluant, la preuve tourne en DEBUG. **Prochaines** : 3b5b Spend
 > (P1+P3+P6+P7ᵢₙ), 3b5c Output (P6+P7), 3b5d Bundle (câblage public + équilibre +
 > `tx_digest`).
+>
+> **3b5b (fait) — BUNDLE DE DÉPENSE (Spend) PAR COMPOSITION** (`circuit::{prove_spend,
+> verify_spend}`) : pour UNE note d'entrée, établit **P7ᵢₙ ∧ P1 ∧ P3 ∧ P6** en
+> composant les preuves déjà bâties (commitment, membership, nullifier, range), liées
+> par des valeurs PUBLIQUES partagées (`cm_in`, `value`, `rho`, plus `owner`/`nk` du
+> statement). **Décision d'archi (AskUserQuestion) : composition liée, PAS de
+> mini-monolithe** — un STARK validity-only n'est pas witness-hiding (il fuit ses
+> témoins), donc garder `cm_in` hors des entrées publiques ne le cache pas ;
+> l'unlinkability + le circuit fusionné rejoignent la Phase 3z. Le seul témoin
+> devant rester caché ET partagé (le secret maître) est déjà lié en trace unique par
+> 3b5a. Mécanique : chaque sous-preuve EXPOSE ses positions partagées
+> (`prove_sponge(..., public_idx)`), `verify_spend` passe la même valeur partout ;
+> l'appartenance est liée au `cm_in` public via `leaf == merkle::leaf(cm_in)` recalculé.
+> Différentiels verts (cm_in/nf/root vs `proved_hash`), owner/nk/racine erronés et
+> `cm_in` falsifié rejetés. **Prochaines** : 3b5c Output, 3b5d Bundle 2-in/2-out +
+> équilibre natif + `tx_digest`.
 
 **Ce statement EST la règle de consensus d'une dépense valide.** Tout le reste du
 protocole s'organise autour de lui. Le mode transparent actuel (`apply_transparent`)
