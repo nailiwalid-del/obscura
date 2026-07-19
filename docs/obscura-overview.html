@@ -1,0 +1,598 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Obscura — prototype de monnaie numérique post-quantique conçue pour la confidentialité. Vulgarisation puis détails techniques : architecture, circuit STARK, ledger, performance, feuille de route.">
+<title>Obscura — Monnaie post-quantique conçue pour la confidentialité</title>
+<style>
+  :root{
+    --ink:#14161d; --paper:#f2f3f6; --surface:#ffffff; --surface-2:#e9ebf0;
+    --muted:#59616f; --line:#d8dce3; --accent:#0f9a82; --accent-ink:#0b6f5e;
+    --accent-soft:#d8f1eb; --secret:#a86f16; --secret-soft:#f4e9d3;
+    --done:#0f8f6c; --pending:#8b94a2; --code-bg:#eef1f5;
+    --shadow:0 1px 2px rgba(20,22,29,.06),0 8px 24px rgba(20,22,29,.05);
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --ink:#e7eaf1; --paper:#0c0e13; --surface:#14171f; --surface-2:#1b1f2a;
+      --muted:#98a2b2; --line:#272c38; --accent:#2fd0b0; --accent-ink:#54e0c4;
+      --accent-soft:#123029; --secret:#e2ac52; --secret-soft:#2b2415;
+      --done:#33c99a; --pending:#69727f; --code-bg:#161a22;
+      --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"]{
+    --ink:#14161d; --paper:#f2f3f6; --surface:#ffffff; --surface-2:#e9ebf0;
+    --muted:#59616f; --line:#d8dce3; --accent:#0f9a82; --accent-ink:#0b6f5e;
+    --accent-soft:#d8f1eb; --secret:#a86f16; --secret-soft:#f4e9d3;
+    --done:#0f8f6c; --pending:#8b94a2; --code-bg:#eef1f5;
+    --shadow:0 1px 2px rgba(20,22,29,.06),0 8px 24px rgba(20,22,29,.05);
+  }
+  :root[data-theme="dark"]{
+    --ink:#e7eaf1; --paper:#0c0e13; --surface:#14171f; --surface-2:#1b1f2a;
+    --muted:#98a2b2; --line:#272c38; --accent:#2fd0b0; --accent-ink:#54e0c4;
+    --accent-soft:#123029; --secret:#e2ac52; --secret-soft:#2b2415;
+    --done:#33c99a; --pending:#69727f; --code-bg:#161a22;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35);
+  }
+
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+  body{
+    margin:0; background:var(--paper); color:var(--ink); min-height:100vh;
+    font-family:-apple-system,system-ui,"Segoe UI",Roboto,sans-serif;
+    font-size:17px; line-height:1.65; -webkit-font-smoothing:antialiased;
+  }
+  .serif{font-family:Georgia,"Iowan Old Style","Times New Roman",serif}
+  .mono{font-family:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace}
+
+  .shell{max-width:1180px; margin:0 auto; padding:0 clamp(18px,4vw,40px)}
+  .grid{display:grid; grid-template-columns:1fr; gap:0}
+  @media(min-width:1000px){
+    .grid{grid-template-columns:230px minmax(0,1fr); gap:56px; align-items:start}
+    nav.toc{position:sticky; top:24px; align-self:start}
+  }
+  main{min-width:0; padding-bottom:80px}
+  .col{max-width:70ch}
+
+  header.hero{
+    border-bottom:1px solid var(--line);
+    background:
+      radial-gradient(1100px 400px at 78% -8%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 60%),
+      var(--paper);
+  }
+  .hero .shell{padding-top:clamp(46px,9vw,92px); padding-bottom:clamp(36px,6vw,58px)}
+  .eyebrow{
+    font-family:ui-monospace,Menlo,monospace; font-size:12.5px; letter-spacing:.22em;
+    text-transform:uppercase; color:var(--accent-ink); margin:0 0 22px;
+    display:flex; align-items:center; gap:12px;
+  }
+  .eyebrow::before{content:""; width:26px; height:1px; background:var(--accent)}
+  h1.title{
+    font-family:Georgia,serif; font-weight:700; letter-spacing:-.015em;
+    font-size:clamp(2.4rem,6.6vw,4.4rem); line-height:1.03; margin:0; text-wrap:balance;
+  }
+  h1.title em{font-style:normal; color:var(--accent)}
+  .status-badge{
+    display:inline-flex; align-items:center; gap:9px; margin-top:22px;
+    font-family:ui-monospace,Menlo,monospace; font-size:12.5px; letter-spacing:.04em;
+    background:var(--secret-soft); color:var(--secret); border:1px solid color-mix(in srgb,var(--secret) 35%,var(--line));
+    padding:7px 14px; border-radius:20px;
+  }
+  .status-badge b{color:var(--secret)}
+  .lede{font-size:clamp(1.1rem,2.2vw,1.36rem); color:var(--muted); max-width:62ch; margin:20px 0 0; line-height:1.5}
+  .stat-row{display:flex; flex-wrap:wrap; gap:14px; margin-top:34px}
+  .stat{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:14px 18px; box-shadow:var(--shadow); min-width:118px}
+  .stat b{display:block; font-family:Georgia,serif; font-size:1.7rem; line-height:1; font-variant-numeric:tabular-nums}
+  .stat span{font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted)}
+  .stat small{font-size:.5em; font-family:-apple-system,system-ui,sans-serif}
+
+  nav.toc ol{list-style:none; margin:0; padding:0; font-size:14px}
+  nav.toc a{color:var(--muted); text-decoration:none; display:block; padding:5px 0 5px 12px; border-left:2px solid var(--line); line-height:1.35}
+  nav.toc a:hover,nav.toc a:focus-visible{color:var(--accent-ink); border-left-color:var(--accent)}
+  nav.toc .part{font-family:ui-monospace,Menlo,monospace; font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink); margin:20px 0 6px; padding-left:12px}
+  @media(max-width:999px){nav.toc{display:none}}
+
+  .part-divider{margin:72px 0 26px}
+  .part-divider .k{font-family:ui-monospace,Menlo,monospace; font-size:12px; letter-spacing:.2em; text-transform:uppercase; color:var(--accent-ink)}
+  .part-divider h2{font-family:Georgia,serif; font-weight:700; font-size:clamp(1.7rem,4vw,2.5rem); margin:.15em 0 0; letter-spacing:-.01em; text-wrap:balance}
+  .part-divider .sub{color:var(--muted); margin:.4em 0 0; max-width:64ch}
+  .part-divider.big{border-top:2px solid var(--ink); padding-top:22px}
+
+  h3{font-family:Georgia,serif; font-weight:700; font-size:1.42rem; margin:44px 0 4px; letter-spacing:-.01em; scroll-margin-top:20px}
+  h4{font-size:1.06rem; margin:26px 0 2px; font-weight:650}
+  p{margin:14px 0}
+  .col p, .col ul, .col ol{max-width:70ch}
+  em.term{font-style:normal; font-weight:600; color:var(--ink); border-bottom:1.5px dotted var(--accent)}
+  code{font-family:ui-monospace,Menlo,monospace; font-size:.86em; background:var(--code-bg); padding:.12em .4em; border-radius:5px; border:1px solid var(--line)}
+  ul,ol{padding-left:1.3em} li{margin:7px 0}
+  sup{font-variant-numeric:normal}
+
+  .callout{border:1px solid var(--line); border-left:3px solid var(--accent); background:var(--surface); border-radius:10px; padding:16px 20px; margin:22px 0; box-shadow:var(--shadow)}
+  .callout.secret{border-left-color:var(--secret)}
+  .callout .lab{font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--accent-ink); display:block; margin-bottom:6px}
+  .callout.secret .lab{color:var(--secret)}
+  .callout p:first-of-type{margin-top:0} .callout p:last-child{margin-bottom:0}
+
+  .cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; margin:24px 0}
+  .card{background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:20px; box-shadow:var(--shadow)}
+  .card .ico{font-size:1.5rem; line-height:1}
+  .card h4{margin:12px 0 2px; font-family:Georgia,serif; font-size:1.15rem}
+  .card p{margin:6px 0 0; font-size:15px; color:var(--muted); line-height:1.55}
+
+  /* ---- CSS diagrams (no JS, theme-aware) ---- */
+  figure.fig{margin:28px 0; background:var(--surface-2); border:1px solid var(--line); border-radius:16px; padding:24px 20px 14px; box-shadow:var(--shadow); overflow-x:auto}
+  figure.fig figcaption{font-family:ui-monospace,Menlo,monospace; font-size:11.5px; letter-spacing:.05em; color:var(--muted); text-transform:uppercase; margin-top:16px; text-align:center}
+  .flow{display:flex; align-items:stretch; justify-content:center; gap:8px; flex-wrap:wrap; min-width:min-content}
+  .flow.v{flex-direction:column; align-items:center; gap:0}
+  .node{background:var(--surface); border:1px solid var(--line); border-radius:11px; padding:12px 15px; font-size:13px; line-height:1.42; min-width:120px; max-width:210px; text-align:center; box-shadow:var(--shadow)}
+  .node .h{font-weight:650; display:block; margin-bottom:2px}
+  .node .m{font-family:ui-monospace,Menlo,monospace; font-size:11.5px; color:var(--muted)}
+  .node.accent{border-color:var(--accent)}
+  .node.secret{border-left:3px solid var(--secret)}
+  .node.bundle{border-color:var(--accent); background:var(--accent-soft)}
+  .arrow{display:flex; align-items:center; justify-content:center; color:var(--accent); font-weight:700; font-size:1.15rem; padding:0 2px}
+  .arrow.v{padding:6px 0; font-size:1.1rem}
+
+  .fanin{display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:16px; min-width:min-content}
+  .fanin .ins{display:flex; flex-direction:column; gap:8px}
+  .fanin .mid{color:var(--accent); font-size:1.5rem; font-weight:700; text-align:center}
+  @media(max-width:620px){.fanin{grid-template-columns:1fr; gap:8px}.fanin .mid{transform:rotate(90deg)}}
+
+  .deps{display:flex; flex-direction:column; align-items:center; gap:0; min-width:min-content}
+  .deps .row{display:flex; gap:12px; justify-content:center}
+  .deps .lbl{font-family:ui-monospace,Menlo,monospace; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); padding:7px 0}
+
+  .props{display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:12px; margin:22px 0}
+  .prop{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:14px 16px; box-shadow:var(--shadow)}
+  .prop .id{font-family:ui-monospace,Menlo,monospace; font-weight:700; color:var(--accent-ink); font-size:.95rem}
+  .prop .nm{font-weight:650; font-size:.95rem; margin:2px 0}
+  .prop .ds{font-size:13.5px; color:var(--muted); line-height:1.5}
+  .prop .ds code{font-size:.82em}
+
+  .board{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:16px; margin:22px 0}
+  .lane{background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:18px; box-shadow:var(--shadow)}
+  .lane h4{margin:0 0 12px; font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--muted)}
+  .item{display:flex; align-items:baseline; gap:10px; padding:6px 0; font-size:14.5px}
+  .dot{width:9px; height:9px; border-radius:50%; flex:none; transform:translateY(1px)}
+  .dot.done{background:var(--done)} .dot.todo{background:var(--pending)}
+  .item .t{font-family:ui-monospace,Menlo,monospace}
+  .item.todo .t{color:var(--muted)}
+
+  .bench{display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:16px; margin:22px 0}
+  .metric{background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:22px; box-shadow:var(--shadow); text-align:center}
+  .metric b{display:block; font-family:Georgia,serif; font-size:2.3rem; line-height:1; color:var(--accent); font-variant-numeric:tabular-nums}
+  .metric b small{font-size:.42em; font-family:-apple-system,system-ui,sans-serif}
+  .metric span{display:block; font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin-top:8px}
+
+  .tbl-wrap{overflow-x:auto; margin:22px 0; border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow)}
+  table{border-collapse:collapse; width:100%; font-size:14.5px; background:var(--surface)}
+  th,td{text-align:left; padding:11px 15px; border-bottom:1px solid var(--line); vertical-align:top}
+  th{font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); background:var(--surface-2)}
+  tr:last-child td{border-bottom:none}
+  td code{white-space:nowrap}
+
+  .footer{border-top:1px solid var(--line); margin-top:60px; padding:28px 0 60px; color:var(--muted); font-size:14px}
+  .footer .mono{font-size:12.5px}
+  .tag{display:inline-block; font-family:ui-monospace,Menlo,monospace; font-size:11px; padding:2px 9px; border-radius:20px; border:1px solid var(--line); background:var(--surface-2); color:var(--muted); letter-spacing:.05em}
+  .tag.ok{color:var(--done); border-color:color-mix(in srgb,var(--done) 40%,var(--line))}
+  .tag.wip{color:var(--secret); border-color:color-mix(in srgb,var(--secret) 40%,var(--line))}
+  a{color:var(--accent-ink)}
+  :focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:3px}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="shell">
+    <p class="eyebrow">Note de conception &middot; Prototype de recherche Rust &middot; 2026</p>
+    <h1 class="title serif">Obscura — une monnaie numérique <em>post-quantique</em>, conçue pour la <em>confidentialité</em></h1>
+    <span class="status-badge mono">● État actuel : <b>validity-only</b> — non witness-hiding</span>
+    <p class="lede">Un prototype qui vise deux objectifs : payer sans être surveillé, avec une sécurité qui tiendrait face à un ordinateur quantique. Ce document explique le projet pour tous, puis en détaille l'architecture — en distinguant soigneusement ce qui est <strong>déjà prouvé</strong> de ce qui reste <strong>à venir</strong>.</p>
+    <div class="stat-row">
+      <div class="stat"><b>4</b><span>crates Rust</span></div>
+      <div class="stat"><b>6&nbsp;485</b><span>lignes de code</span></div>
+      <div class="stat"><b>110</b><span>tests</span></div>
+      <div class="stat"><b>P1–P7</b><span>prouvés en circuit</span></div>
+      <div class="stat"><b>~225<small> ms</small></b><span>preuve d'une tx</span></div>
+    </div>
+  </div>
+</header>
+
+<div class="shell">
+<div class="grid">
+  <nav class="toc" aria-label="Sommaire">
+    <div class="part">Partie I · Pour tous</div>
+    <ol>
+      <li><a href="#pb">Le problème</a></li>
+      <li><a href="#idee">L'idée d'Obscura</a></li>
+      <li><a href="#etat">Où en est le prototype</a></li>
+      <li><a href="#briques">Les briques, en clair</a></li>
+      <li><a href="#profondeur">Deux serrures</a></li>
+    </ol>
+    <div class="part">Partie II · Architecture</div>
+    <ol>
+      <li><a href="#vue">Vue d'ensemble</a></li>
+      <li><a href="#primitives">Les primitives</a></li>
+      <li><a href="#zerocash">Le modèle Zerocash</a></li>
+      <li><a href="#hash">Deux mondes de hachage</a></li>
+    </ol>
+    <div class="part">Partie III · Le circuit</div>
+    <ol>
+      <li><a href="#stark">Le circuit STARK</a></li>
+      <li><a href="#statement">Le statement P1–P7</a></li>
+      <li><a href="#assemblage">L'assemblage</a></li>
+      <li><a href="#liaison">La liaison des secrets</a></li>
+      <li><a href="#honnetete">Validité vs confidentialité</a></li>
+    </ol>
+    <div class="part">Partie IV · Ledger &amp; perfs</div>
+    <ol>
+      <li><a href="#ledger">Le circuit gouverne l'état</a></li>
+      <li><a href="#bench">Mesures</a></li>
+    </ol>
+    <div class="part">Partie V · Détails</div>
+    <ol>
+      <li><a href="#corps">Goldilocks &amp; Rescue</a></li>
+      <li><a href="#soundness">Le piège de soundness</a></li>
+      <li><a href="#gotchas">Leçons winterfell</a></li>
+    </ol>
+    <div class="part">Partie VI · État</div>
+    <ol>
+      <li><a href="#board">Où en est le projet</a></li>
+      <li><a href="#roadmap">Feuille de route</a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+  <!-- ============ PARTIE I ============ -->
+  <section class="part-divider big" id="p1">
+    <div class="k">Partie I</div>
+    <h2 class="serif">Pour tous — comprendre l'idée</h2>
+    <p class="sub">Sans aucune connaissance en cryptographie. On y explique <em>quoi</em> et <em>pourquoi</em> ; le <em>comment</em> précis vient ensuite.</p>
+  </section>
+
+  <div class="col">
+  <h3 id="pb">1. Le problème : l'argent numérique d'aujourd'hui est un livre ouvert</h3>
+  <p>On imagine souvent que le Bitcoin est anonyme. C'est l'inverse : <strong>chaque transaction est publique et gravée pour toujours</strong>. N'importe qui peut lire, sur la blockchain, quelle adresse a envoyé combien à quelle autre. Avec un peu d'analyse, on relie ces adresses à de vraies personnes. C'est comme si votre relevé bancaire était affiché sur la place publique.</p>
+  <p>À cela s'ajoute une menace de fond : <strong>les ordinateurs quantiques</strong>. La sécurité de presque toutes les cryptomonnaies repose sur des mathématiques qu'un ordinateur quantique suffisamment puissant pourrait casser. Le jour où une telle machine existera, les signatures d'aujourd'hui deviendront falsifiables.</p>
+  </div>
+
+  <div class="col">
+  <h3 id="idee">2. L'idée d'Obscura : l'enveloppe scellée inviolable</h3>
+  <p>Obscura est un <strong>prototype de recherche</strong> qui poursuit deux objectifs de conception :</p>
+  <ul>
+    <li><strong>Confidentialité</strong> — l'objectif est que personne ne voie qui paie qui, ni combien ; seul le fait qu'une transaction est <em>valide</em> serait vérifiable publiquement.</li>
+    <li><strong>Résistance quantique</strong> — la sécurité doit tenir même face à un futur ordinateur quantique.</li>
+  </ul>
+  <p>L'astuce centrale ressemble à un tour de magie mathématique : <strong>prouver qu'une transaction respecte toutes les règles, sans avoir à en révéler les détails</strong>. On ne montre pas les billets ; on prouve juste, de façon irréfutable, qu'on a le droit de dépenser et que les comptes sont équilibrés.</p>
+  </div>
+
+  <div class="callout secret"><span class="lab">État du prototype — à lire</span><p>La <strong>validité</strong> d'une transaction (les règles ci-dessous) est déjà entièrement prouvée en circuit. En revanche, la <strong>confidentialité au sens cryptographique fort</strong> — le fait que la preuve elle-même ne fuite <em>rien</em> — n'est <strong>pas encore</strong> atteinte : c'est le jalon suivant (« Phase 3z »). Ce document dit « conçue pour » et « vise » à dessein. Voir la section&nbsp;13.</p></div>
+
+  <div class="col">
+  <h3 id="etat">3. Où en est le prototype, en une phrase</h3>
+  <p>Le circuit sait aujourd'hui <strong>vérifier qu'une transaction est valide</strong> (elle existe, m'appartient, est équilibrée, sans double-dépense) et il gouverne un vrai registre. Ce qu'il ne garantit pas <em>encore</em> : que la preuve ne laisse filtrer aucune information sur les montants ou les parties. La brique manquante est bien identifiée et n'exige pas de refaire l'existant.</p>
+  </div>
+
+  <div class="col">
+  <h3 id="briques">4. Comment ça marche, en clair</h3>
+  <p>Le cœur du système est une <em class="term">preuve à divulgation nulle</em> (l'objectif visé). L'analogie classique : prouver à quelqu'un que vous connaissez le mot de passe d'une porte, <strong>sans prononcer le mot de passe</strong> — juste en franchissant la porte devant lui. La preuve convainc ; le secret reste secret.</p>
+  <p>Dans Obscura, quand vous dépensez, votre logiciel fabrique une preuve qui garantit simultanément que&nbsp;:</p>
+  <ul>
+    <li>la note que vous dépensez <strong>existe vraiment</strong> (elle est dans le grand registre) ;</li>
+    <li>elle <strong>vous appartient</strong> (vous connaissez le secret qui la contrôle) ;</li>
+    <li>vous ne la dépensez <strong>pas deux fois</strong> ;</li>
+    <li>les montants sont <strong>équilibrés</strong> (rien n'est créé ni détruit magiquement).</li>
+  </ul>
+  </div>
+
+  <div class="cards">
+    <div class="card"><div class="ico">💵</div><h4>La note</h4><p>Comme un billet numérique : une valeur, un propriétaire, et un peu de hasard pour la rendre unique. C'est l'unité de valeur.</p></div>
+    <div class="card"><div class="ico">🔒</div><h4>L'engagement</h4><p>On scelle la note dans une « enveloppe » mathématique (un <em>commitment</em>). L'enveloppe est publique ; son contenu, non.</p></div>
+    <div class="card"><div class="ico">🎫</div><h4>Le tampon anti-double</h4><p>Dépenser une note publie un <em>nullifier</em> : un tampon « utilisée » unique, qui empêche de la dépenser deux fois.</p></div>
+    <div class="card"><div class="ico">✅</div><h4>La preuve</h4><p>Une preuve mathématique atteste que tout est en règle — appartenance, propriété, équilibre.</p></div>
+  </div>
+
+  <figure class="fig" aria-label="Cycle de vie d'une note">
+    <div class="flow">
+      <div class="node"><span class="h">💵 Note émise</span><span class="m">valeur · owner · aléa</span></div>
+      <div class="arrow" aria-hidden="true">→</div>
+      <div class="node"><span class="h">🔒 Engagement</span><span class="m">cm = Hash(note)</span></div>
+      <div class="arrow" aria-hidden="true">→</div>
+      <div class="node"><span class="h">🌳 Arbre</span><span class="m">insérée au registre</span></div>
+      <div class="arrow" aria-hidden="true">→</div>
+      <div class="node accent"><span class="h">✅ Dépense</span><span class="m">preuve STARK</span></div>
+      <div class="arrow" aria-hidden="true">→</div>
+      <div class="node"><span class="h">🎫 Nullifier</span><span class="m">tampon « utilisée »</span></div>
+      <div class="arrow" aria-hidden="true">→</div>
+      <div class="node"><span class="h">💵 Sorties</span><span class="m">notes du destinataire</span></div>
+    </div>
+    <figcaption>Cycle de vie d'une note — de l'émission à la dépense</figcaption>
+  </figure>
+
+  <div class="col">
+  <h3 id="profondeur">5. « Défense en profondeur » : deux serrures valent mieux qu'une</h3>
+  <p>Pour la résistance quantique, Obscura applique un principe simple : <strong>chaque fonction de sécurité repose sur deux mécanismes indépendants</strong>, issus de familles mathématiques différentes. Si l'un est un jour cassé, l'autre tient encore. C'est une double serrure : le cambrioleur doit crocheter les deux, avec deux techniques sans rapport.</p>
+  </div>
+
+  <!-- ============ PARTIE II ============ -->
+  <section class="part-divider big" id="p2">
+    <div class="k">Partie II</div>
+    <h2 class="serif">Architecture technique</h2>
+    <p class="sub">La structure du code, les primitives cryptographiques, et le modèle de confidentialité hérité de Zerocash/Zcash.</p>
+  </section>
+
+  <div class="col">
+  <h3 id="vue">6. Vue d'ensemble : quatre crates</h3>
+  <p>Le projet est un <em>workspace</em> Rust découpé en quatre bibliothèques aux responsabilités nettes. Les dépendances vont dans un seul sens (pas de cycle), ce qui garde chaque couche testable isolément.</p>
+  </div>
+
+  <figure class="fig" aria-label="Dépendances des crates">
+    <div class="deps">
+      <div class="row"><div class="node accent"><span class="h">ledger</span><span class="m">notes · état · apply_proved_tx</span></div></div>
+      <div class="lbl" aria-hidden="true">↓ dépend de</div>
+      <div class="row"><div class="node"><span class="h">circuit</span><span class="m">AIR zk-STARK · ProvedTx</span></div></div>
+      <div class="lbl" aria-hidden="true">↓ dépend de</div>
+      <div class="row">
+        <div class="node"><span class="h">proved-hash</span><span class="m">Rescue · Felt · arbre</span></div>
+        <div class="node"><span class="h">crypto</span><span class="m">primitives hybrides</span></div>
+      </div>
+    </div>
+    <figcaption>Graphe de dépendances (ledger → circuit → proved-hash / crypto ; circuit dépend aussi de crypto)</figcaption>
+  </figure>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Crate</th><th>Rôle</th><th>Lignes</th></tr></thead>
+      <tbody>
+        <tr><td><code>crypto</code></td><td>Primitives à défense en profondeur : hachage dual, échange de clés hybride, signatures hybrides, chiffrement en cascade.</td><td>567</td></tr>
+        <tr><td><code>proved-hash</code></td><td>Le monde « prouvé » : corps de Goldilocks (<code>Felt</code>), hachage Rescue-Prime, arbre de Merkle Rescue incrémental. Sans prouveur.</td><td>800</td></tr>
+        <tr><td><code>circuit</code></td><td>Le cœur : les circuits AIR pour winterfell (permutation, éponge, Merkle, range, équilibre) et l'assemblage <code>ProvedTx</code>.</td><td>3&nbsp;784</td></tr>
+        <tr><td><code>ledger</code></td><td>Notes, arbre des commitments, nullifiers, et l'application des transactions prouvées à l'état.</td><td>1&nbsp;033</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="col">
+  <h3 id="primitives">7. Les primitives : deux mécanismes par fonction</h3>
+  <p>Le crate <code>crypto</code> matérialise la défense en profondeur. Chaque ligne combine deux familles indépendantes : la sécurité tient tant que l'une des deux tient.</p>
+  </div>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>Fonction</th><th>Mécanisme A</th><th>Mécanisme B</th></tr></thead>
+      <tbody>
+        <tr><td>Hachage (consensus)</td><td>BLAKE3</td><td>SHA3-256</td></tr>
+        <tr><td>Échange de clés (KEM)</td><td>X25519 (courbe)</td><td>Kyber-768 (réseaux, post-Q)</td></tr>
+        <tr><td>Signature</td><td>Ed25519 (courbe)</td><td>Dilithium-3 (réseaux, post-Q)</td></tr>
+        <tr><td>Chiffrement (AEAD)</td><td>XChaCha20-Poly1305</td><td>AES-256-GCM (cascade)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout"><span class="lab">Pourquoi « dual »</span><p>Le hachage consensus concatène BLAKE3 et SHA3 sur 64 octets, jamais tronqués : une collision devrait frapper <em>les deux</em> fonctions à la fois. C'est indispensable là où la résistance aux collisions est directement sécuritaire — les commitments de notes et le <code>tx_digest</code>.</p></div>
+
+  <div class="col">
+  <h3 id="zerocash">8. Le modèle Zerocash</h3>
+  <p>Obscura suit le modèle éprouvé de <strong>Zerocash</strong> (repris par Zcash). Quatre objets suffisent à décrire le système&nbsp;:</p>
+  <ul>
+    <li><strong>Note</strong> — <code>(valeur, owner, ρ, r)</code> : la valeur, l'identité du propriétaire, et deux aléas (ρ sert au nullifier, r rend l'engagement <em>masquant</em>).</li>
+    <li><strong>Commitment</strong> — l'engagement <code>cm = H(note)</code>, publié à la place de la note. C'est l'enveloppe scellée.</li>
+    <li><strong>Arbre de Merkle</strong> — tous les commitments sont insérés dans un arbre binaire de profondeur 32 (2<sup>32</sup> notes). Sa <em>racine</em> résume l'ensemble en 32 octets.</li>
+    <li><strong>Nullifier</strong> — <code>nf = PRF(nk, ρ ‖ cm)</code>, révélé à la dépense. Unique par note, il empêche la double-dépense.</li>
+  </ul>
+  </div>
+
+  <div class="col">
+  <h3 id="hash">9. Deux mondes de hachage</h3>
+  <p>Un choix de conception structurant : Obscura utilise <strong>deux fonctions de hachage selon l'usage</strong>.</p>
+  <ul>
+    <li>Le <strong>hachage consensus</strong> (dual BLAKE3‖SHA3) est excellent hors circuit, mais prohibitif à prouver dans un STARK.</li>
+    <li>Le <strong>hachage prouvé</strong> (<em>Rescue-Prime</em>) est « circuit-friendly » : conçu pour s'exprimer efficacement en contraintes algébriques. Il sert aux objets manipulés <em>dans</em> le circuit : commitments, arbre de Merkle, dérivation de l'identité et du nullifier.</li>
+  </ul>
+  <p>La contrepartie assumée : les objets prouvés reposent sur Rescue seul (moins éprouvé que SHA3). Mitigations : paramètres conservateurs, vecteurs de test croisés avec une implémentation de référence, et versionnage explicite pour permettre une rotation.</p>
+  </div>
+
+  <!-- ============ PARTIE III ============ -->
+  <section class="part-divider big" id="p3">
+    <div class="k">Partie III</div>
+    <h2 class="serif">Le cœur — le circuit STARK (de validité)</h2>
+    <p class="sub">La preuve <em>est</em> la règle de consensus. Tout le protocole s'organise autour d'un énoncé de sept propriétés.</p>
+  </section>
+
+  <div class="col">
+  <h3 id="stark">10. Le circuit STARK de validité (zk-STARK cible)</h3>
+  <p>Un <strong>STARK</strong> est un système de preuve qui démontre qu'un calcul a été effectué correctement, avec une preuve <strong>rapide à vérifier</strong>. Ses atouts pour une monnaie : <strong>pas de « cérémonie » de confiance</strong> initiale, et une sécurité <strong>post-quantique</strong> (fondée uniquement sur des fonctions de hachage).</p>
+  <p>Précision importante : un STARK n'est <strong>pas</strong> à divulgation nulle par défaut. L'implémentation actuelle d'Obscura est un <strong>STARK de validité</strong> — il prouve l'intégrité des règles, mais ne masque pas encore ses témoins. Le <strong>zk-STARK</strong> (avec masquage prouvé) est la cible, gatée en Phase 3z. Voir la section&nbsp;14.</p>
+  <p>Obscura est bâti sur <strong>winterfell</strong>, un prouveur STARK en Rust. Le corps de travail est celui de <em>Goldilocks</em> (p = 2<sup>64</sup>−2<sup>32</sup>+1) et la fonction de hachage interne est <em>Rescue-Prime Rp64_256</em>. Le calcul à prouver est décrit par un <strong>AIR</strong> (<em>Algebraic Intermediate Representation</em>) : une trace d'exécution en colonnes, plus des contraintes polynomiales que la trace doit satisfaire.</p>
+  </div>
+
+  <div class="col">
+  <h3 id="statement">11. Le statement : sept propriétés</h3>
+  <p>Le document <code>STARK_STATEMENT.md</code> définit ce qu'est une <strong>dépense valide</strong>. Ce n'est pas un détail d'implémentation : <strong>ce statement EST la règle de consensus</strong>. Une preuve atteste les sept propriétés suivantes, sur des <em>entrées publiques</em> (racine, nullifiers, commitments de sortie, frais, <code>tx_digest</code>) et des <em>témoins</em> (notes, chemins, secret) — <strong>non publiés, mais non garantis cachés avant la Phase 3z</strong>.</p>
+  </div>
+
+  <div class="props">
+    <div class="prop"><div class="id">P1</div><div class="nm">Appartenance</div><div class="ds">Chaque note dépensée existe dans l'arbre de racine donnée.</div></div>
+    <div class="prop"><div class="id">P2</div><div class="nm">Autorité</div><div class="ds"><code>owner = H_owner(secret)</code> : le dépenseur connaît le secret maître.</div></div>
+    <div class="prop"><div class="id">P3</div><div class="nm">Nullifier correct</div><div class="ds"><code>nf</code> est bien dérivé de la note et de la clé <code>nk</code>.</div></div>
+    <div class="prop"><div class="id">P4</div><div class="nm">Clé de nullifier</div><div class="ds"><code>nk = H_nk(secret)</code> : liée au même secret maître que P2.</div></div>
+    <div class="prop"><div class="id">P5</div><div class="nm">Équilibre</div><div class="ds"><code>Σ entrées = Σ sorties + frais</code>. Rien n'est créé.</div></div>
+    <div class="prop"><div class="id">P6</div><div class="nm">Bornes</div><div class="ds">Tous les montants sont dans une plage saine (pas d'overflow).</div></div>
+    <div class="prop"><div class="id">P7</div><div class="nm">Commitments</div><div class="ds">Chaque commitment de sortie engage correctement sa note.</div></div>
+  </div>
+
+  <div class="callout"><span class="lab">Ce que le statement supprime</span><p>Par rapport à un mode « transparent », la preuve retire la clé de dépense publique (les paiements d'une même clé ne sont plus reliables via cette clé) et le chemin de Merkle (le lien direct vers la note dépensée), tout en vérifiant enfin ce qui ne l'était pas : liaison nullifier↔note, autorité, équilibre. La confidentialité <em>complète</em> exige en plus le witness-hiding (Phase 3z).</p></div>
+
+  <div class="col">
+  <h3 id="assemblage">12. L'assemblage en « circuits d'action »</h3>
+  <p>Chaque propriété a d'abord été prouvée <strong>isolément</strong> (chacune validée par un « différentiel » : le résultat du circuit doit coïncider au bit près avec une référence calculée hors circuit). Restait à les <strong>fusionner</strong> en une transaction cohérente. La difficulté : certains témoins partagés doivent rester secrets et ne peuvent donc pas être liés par une valeur publique.</p>
+  <p>La solution, inspirée de Zcash, décompose la transaction en <strong>circuits d'action</strong> reliés :</p>
+  </div>
+
+  <figure class="fig" aria-label="Assemblage d'une transaction 2 entrées 2 sorties">
+    <div class="fanin">
+      <div class="ins">
+        <div class="node secret"><span class="h">Preuve de Clé</span><span class="m">P2 ∧ P4 · un même secret</span></div>
+        <div class="node"><span class="h">Spend #1</span><span class="m">P1 · P3 · P6 · P7ᵢₙ</span></div>
+        <div class="node"><span class="h">Spend #2</span><span class="m">P1 · P3 · P6 · P7ᵢₙ</span></div>
+        <div class="node"><span class="h">Output #1</span><span class="m">P7 · P6</span></div>
+        <div class="node"><span class="h">Output #2</span><span class="m">P7 · P6</span></div>
+      </div>
+      <div class="mid" aria-hidden="true">→</div>
+      <div class="node bundle"><span class="h">ProvedTx</span><span class="m">équilibre P5 (natif)<br>+ tx_digest (non-rejeu)</span></div>
+    </div>
+    <figcaption>Assemblage d'une transaction 2 entrées / 2 sorties</figcaption>
+  </figure>
+
+  <div class="col">
+  <h3 id="liaison">13. La liaison des secrets : pourquoi une seule trace</h3>
+  <p>Considérons le <strong>secret maître</strong>. La propriété P2 prouve <code>owner = H_owner(s₁)</code> ; P4 prouve <code>nk = H_nk(s₂)</code>. Si ces preuves sont séparées, <strong>rien ne force <code>s₁ = s₂</code></strong> — et rendre le secret public est évidemment exclu. La seule façon <em>sound</em> de garantir « le même secret » est de faire partager les cellules du secret par les deux calculs <strong>dans une trace commune</strong>.</p>
+  <p>C'est exactement ce que fait la <em>Preuve de Clé</em> : deux éponges Rescue côte à côte, avec une contrainte qui impose l'égalité des cellules du secret — sans jamais l'exposer comme valeur publique. Un test « white-box » le confirme : une trace où <code>owner</code> vient de <code>s</code> et <code>nk</code> de <code>s′≠s</code> est <strong>rejetée</strong>.</p>
+  </div>
+
+  <div class="callout secret"><span class="lab">Le secret n'est jamais une entrée publique</span><p>Dans tout le circuit, le <code>shielded_secret</code> reste un témoin : <strong>aucune assertion ne le référence</strong>. Il n'apparaît donc dans aucune entrée publique, tout en étant prouvé unique. (Rappel : « pas dans les entrées publiques » n'équivaut pas à « cryptographiquement caché » tant que le witness-hiding n'est pas en place — voir ci-dessous.)</p></div>
+
+  <div class="col">
+  <h3 id="honnetete">14. Validité aujourd'hui, confidentialité demain</h3>
+  <p>Un point d'honnêteté central. L'implémentation actuelle prouve l'<strong>intégrité</strong> (les sept propriétés), mais <strong>pas la confidentialité au sens cryptographique fort</strong> : un STARK n'est pas « zero-knowledge » par défaut — il ne masque pas ses témoins. Concrètement, garder une valeur hors des <em>entrées publiques</em> ne la rend pas cachée tant que la preuve elle-même n'est pas witness-hiding. Ce masquage prouvable est un jalon séparé et explicitement gaté (« Phase 3z »).</p>
+  <p>Ce choix est délibéré : les contraintes P1–P7 sont <strong>identiques</strong> avec ou sans masquage, donc aucun travail n'est à refaire ; le masquage est une couche additive. Rouler un tel masquage « maison » exposerait à des fuites <em>silencieuses</em> — le pire cas pour une monnaie privée. On préfère bâtir la validité proprement, et réserver la confidentialité forte à une bibliothèque auditée ou à un effort audité.</p>
+  </div>
+
+  <!-- ============ PARTIE IV ============ -->
+  <section class="part-divider big" id="p4">
+    <div class="k">Partie IV</div>
+    <h2 class="serif">Intégration au ledger &amp; performance</h2>
+    <p class="sub">Le circuit ne reste pas théorique : il gouverne un véritable état de registre, et son coût est mesuré.</p>
+  </section>
+
+  <div class="col">
+  <h3 id="ledger">15. Le circuit gouverne l'état</h3>
+  <p>La fonction <code>apply_proved_tx</code> applique la <strong>règle de consensus cible</strong> à un état de ledger. Contrairement au mode « transparent » de développement (qui ne vérifie ni la liaison nullifier↔note, ni l'autorité, ni l'équilibre), elle&nbsp;:</p>
+  <ol>
+    <li>vérifie que l'<em>anchor</em> (la racine visée) est récent ;</li>
+    <li>appelle <code>verify_tx</code> — qui établit P1–P7 et la liaison <code>tx_digest</code> ;</li>
+    <li>vérifie qu'aucun nullifier n'est déjà dépensé ;</li>
+    <li>applique atomiquement : dépense les nullifiers et insère les commitments de sortie dans l'arbre Rescue — <strong>le même</strong> que celui contre lequel le circuit prouve l'appartenance.</li>
+  </ol>
+  <p>Autrement dit : le mode transparent n'est plus la seule voie ; <strong>le circuit STARK pilote désormais un vrai état de ledger</strong>.</p>
+  </div>
+
+  <div class="col">
+  <h3 id="bench">16. Mesures : une transaction complète à profondeur 32</h3>
+  <p>Un bench construit un arbre consensus (profondeur 32), génère puis vérifie une transaction 2-entrées/2-sorties, et mesure. Valeurs <strong>indicatives</strong> (une seule mesure, machine de développement) — reproductibles via <code>cargo run --release --example tx_bench -p circuit</code>&nbsp;:</p>
+  </div>
+
+  <div class="bench">
+    <div class="metric"><b>225<small> ms</small></b><span>Génération de preuve</span></div>
+    <div class="metric"><b>2,6<small> ms</small></b><span>Vérification</span></div>
+    <div class="metric"><b>219<small> Kio</small></b><span>Taille de preuve</span></div>
+    <div class="metric"><b>15</b><span>STARK dans la tx</span></div>
+  </div>
+
+  <div class="callout"><span class="lab">Enseignement pour la suite</span><p>La vérification est quasi instantanée et la génération raisonnable. En revanche, la <strong>taille (~219 Kio)</strong> est dominée par la <em>non-agrégation</em> des 15 preuves. Le levier de compression n'est donc pas le temps, mais l'<strong>agrégation / récursion</strong> (ou un circuit monolithique) — précisément un objectif de la Phase 3z.</p></div>
+
+  <!-- ============ PARTIE V ============ -->
+  <section class="part-divider big" id="p5">
+    <div class="k">Partie V</div>
+    <h2 class="serif">Détails d'implémentation &amp; leçons</h2>
+    <p class="sub">Trois points où le diable se cache : le choix du corps, une subtilité de soundness, et les pièges du prouveur.</p>
+  </section>
+
+  <div class="col">
+  <h3 id="corps">17. Le choix du corps : Goldilocks + Rescue-Prime</h3>
+  <p>Le corps de <strong>Goldilocks</strong> (p = 2<sup>64</sup>−2<sup>32</sup>+1) offre une arithmétique 64 bits extrêmement rapide, et il est portable entre écosystèmes (winterfell, plonky2/3). La fonction <strong>Rescue-Prime Rp64_256</strong> qui l'accompagne est « algébrique » : sa ronde s'exprime en peu de contraintes de degré modéré. Un détail crucial : sur un corps 64 bits, l'<strong>extension quadratique</strong> du corps est <em>obligatoire</em> pour la sécurité — sans elle, la sécurité conjecturée plafonne à ~63 bits et le prouveur refuse la preuve.</p>
+  </div>
+
+  <div class="col">
+  <h3 id="soundness">18. Le piège de soundness le plus subtil</h3>
+  <p>La spécification parlait d'un intervalle de montants <code>[0, 2<sup>64</sup>)</code>. Mais sur Goldilocks, où p ≈ 2<sup>64</sup>, cet intervalle est <strong>vide</strong> — et surtout, l'équilibre <code>Σin = Σout + fee</code> calculé dans le corps <strong>devient non-sound</strong> dès qu'une somme d'un côté atteint p : elle « boucle » modulo p. Un attaquant pourrait alors faire passer un déséquilibre entier pour un équilibre — <strong>créer de la monnaie invisible</strong>.</p>
+  </div>
+  <div class="callout secret"><span class="lab">La correction — et l'arithmétique exacte</span>
+    <p>On borne les montants à <code>&lt; 2<sup>60</sup></code> (constante <code>RANGE_BITS = 60</code>). La condition de soundness est que <strong>chaque côté reste <code>&lt; p</code></strong> : l'égalité en corps <code>Σin ≡ Σout+fee (mod p)</code> n'implique l'égalité entière que si les deux sommes sont sous p.</p>
+    <p>Avec des montants <code>&lt; 2<sup>60</sup></code> et <strong>≤ 8 termes par côté</strong>, on a <code>Σ &lt; 8·2<sup>60</sup> = 2<sup>63</sup> &lt; p</code> — large marge, et bien au-delà d'une transaction réaliste (2-in/2-out). La borne stricte est d'environ 15 termes par côté ; noter que <code>16·2<sup>60</sup> = 2<sup>64</sup> &gt; p</code>, donc « 16 » ne passe pas — <code>RANGE_BITS = 59</code> le permettrait. Le range-check (P6) sert précisément à garantir ces bornes et à rendre l'équilibre (P5) sound.</p>
+  </div>
+
+  <div class="col">
+  <h3 id="gotchas">19. Leçons durables sur winterfell</h3>
+  <p>Construire des AIR corrects réserve des pièges non triviaux, appris à la dure et consignés :</p>
+  <ul>
+    <li><strong>Degrés de contrainte</strong> — selon qu'un masque périodique <em>multiplie</em> la contrainte (déclarer avec cycle) ou qu'une constante y est <em>additionnée</em> (déclarer sans cycle), le degré diffère. Se tromper produit « transition constraint degrees didn't match ».</li>
+    <li><strong>Génération en release, degrés validés par tests</strong> — pour les circuits à colonnes témoins constantes, la mesure de degré dépend des entrées ; on déclare des bornes supérieures (soundness préservée tant que « déclaré ≥ mesuré ») et l'on couvre chaque circuit par des tests de preuve dédiés (exécutés en <code>--release</code>, où le prouveur ne réévalue pas l'assertion de degré interne).</li>
+    <li><strong>Trace non-dégénérée</strong> — une trace entièrement constante casse la composition DEEP. On ajoute une colonne compteur (0, 1, 2, …) pour garantir une trace non triviale.</li>
+    <li><strong>Alignement de l'éponge</strong> — la longueur absorbée doit tomber sur un nombre de blocs qui soit une puissance de 2 (contrainte de longueur de trace) ; un padding par zéros règle le cas du commitment.</li>
+  </ul>
+  </div>
+
+  <!-- ============ PARTIE VI ============ -->
+  <section class="part-divider big" id="p6">
+    <div class="k">Partie VI</div>
+    <h2 class="serif">État du projet &amp; feuille de route</h2>
+    <p class="sub">Ce qui est fait, ce qui reste. L'assemblage validity-only de la Phase 3 est complet.</p>
+  </section>
+
+  <div class="board" id="board">
+    <div class="lane">
+      <h4>Propriétés P1–P7</h4>
+      <div class="item"><span class="dot done"></span><span class="t">P1 Appartenance</span></div>
+      <div class="item"><span class="dot done"></span><span class="t">P2 Autorité</span></div>
+      <div class="item"><span class="dot done"></span><span class="t">P3 Nullifier</span></div>
+      <div class="item"><span class="dot done"></span><span class="t">P4 Clé nk</span></div>
+      <div class="item"><span class="dot done"></span><span class="t">P5 Équilibre</span></div>
+      <div class="item"><span class="dot done"></span><span class="t">P6 Bornes</span></div>
+      <div class="item"><span class="dot done"></span><span class="t">P7 Commitments</span></div>
+    </div>
+    <div class="lane">
+      <h4>Assemblage &amp; ledger</h4>
+      <div class="item"><span class="dot done"></span><span class="t">Preuve de Clé</span></div>
+      <div class="item"><span class="dot done"></span><span class="t">Spend (par entrée)</span></div>
+      <div class="item"><span class="dot done"></span><span class="t">Output (par sortie)</span></div>
+      <div class="item"><span class="dot done"></span><span class="t">ProvedTx + tx_digest</span></div>
+      <div class="item"><span class="dot done"></span><span class="t">apply_proved_tx</span></div>
+      <div class="item"><span class="dot done"></span><span class="t">Bench profondeur 32</span></div>
+    </div>
+    <div class="lane">
+      <h4>À venir</h4>
+      <div class="item todo"><span class="dot todo"></span><span class="t">Signature d'intention</span></div>
+      <div class="item todo"><span class="dot todo"></span><span class="t">Witness-hiding (3z)</span></div>
+      <div class="item todo"><span class="dot todo"></span><span class="t">Agrégation / monolithe</span></div>
+      <div class="item todo"><span class="dot todo"></span><span class="t">M-in / N-out</span></div>
+      <div class="item todo"><span class="dot todo"></span><span class="t">Réseau P2P (phase 4)</span></div>
+      <div class="item todo"><span class="dot todo"></span><span class="t">Nœud &amp; wallet (phase 5)</span></div>
+    </div>
+  </div>
+
+  <div class="col">
+  <h3 id="roadmap">20. Feuille de route</h3>
+  <p>La <strong>Phase 3 (validity-only) est complète</strong> : le circuit valide une transaction entière et gouverne l'état. Les grands jalons restants&nbsp;:</p>
+  </div>
+
+  <figure class="fig" aria-label="Feuille de route">
+    <div class="flow">
+      <div class="node accent"><span class="h">✅ Fait</span><span class="m">Primitives · P1–P7 · Assemblage · Ledger · Bench</span></div>
+      <div class="arrow" aria-hidden="true">→</div>
+      <div class="node"><span class="h">Signature</span><span class="m">d'intention sur tx_digest</span></div>
+      <div class="arrow" aria-hidden="true">→</div>
+      <div class="node secret"><span class="h">Phase 3z</span><span class="m">confidentialité forte · witness-hiding · agrégation</span></div>
+      <div class="arrow" aria-hidden="true">→</div>
+      <div class="node"><span class="h">Phase 4</span><span class="m">réseau P2P post-Q</span></div>
+      <div class="arrow" aria-hidden="true">→</div>
+      <div class="node"><span class="h">Phase 5</span><span class="m">nœud · wallet · testnet</span></div>
+    </div>
+    <figcaption>Jalons — de la validité prouvée au testnet</figcaption>
+  </figure>
+
+  <footer class="footer">
+    <p><span class="tag ok">Phase 3 validity-only · complète</span> &nbsp; <span class="tag wip">Confidentialité forte (3z) · à venir</span></p>
+    <p class="mono">Obscura — prototype de recherche · Rust · dépôt privé <code>nailiwalid-del/obscura</code><br>Défense en profondeur · post-quantique · STARK de validité (winterfell / Goldilocks / Rescue-Prime), zk-STARK cible.</p>
+    <p style="font-size:13px">Document de synthèse — 19 juillet 2026, au commit <code>a47d280</code>. Chiffres reproductibles : <code>find crates -name '*.rs' | xargs wc -l</code> → 6&nbsp;485 lignes ; <code>grep -rn '#[test]' crates</code> → 110 marqueurs ; performances via <code>cargo run --release --example tx_bench -p circuit</code> (une mesure, machine de développement). Ce prototype n'est pas audité et ne doit pas être utilisé en production.</p>
+  </footer>
+
+  </main>
+</div>
+</div>
+
+</body>
+</html>

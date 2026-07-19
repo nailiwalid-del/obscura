@@ -11,10 +11,12 @@
 //! Les entrées ont le signe `+1`, les sorties `-1`, donc `S = Σin − Σout` et
 //! l'assertion finale `S = fee` EST `Σin = Σout + fee`.
 //!
-//! **Soundness (Goldilocks).** `RANGE_BITS = 60` : chaque montant `< 2^60`, et pour
-//! `≤ 8` entrées la magnitude de `Σin − Σout − fee` reste `< 9·2^60 < p ≈ 2^64` →
-//! aucune réduction modulaire ne peut masquer un déséquilibre. C'est précisément la
-//! borne qui rend l'addition de corps SOUND (cf. `range_check`).
+//! **Soundness (Goldilocks).** `RANGE_BITS = 60` : chaque montant `< 2^60`.
+//! L'égalité en corps `Σin ≡ Σout+fee (mod p)` n'implique l'égalité entière que si
+//! CHAQUE côté est `< p`. Avec ≤ 8 termes par côté : `Σin < 8·2^60 = 2^63 < p` et
+//! `Σout+fee < 9·2^60 < p` → aucune réduction modulaire ne masque un déséquilibre.
+//! (Borne stricte ~15/côté : `16·2^60 = 2^64 > p`, donc PAS 16.) C'est le range-check
+//! qui rend l'addition de corps SOUND (cf. `range_check`).
 //!
 //! **Portée.** Le nombre total de blocs `k = n_in + n_out` doit être une puissance
 //! de 2 (2-in/2-out → 4, natif) ; sinon le portefeuille bourre avec des sorties de

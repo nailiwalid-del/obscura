@@ -54,7 +54,8 @@
 > `0 ≤ v < 2^RANGE_BITS` par décomposition binaire accumulée (colonne `acc`, colonne
 > compteur `idx` pour non-dégénérescence). **`RANGE_BITS = 60`** (raffinement assumé
 > du « [0,2^64) » : sur Goldilocks `p≈2^64`, un range 2^64 est vide et l'équilibre en
-> corps wrappe ; borner à 2^60 rend `Σ` sound pour ≤ 16 termes). Testé en `--release`
+> corps wrappe ; borner à 2^60 garde chaque côté `< p` — `Σ < 8·2^60 = 2^63 < p` pour
+> ≤ 8 termes/côté ; borne stricte ~15/côté, `16·2^60 = 2^64 > p` donc PAS 16). Testé en `--release`
 > (positif + hors-range rejeté).
 >
 > **3b3b (fait) — ÉQUILIBRE P5 PROUVÉ EN CIRCUIT** (`circuit::balance`) :

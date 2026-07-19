@@ -5,8 +5,12 @@
 //! est déjà `< p < 2^64`) et, surtout, l'équilibre `Σin = Σout + fee` par addition
 //! de corps devient NON-SOUND dès que les sommes approchent 2^64 (elles wrappent
 //! `p` → création de monnaie invisible). On borne donc les montants à
-//! **`< 2^RANGE_BITS`** avec `RANGE_BITS = 60` : pour `T ≤ 16` termes,
-//! `T · 2^60 < p`, donc l'équilibre en corps (3b3b) sera sound.
+//! **`< 2^RANGE_BITS`** avec `RANGE_BITS = 60`. Condition de soundness : chaque
+//! somme d'un côté doit rester `< p` (l'égalité en corps `Σin ≡ Σout+fee` n'implique
+//! l'égalité entière que si les deux côtés sont `< p`). Avec des montants `< 2^60`,
+//! `Σ < (nb de termes) · 2^60` ; pour ≤ 8 termes par côté c'est `< 2^63 < p` (large
+//! marge). Borne stricte : ~15 termes/côté (`16 · 2^60 = 2^64 > p` — d'où PAS 16) ;
+//! `RANGE_BITS = 59` la porterait à 16. L'équilibre en corps (3b3b) est ainsi sound.
 //!
 //! Preuve = décomposition binaire par ACCUMULATION : une colonne `acc` accumule
 //! `Σ b_i · 2^i` (bit à bit), `acc[0] = 0`, `acc[RANGE_BITS] = v`. Une colonne
