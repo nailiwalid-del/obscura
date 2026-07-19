@@ -117,6 +117,15 @@
 > Différentiels verts (cm_in/nf/root vs `proved_hash`), owner/nk/racine erronés et
 > `cm_in` falsifié rejetés. **Prochaines** : 3b5c Output, 3b5d Bundle 2-in/2-out +
 > équilibre natif + `tx_digest`.
+>
+> **3b5c (fait) — BUNDLE DE SORTIE (Output)** (`circuit::{prove_output,
+> verify_output}`) : simplification stricte de Spend pour une note de SORTIE —
+> seulement **P7 ∧ P6** (`oc = H_NoteCommitment(...)`, `value < 2^60`). `oc`/`value`
+> publics ; `owner`/`rho`/`r` du destinataire restent témoins (aucun lien externe).
+> Commitment exposant `value` (idx 0) + range. Différentiel vert vs `note_commitment`,
+> valeur fausse et `oc` falsifié rejetés. **Reste 3b5d** : Bundle 2-in/2-out
+> (`prove_key` + 2 Spend + 2 Output + équilibre natif sur montants publics +
+> `tx_digest`).
 
 **Ce statement EST la règle de consensus d'une dépense valide.** Tout le reste du
 protocole s'organise autour de lui. Le mode transparent actuel (`apply_transparent`)
