@@ -43,18 +43,55 @@ const BIT_COL: usize = SIB_START + DIGEST_FELTS; // 28
 const MERGE_M: usize = 12;
 const MERGE_LEN: u64 = (2 * DIGEST_FELTS) as u64;
 
-/// Blowup 16 : les contraintes gatées par `chain` montent en degré.
-fn options_hi() -> ProofOptions {
-    ProofOptions::new(
-        32,
-        16,
-        0,
-        winterfell::FieldExtension::Quadratic,
-        8,
-        127,
-        winterfell::BatchingMethod::Linear,
-        winterfell::BatchingMethod::Linear,
-    )
+/// Contraintes de transition d'un merge de Merkle (sponge B=2 gaté `chain` + booléen
+/// de bit + copies/chaînage des témoins + swap d'initialisation), écrites dans
+/// `result[0..30]`. Lit un bloc de 29 colonnes (`cur`/`next` déjà tranchés au bon
+/// offset). Extrait pour être RÉUTILISÉ tel quel par le monolithe (segment `M_i`,
+/// re-gaté par un sélecteur d'activité) sans dupliquer la sémantique.
+#[allow(clippy::too_many_arguments)] // scalaires périodiques explicites : plus clair que packer
+pub(crate) fn enforce_merkle_transition<E: FieldElement + From<BaseElement>>(
+    cur: &[E],
+    next: &[E],
+    round_flag: E,
+    ark1: &[E],
+    ark2: &[E],
+    init0: E,
+    init7: E,
+    chain: E,
+    result: &mut [E],
+) {
+    let one = E::ONE;
+
+    enforce_sponge_transition(cur, next, round_flag, ark1, ark2, &mut result[..12]);
+    for r in result.iter_mut().take(12) {
+        *r *= one - chain;
+    }
+
+    let bit = cur[BIT_COL];
+    let cur_d: [E; 4] = core::array::from_fn(|i| cur[CUR_START + i]);
+    let sib_d: [E; 4] = core::array::from_fn(|i| cur[SIB_START + i]);
+    let left = |i: usize| cur_d[i] + bit * (sib_d[i] - cur_d[i]);
+    let right = |i: usize| sib_d[i] + bit * (cur_d[i] - sib_d[i]);
+
+    result[12] = bit * (bit - one);
+
+    for i in 0..4 {
+        let copy = next[CUR_START + i] - cur[CUR_START + i];
+        let chained = next[CUR_START + i] - cur[RATE_START + i];
+        result[13 + i] = (one - chain) * copy + chain * chained;
+    }
+    for i in 0..4 {
+        result[17 + i] = (one - chain) * (next[SIB_START + i] - cur[SIB_START + i]);
+    }
+    result[21] = (one - chain) * (next[BIT_COL] - cur[BIT_COL]);
+
+    for i in 0..4 {
+        result[22 + i] = init0 * (cur[RATE_START + 3 + i] - left(i));
+    }
+    result[26] = init0 * (cur[RATE_START + 7] - right(0));
+    for j in 0..3 {
+        result[27 + j] = init7 * (cur[INJECT_START + j] - right(1 + j));
+    }
 }
 
 /// Lignes de la trace de chaînage (état sponge + témoins `cur`/`sib`/`bit`), sans
@@ -165,46 +202,23 @@ impl winterfell::Air for MerklePathAir {
         periodic_values: &[E],
         result: &mut [E],
     ) {
-        let cur = frame.current();
-        let next = frame.next();
         let round_flag = periodic_values[0];
         let ark1 = &periodic_values[1..13];
         let ark2 = &periodic_values[13..25];
         let init0 = periodic_values[25];
         let init7 = periodic_values[26];
         let chain = periodic_values[27];
-        let one = E::ONE;
-
-        enforce_sponge_transition(cur, next, round_flag, ark1, ark2, &mut result[..12]);
-        for r in result.iter_mut().take(12) {
-            *r *= one - chain;
-        }
-
-        let bit = cur[BIT_COL];
-        let cur_d: [E; 4] = core::array::from_fn(|i| cur[CUR_START + i]);
-        let sib_d: [E; 4] = core::array::from_fn(|i| cur[SIB_START + i]);
-        let left = |i: usize| cur_d[i] + bit * (sib_d[i] - cur_d[i]);
-        let right = |i: usize| sib_d[i] + bit * (cur_d[i] - sib_d[i]);
-
-        result[12] = bit * (bit - one);
-
-        for i in 0..4 {
-            let copy = next[CUR_START + i] - cur[CUR_START + i];
-            let chained = next[CUR_START + i] - cur[RATE_START + i];
-            result[13 + i] = (one - chain) * copy + chain * chained;
-        }
-        for i in 0..4 {
-            result[17 + i] = (one - chain) * (next[SIB_START + i] - cur[SIB_START + i]);
-        }
-        result[21] = (one - chain) * (next[BIT_COL] - cur[BIT_COL]);
-
-        for i in 0..4 {
-            result[22 + i] = init0 * (cur[RATE_START + 3 + i] - left(i));
-        }
-        result[26] = init0 * (cur[RATE_START + 7] - right(0));
-        for j in 0..3 {
-            result[27 + j] = init7 * (cur[INJECT_START + j] - right(1 + j));
-        }
+        enforce_merkle_transition(
+            frame.current(),
+            frame.next(),
+            round_flag,
+            ark1,
+            ark2,
+            init0,
+            init7,
+            chain,
+            result,
+        );
     }
 
     fn get_assertions(&self) -> Vec<Assertion<Self::BaseField>> {
@@ -339,7 +353,7 @@ pub fn prove_merkle_path(leaf: &Digest, path: &[Digest], index: u64) -> (Digest,
         depth: path.len(),
     };
     let prover = MerklePathProver {
-        options: options_hi(),
+        options: crate::proof_options_hi(),
         pi: pi.clone(),
     };
     let proof = prover.prove(trace).expect("génération de preuve");

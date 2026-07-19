@@ -5,5 +5,6 @@
 //! winterfell n'est pas zero-knowledge. Ne jamais présenter les preuves d'ici
 //! comme `zk`/`private`/`shielded`.
 
+pub(crate) mod air;
 pub(crate) mod layout;
 pub(crate) mod trace;

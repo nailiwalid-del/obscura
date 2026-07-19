@@ -58,3 +58,18 @@ pub(crate) fn proof_options() -> ProofOptions {
         winterfell::BatchingMethod::Linear,
     )
 }
+
+/// Paramètres à blowup 16 pour les AIR dont les contraintes gatées montent en degré
+/// (chemin de Merkle, monolithe). Partagé pour éviter la divergence de facteurs.
+pub(crate) fn proof_options_hi() -> ProofOptions {
+    ProofOptions::new(
+        32,
+        16,
+        0,
+        winterfell::FieldExtension::Quadratic,
+        8,
+        127,
+        winterfell::BatchingMethod::Linear,
+        winterfell::BatchingMethod::Linear,
+    )
+}

@@ -17,7 +17,7 @@
 //! ⚠️ validity-only : `owner`/`nk` sont publics, seul `s` est témoin (jamais asserté).
 
 use crate::rescue_round::{
-    apply_matrix, apply_sbox, periodic_ark_columns, NUM_ROUNDS, STATE_WIDTH, TRACE_LEN,
+    enforce_round_block, periodic_ark_columns, NUM_ROUNDS, STATE_WIDTH, TRACE_LEN,
 };
 use crate::ValidityProof;
 use proved_hash::digest::{Digest, ShieldedSecret, DIGEST_FELTS};
@@ -81,30 +81,6 @@ fn build_key_trace(
         }
     }
     trace
-}
-
-/// Impose une ronde Rescue sur le bloc d'état à l'offset `off` (meet-in-the-middle,
-/// cf. `rescue_round`), écrivant dans `result[off..off+12]`.
-fn enforce_round_block<E: FieldElement + From<BaseElement>>(
-    cur: &[E],
-    next: &[E],
-    off: usize,
-    ark1: &[E],
-    ark2: &[E],
-    result: &mut [E],
-) {
-    let mut step1: [E; STATE_WIDTH] = core::array::from_fn(|i| cur[off + i]);
-    apply_sbox(&mut step1);
-    apply_matrix(&mut step1, &Rp64_256::MDS);
-    for i in 0..STATE_WIDTH {
-        step1[i] += ark1[i];
-    }
-    let mut step2: [E; STATE_WIDTH] = core::array::from_fn(|i| next[off + i] - ark2[i]);
-    apply_matrix(&mut step2, &Rp64_256::INV_MDS);
-    apply_sbox(&mut step2);
-    for i in 0..STATE_WIDTH {
-        result[off + i] = step2[i] - step1[i];
-    }
 }
 
 // ================================================================================================

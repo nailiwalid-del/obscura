@@ -77,6 +77,32 @@ pub(crate) fn periodic_ark_columns() -> Vec<Vec<BaseElement>> {
     cols
 }
 
+/// Impose une ronde Rescue sur le bloc d'état à l'offset `off` (meet-in-the-middle),
+/// écrivant dans `result[off..off+STATE_WIDTH]`. Lit l'état dans `cur[off..]` /
+/// `next[off..]`. Partagé par `key.rs` (2 blocs côte à côte) et le monolithe (bloc
+/// clé aux colonnes du layout global).
+pub(crate) fn enforce_round_block<E: FieldElement + From<BaseElement>>(
+    cur: &[E],
+    next: &[E],
+    off: usize,
+    ark1: &[E],
+    ark2: &[E],
+    result: &mut [E],
+) {
+    let mut step1: [E; STATE_WIDTH] = core::array::from_fn(|i| cur[off + i]);
+    apply_sbox(&mut step1);
+    apply_matrix(&mut step1, &Rp64_256::MDS);
+    for i in 0..STATE_WIDTH {
+        step1[i] += ark1[i];
+    }
+    let mut step2: [E; STATE_WIDTH] = core::array::from_fn(|i| next[off + i] - ark2[i]);
+    apply_matrix(&mut step2, &Rp64_256::INV_MDS);
+    apply_sbox(&mut step2);
+    for i in 0..STATE_WIDTH {
+        result[off + i] = step2[i] - step1[i];
+    }
+}
+
 /// Impose une ronde Rescue entre l'état courant et le suivant.
 pub(crate) fn enforce_round<E: FieldElement + From<BaseElement>>(
     frame: &EvaluationFrame<E>,
