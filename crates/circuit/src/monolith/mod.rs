@@ -6,3 +6,4 @@
 //! comme `zk`/`private`/`shielded`.
 
 pub(crate) mod layout;
+pub(crate) mod trace;

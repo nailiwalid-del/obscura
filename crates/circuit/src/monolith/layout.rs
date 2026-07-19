@@ -3,10 +3,12 @@
 //! Tous les offsets sont dérivés par addition des tailles de groupe précédentes,
 //! sans littéraux magiques. Les groupes sont contigus et ne se chevauchent pas.
 
-// Bloc groupé : ces constantes sont consommées par trace.rs/air.rs (tâches
-// 3z-a2/a3) ; allow(dead_code) temporaire — à retirer quand ces modules les
-// brancheront. (Hors tests, rien ne les consomme encore : sans ce bloc, la
-// compilation de la lib les signalerait toutes.)
+// Bloc groupé : ces constantes sont désormais LUES par `trace.rs` (T2). L'allow
+// reste nécessaire malgré cela : `build_monolith_trace` n'est consommé que par le
+// test différentiel (`#[cfg(test)]`) tant qu'aucun point d'entrée public ne
+// l'appelle (arrivera avec l'AIR/`prove_monolith_tx` de T3/T5) — donc, en build
+// normal (hors tests), toute la chaîne reste hors du graphe d'atteignabilité de
+// rustc et ces constantes seraient sinon signalées mortes une à une.
 #[allow(dead_code)]
 mod plan {
     // Offsets de groupes de colonnes (dérivés par addition).

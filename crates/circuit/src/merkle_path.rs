@@ -57,11 +57,14 @@ fn options_hi() -> ProofOptions {
     )
 }
 
-fn build_path_trace(leaf: &Digest, path: &[Digest], index: u64) -> TraceTable<BaseElement> {
+/// Lignes de la trace de chaînage (état sponge + témoins `cur`/`sib`/`bit`), sans
+/// passer par une `TraceTable` — réutilisé tel quel par le monolithe (3z-a2) pour
+/// recopier un segment `M_i` aux colonnes du layout global.
+pub(crate) fn path_rows(leaf: &Digest, path: &[Digest], index: u64) -> Vec<[BaseElement; WIDTH]> {
     let l = path.len() * BLOCK;
     assert!(l.is_power_of_two(), "3b2b intermédiaire : 16·D doit être une puissance de 2");
 
-    let mut trace = TraceTable::new(WIDTH, l);
+    let mut rows = vec![[BaseElement::ZERO; WIDTH]; l];
     let mut cur = *leaf;
 
     for (b, sib) in path.iter().enumerate() {
@@ -81,20 +84,28 @@ fn build_path_trace(leaf: &Digest, path: &[Digest], index: u64) -> TraceTable<Ba
         let bit_be = if bit { BaseElement::ONE } else { BaseElement::ZERO };
 
         for (r, sr) in sp_rows.iter().enumerate() {
-            let mut row = [BaseElement::ZERO; WIDTH];
+            let row = &mut rows[b * BLOCK + r];
             row[..TRACE_WIDTH].copy_from_slice(sr);
             row[CUR_START..CUR_START + 4].copy_from_slice(&cur_be);
             row[SIB_START..SIB_START + 4].copy_from_slice(&sib_be);
             row[BIT_COL] = bit_be;
-            trace.update_row(b * BLOCK + r, &row);
         }
 
         let last = b * BLOCK + BLOCK - 1;
         cur = Digest(core::array::from_fn(|i| {
-            Felt::from_winter(trace.get(RATE_START + i, last)).expect("digest canonique")
+            Felt::from_winter(rows[last][RATE_START + i]).expect("digest canonique")
         }));
     }
 
+    rows
+}
+
+fn build_path_trace(leaf: &Digest, path: &[Digest], index: u64) -> TraceTable<BaseElement> {
+    let rows = path_rows(leaf, path, index);
+    let mut trace = TraceTable::new(WIDTH, rows.len());
+    for (i, row) in rows.iter().enumerate() {
+        trace.update_row(i, row);
+    }
     trace
 }
 
