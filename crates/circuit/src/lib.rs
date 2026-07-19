@@ -10,6 +10,7 @@ pub mod key;
 pub mod membership;
 pub mod merkle_level;
 pub mod merkle_path;
+pub mod monolith;
 pub mod output;
 pub mod owner_hash;
 pub mod range_check;
