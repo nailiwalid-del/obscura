@@ -16,6 +16,13 @@
 > exactement un bloc de rate → P2 = **une** permutation. Le `shielded_secret` reste
 > témoin : **aucune assertion ne le référence**. Différentiel vert contre
 > `proved_hash::rescue::hash` (le hash du ledger).
+>
+> **3b1 (fait) — sponge MULTI-BLOC généralisé** (`circuit::sponge`) : `prove_sponge`
+> prouve `digest = H_domain(payload)` pour un payload arbitraire (cycle 8 = 7 rondes
+> + 1 absorption additive, masque `round_flag`). Instances : `prove_nk` (P4, B=1),
+> `prove_nullifier` (P3, B=2). Différentiels verts (B=1/2/4). Précondition `B*8`
+> puissance de 2 (padding B=3 → 3b4). Positions publiques du payload assertées,
+> témoins jamais assertés.
 
 **Ce statement EST la règle de consensus d'une dépense valide.** Tout le reste du
 protocole s'organise autour de lui. Le mode transparent actuel (`apply_transparent`)
