@@ -35,10 +35,10 @@ use winterfell::{
 
 type Blake3 = Blake3_256<BaseElement>;
 
-const RATE_START: usize = 4;
-const RATE_WIDTH: usize = 8;
-const TRACE_WIDTH: usize = STATE_WIDTH + RATE_WIDTH; // 12 état + 8 inject = 20
-const INJECT_START: usize = STATE_WIDTH;
+pub(crate) const RATE_START: usize = 4;
+pub(crate) const RATE_WIDTH: usize = 8;
+pub(crate) const TRACE_WIDTH: usize = STATE_WIDTH + RATE_WIDTH; // 12 état + 8 inject = 20
+pub(crate) const INJECT_START: usize = STATE_WIDTH;
 
 // ================================================================================================
 // TRACE
@@ -47,7 +47,7 @@ const INJECT_START: usize = STATE_WIDTH;
 /// Localise l'élément `idx` du préambule dans la trace : `(ligne, colonne)`.
 /// Bloc 0 → colonnes d'état (rate) de la ligne 0 ; bloc b>0 → colonnes d'inject de
 /// la ligne d'absorption `(b-1)*8 + 7`.
-fn locate(idx: usize) -> (usize, usize) {
+pub(crate) fn locate(idx: usize) -> (usize, usize) {
     let block = idx / RATE_WIDTH;
     let pos = idx % RATE_WIDTH;
     if block == 0 {
@@ -57,8 +57,9 @@ fn locate(idx: usize) -> (usize, usize) {
     }
 }
 
-/// Construit la trace du sponge à partir des éléments du préambule.
-fn build_sponge_trace(preamble: &[BaseElement]) -> TraceTable<BaseElement> {
+/// Lignes de la trace du sponge (état 0..12 + inject 12..20) à partir du préambule.
+/// Réutilisé par l'AIR Merkle (3b2), qui étend chaque ligne de colonnes témoins.
+pub(crate) fn sponge_rows(preamble: &[BaseElement]) -> Vec<[BaseElement; TRACE_WIDTH]> {
     let m = preamble.len();
     let b = m.div_ceil(RATE_WIDTH);
     let l = b * TRACE_LEN;
@@ -72,7 +73,7 @@ fn build_sponge_trace(preamble: &[BaseElement]) -> TraceTable<BaseElement> {
         core::array::from_fn(|j| preamble.get(k * RATE_WIDTH + j).copied().unwrap_or(BaseElement::ZERO))
     };
 
-    let mut trace = TraceTable::new(TRACE_WIDTH, l);
+    let mut rows = vec![[BaseElement::ZERO; TRACE_WIDTH]; l];
 
     // état initial : capacité = longueur absorbée, rate = bloc 0.
     let mut state = [BaseElement::ZERO; STATE_WIDTH];
@@ -86,27 +87,74 @@ fn build_sponge_trace(preamble: &[BaseElement]) -> TraceTable<BaseElement> {
         let base = k * TRACE_LEN;
         let mut s = state;
         for r in 0..NUM_ROUNDS {
-            let mut row = [BaseElement::ZERO; TRACE_WIDTH];
-            row[..STATE_WIDTH].copy_from_slice(&s);
-            trace.update_row(base + r, &row);
+            rows[base + r][..STATE_WIDTH].copy_from_slice(&s);
             Rp64_256::apply_round(&mut s, r);
         }
         // ligne base+7 : état pleinement permuté ; inject = bloc suivant s'il existe.
-        let mut row = [BaseElement::ZERO; TRACE_WIDTH];
-        row[..STATE_WIDTH].copy_from_slice(&s);
+        rows[base + TRACE_LEN - 1][..STATE_WIDTH].copy_from_slice(&s);
         if k + 1 < b {
             let nb = block(k + 1);
-            row[INJECT_START..].copy_from_slice(&nb);
+            rows[base + TRACE_LEN - 1][INJECT_START..].copy_from_slice(&nb);
             let mut ns = s;
             for j in 0..RATE_WIDTH {
                 ns[RATE_START + j] += nb[j];
             }
             state = ns;
         }
-        trace.update_row(base + TRACE_LEN - 1, &row);
     }
 
+    rows
+}
+
+/// Construit la trace du sponge à partir des éléments du préambule.
+fn build_sponge_trace(preamble: &[BaseElement]) -> TraceTable<BaseElement> {
+    let rows = sponge_rows(preamble);
+    let mut trace = TraceTable::new(TRACE_WIDTH, rows.len());
+    for (i, row) in rows.iter().enumerate() {
+        trace.update_row(i, row);
+    }
     trace
+}
+
+/// Contrainte de transition du sponge (rondes + absorption), écrite dans
+/// `result[0..12]`. Lit l'état dans les colonnes 0..12 et l'inject dans 12..20 de
+/// `cur`/`next` (identique pour les traces 20 colonnes du sponge et 29 du Merkle).
+pub(crate) fn enforce_sponge_transition<E: FieldElement + From<BaseElement>>(
+    cur: &[E],
+    next: &[E],
+    round_flag: E,
+    ark1: &[E],
+    ark2: &[E],
+    result: &mut [E],
+) {
+    let cur_state: [E; STATE_WIDTH] = core::array::from_fn(|i| cur[i]);
+    let next_state: [E; STATE_WIDTH] = core::array::from_fn(|i| next[i]);
+    let inject: [E; RATE_WIDTH] = core::array::from_fn(|j| cur[INJECT_START + j]);
+
+    let mut step1 = cur_state;
+    apply_sbox(&mut step1);
+    apply_matrix(&mut step1, &Rp64_256::MDS);
+    for i in 0..STATE_WIDTH {
+        step1[i] += ark1[i];
+    }
+    let mut step2 = next_state;
+    for i in 0..STATE_WIDTH {
+        step2[i] -= ark2[i];
+    }
+    apply_matrix(&mut step2, &Rp64_256::INV_MDS);
+    apply_sbox(&mut step2);
+
+    let one = E::ONE;
+    for i in 0..STATE_WIDTH {
+        let round_c = step2[i] - step1[i];
+        let absorbed = if i >= RATE_START {
+            inject[i - RATE_START]
+        } else {
+            E::ZERO
+        };
+        let absorb_c = next_state[i] - cur_state[i] - absorbed;
+        result[i] = round_flag * round_c + (one - round_flag) * absorb_c;
+    }
 }
 
 // ================================================================================================
@@ -177,42 +225,17 @@ impl winterfell::Air for SpongeAir {
         periodic_values: &[E],
         result: &mut [E],
     ) {
-        let cur = frame.current();
-        let next = frame.next();
         let round_flag = periodic_values[0];
         let ark1 = &periodic_values[1..1 + STATE_WIDTH];
         let ark2 = &periodic_values[1 + STATE_WIDTH..1 + 2 * STATE_WIDTH];
-
-        let cur_state: [E; STATE_WIDTH] = core::array::from_fn(|i| cur[i]);
-        let next_state: [E; STATE_WIDTH] = core::array::from_fn(|i| next[i]);
-        let inject: [E; RATE_WIDTH] = core::array::from_fn(|j| cur[INJECT_START + j]);
-
-        // Contrainte de ronde (meet-in-the-middle).
-        let mut step1 = cur_state;
-        apply_sbox(&mut step1);
-        apply_matrix(&mut step1, &Rp64_256::MDS);
-        for i in 0..STATE_WIDTH {
-            step1[i] += ark1[i];
-        }
-        let mut step2 = next_state;
-        for i in 0..STATE_WIDTH {
-            step2[i] -= ark2[i];
-        }
-        apply_matrix(&mut step2, &Rp64_256::INV_MDS);
-        apply_sbox(&mut step2);
-
-        // Contrainte d'absorption : next[cap] = cur[cap] ; next[rate+j] = cur[rate+j] + inject[j].
-        let one = E::ONE;
-        for i in 0..STATE_WIDTH {
-            let round_c = step2[i] - step1[i];
-            let absorbed = if i >= RATE_START {
-                inject[i - RATE_START]
-            } else {
-                E::ZERO
-            };
-            let absorb_c = next_state[i] - cur_state[i] - absorbed;
-            result[i] = round_flag * round_c + (one - round_flag) * absorb_c;
-        }
+        enforce_sponge_transition(
+            frame.current(),
+            frame.next(),
+            round_flag,
+            ark1,
+            ark2,
+            result,
+        );
     }
 
     fn get_assertions(&self) -> Vec<Assertion<Self::BaseField>> {

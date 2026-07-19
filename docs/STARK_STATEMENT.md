@@ -23,6 +23,13 @@
 > `prove_nullifier` (P3, B=2). Différentiels verts (B=1/2/4). Précondition `B*8`
 > puissance de 2 (padding B=3 → 3b4). Positions publiques du payload assertées,
 > témoins jamais assertés.
+>
+> **3b2a (fait) — gadget d'UN niveau de Merkle** (`circuit::merkle_level`) : swap
+> conditionnel in-circuit `(gauche, droite) = bit==0 ? (courant, frère) : (frère,
+> courant)` + `merge` (sponge B=2). Bit **booléen** contraint ; `courant`/`frère`/`bit`
+> en colonnes témoins constantes ; swap réparti ligne 0 / ligne 7 via flags d'init.
+> Différentiel vert vs `proved_hash::merkle::node` (les deux bits). Le déroulé
+> profondeur 32 (P1 complet) = 3b2b.
 
 **Ce statement EST la règle de consensus d'une dépense valide.** Tout le reste du
 protocole s'organise autour de lui. Le mode transparent actuel (`apply_transparent`)
