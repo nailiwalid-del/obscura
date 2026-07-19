@@ -55,7 +55,21 @@
 > compteur `idx` pour non-dégénérescence). **`RANGE_BITS = 60`** (raffinement assumé
 > du « [0,2^64) » : sur Goldilocks `p≈2^64`, un range 2^64 est vide et l'équilibre en
 > corps wrappe ; borner à 2^60 rend `Σ` sound pour ≤ 16 termes). Testé en `--release`
-> (positif + hors-range rejeté). **L'équilibre P5** (`Σin = Σout + fee`) = 3b3b.
+> (positif + hors-range rejeté).
+>
+> **3b3b (fait) — ÉQUILIBRE P5 PROUVÉ EN CIRCUIT** (`circuit::balance`) :
+> `prove_balance(inputs, outputs, fee)` prouve `Σin = Σout + fee` **en addition de
+> corps**, sur des montants TÉMOINS. AIR unique : chaque montant occupe un bloc de 64
+> lignes de bits ; la colonne périodique `pow` (`2^i`, i<60, puis 0) **remet le poids
+> à zéro à chaque bloc**, ce qui borne AUTOMATIQUEMENT chaque montant à `< 2^60`
+> (range-check P6 embarqué, gratuit) ; un accumulateur `S` fait la somme SIGNÉE
+> (`+1` entrée / `−1` sortie), `S[0]=0`, assertion finale `S = fee`. Signes publics
+> assertés par bloc (structure n_in/n_out engagée). Soundness : `≤ 8` entrées ×
+> `2^60 < p` → aucun wrap ne masque un déséquilibre. Précondition `n_in+n_out`
+> puissance de 2 (padding = sorties de valeur 0). Différentiels verts : équilibres
+> honnêtes (avec/sans fee, montants ≈ 2^59) acceptés, déséquilibre et fee falsifié
+> rejetés. Montants non révélés ici (témoins), mais preuve non witness-hiding ; la
+> liaison bits↔commitments est le monolithe 3b5. À générer en `--release`.
 
 **Ce statement EST la règle de consensus d'une dépense valide.** Tout le reste du
 protocole s'organise autour de lui. Le mode transparent actuel (`apply_transparent`)
