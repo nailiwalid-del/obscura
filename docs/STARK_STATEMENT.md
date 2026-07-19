@@ -28,8 +28,18 @@
 > conditionnel in-circuit `(gauche, droite) = bit==0 ? (courant, frère) : (frère,
 > courant)` + `merge` (sponge B=2). Bit **booléen** contraint ; `courant`/`frère`/`bit`
 > en colonnes témoins constantes ; swap réparti ligne 0 / ligne 7 via flags d'init.
-> Différentiel vert vs `proved_hash::merkle::node` (les deux bits). Le déroulé
-> profondeur 32 (P1 complet) = 3b2b.
+> Différentiel vert vs `proved_hash::merkle::node` (les deux bits).
+>
+> **3b2b intermédiaire (fait) — CHAÎNAGE inter-blocs** (`circuit::merkle_path`) :
+> `prove_merkle_path(leaf, path, index)` prouve `root = fold(leaf, path, index)` en
+> chaînant D merges (sortie niveau k = `cur` niveau k+1 ; sponge désactivé aux
+> frontières par un flag `chain` ; bit variable par niveau). Différentiel vert vs
+> `proved_hash::merkle::fold` (D=2, 4 index) + test négatif. **⚠️ preuves à générer
+> en `--release`** : le `debug_assert` de degrés de winterfell est input-dépendant
+> (colonnes témoins constantes) → on déclare des bornes supérieures (`déclaré ≥
+> mesuré`, soundness préservée), l'assert debug étant ignoré en release ; tests
+> `#[ignore]` en debug. **Reste pour P1 complet** : feuille en circuit (B=1) + déroulé
+> profondeur 32 dans un seul circuit.
 
 **Ce statement EST la règle de consensus d'une dépense valide.** Tout le reste du
 protocole s'organise autour de lui. Le mode transparent actuel (`apply_transparent`)
