@@ -75,6 +75,37 @@ Note : à ce stade `cm`, `path`, `index` sont témoins libres (P1 seul). Leur li
 | Chaînage inter-niveaux (3b2b) | Contrainte de copie sortie→`courant` ; tester d'abord profondeur 1 puis 2 puis 32 |
 | Taille (32 niveaux ≈ 1024 lignes) | Perf OK (winterfell scale à 2^20) ; c'est le câblage le risque, pas la taille |
 
+## 7bis. Mur des degrés winterfell — chaînage multi-bloc (tentative 3b2b, 2026-07-15)
+
+Tentative d'AIR de chaînage (D merges, `leaf` public, colonnes `cur`/`sib`/`bit` par
+bloc, sponge gaté par un flag `chain` aux frontières). La **trace calcule la bonne
+racine** (== `merkle::fold`), mais l'AIR bute sur la vérification de degrés de
+winterfell :
+
+1. **Degrés dépendants de l'entrée** : `bit`/`cur`/`sib` deviennent CONSTANTS pour
+   certains index (ex. index=0 → tous bits nuls) → degré mesuré 0 ; pour d'autres,
+   > 0. Le `debug_assert` d'égalité déclaré==mesuré échoue selon l'input.
+2. **Degrés croissant avec L** de façon non triviale : swap mesuré 15 à L=16, **61**
+   à L=32 ; sponge 104 → 245. Une déclaration `(base, cycles)` correcte pour TOUTE
+   profondeur reste à trouver.
+3. **Gate `(1 - chain)`** sur le sponge monte le degré → blowup 8 insuffisant
+   (blowup 16+ requis).
+
+Pistes pour la reprise :
+- soit **restructurer** pour des degrés input-indépendants (éviter les colonnes
+  témoins qui peuvent devenir constantes ; p.ex. injecter `sib` via colonnes
+  toujours « génériques », ou suivre exactement le layout de l'exemple `merkle` de
+  winterfell qui n'a pas ce souci) ;
+- soit **déclarer des bornes supérieures** `with_cycles` correctes (calibrées sur le
+  cas non dégénéré, index à bits variés) et **tester en `--release`** (le
+  `debug_assert` de degré est alors ignoré ; seule la borne `déclaré ≥ mesuré`
+  compte pour la soundness) ;
+- valider d'abord D=2 (un seul chaînage) avant le déroulé profondeur 32.
+
+La logique de chaînage (sortie bloc k = `cur` bloc k+1 ; sponge désactivé aux
+frontières ; swap réparti ligne 0/7 par bloc) est **conçue et correcte au niveau
+trace** ; seul le contrat de degrés winterfell reste à établir.
+
 ## 8. Références
 
 - Exemple `merkle` de winterfell (swap au hash-init, bit booléen) : https://github.com/facebook/winterfell/tree/main/examples/src/merkle
