@@ -49,6 +49,13 @@
 > profondeur consensus.** Limite assumée : `leaf_digest` public (non privé) — la
 > version monolithique privée (leaf_digest témoin, P1 fondu avec P2–P7 et lié à
 > tx_digest) est le circuit complet de 3b5.
+>
+> **3b3a (fait) — range-check** (`circuit::range_check`, P6) : `prove_range(v)` prouve
+> `0 ≤ v < 2^RANGE_BITS` par décomposition binaire accumulée (colonne `acc`, colonne
+> compteur `idx` pour non-dégénérescence). **`RANGE_BITS = 60`** (raffinement assumé
+> du « [0,2^64) » : sur Goldilocks `p≈2^64`, un range 2^64 est vide et l'équilibre en
+> corps wrappe ; borner à 2^60 rend `Σ` sound pour ≤ 16 termes). Testé en `--release`
+> (positif + hors-range rejeté). **L'équilibre P5** (`Σin = Σout + fee`) = 3b3b.
 
 **Ce statement EST la règle de consensus d'une dépense valide.** Tout le reste du
 protocole s'organise autour de lui. Le mode transparent actuel (`apply_transparent`)
