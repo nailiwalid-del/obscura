@@ -5,6 +5,7 @@
 //! le témoin. Ne jamais présenter une preuve d'ici comme `zk`/`private`/`shielded`.
 //! Le witness-hiding est un jalon séparé et gaté (« Phase 3z »).
 
+pub mod membership;
 pub mod merkle_level;
 pub mod merkle_path;
 pub mod owner_hash;
@@ -12,6 +13,7 @@ pub mod rescue_perm;
 pub mod rescue_round;
 pub mod sponge;
 
+pub use membership::{prove_membership, verify_membership, MembershipProof};
 pub use merkle_level::{prove_merkle_level, verify_merkle_level};
 pub use merkle_path::{prove_merkle_path, verify_merkle_path};
 pub use owner_hash::{prove_owner, verify_owner};

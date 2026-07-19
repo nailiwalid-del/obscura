@@ -38,8 +38,17 @@
 > en `--release`** : le `debug_assert` de degrés de winterfell est input-dépendant
 > (colonnes témoins constantes) → on déclare des bornes supérieures (`déclaré ≥
 > mesuré`, soundness préservée), l'assert debug étant ignoré en release ; tests
-> `#[ignore]` en debug. **Reste pour P1 complet** : feuille en circuit (B=1) + déroulé
-> profondeur 32 dans un seul circuit.
+> `#[ignore]` en debug.
+>
+> **3b2c (fait) — P1 PROUVÉ (par composition), profondeur 32** (`circuit::membership`) :
+> `prove_membership(cm, path, index)` compose la preuve du hash de feuille
+> (`H_MerkleLeaf(cm)`, sponge B=1) et la preuve de chaînage (`merkle_path`), liées par
+> un `leaf_digest` PUBLIC partagé. `verify_membership` vérifie les deux. Différentiel
+> vert vs `proved_hash::merkle::root` à profondeur **2 ET 32** (trace chemin = 512),
+> + négatif. **P1 (appartenance à l'arbre) est donc prouvable en circuit à la
+> profondeur consensus.** Limite assumée : `leaf_digest` public (non privé) — la
+> version monolithique privée (leaf_digest témoin, P1 fondu avec P2–P7 et lié à
+> tx_digest) est le circuit complet de 3b5.
 
 **Ce statement EST la règle de consensus d'une dépense valide.** Tout le reste du
 protocole s'organise autour de lui. Le mode transparent actuel (`apply_transparent`)
