@@ -30,6 +30,8 @@ pub struct ProvedInput {
 /// Transaction prouvée 2-in/2-out. Les valeurs de liaison (owner/nk, cm_in/rho/value
 /// dans les `SpendProof`, `output_commitments`, fee) sont publiques (validity-only).
 pub struct ProvedTx {
+    /// Racine (anchor) contre laquelle les entrées prouvent leur appartenance.
+    pub anchor: Digest,
     pub owner: Digest,
     pub nk: Digest,
     pub key: ValidityProof,
@@ -104,6 +106,7 @@ pub fn prove_tx(
     (
         root0,
         ProvedTx {
+            anchor: root0,
             owner,
             nk,
             key,

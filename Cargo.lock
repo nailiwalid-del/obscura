@@ -440,8 +440,10 @@ dependencies = [
 name = "ledger"
 version = "0.1.0"
 dependencies = [
+ "circuit",
  "crypto",
  "hex",
+ "proved-hash",
  "rand_core 0.6.4",
  "serde",
  "thiserror",

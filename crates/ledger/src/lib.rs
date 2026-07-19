@@ -3,6 +3,7 @@
 pub mod keys;
 pub mod merkle;
 pub mod note;
+pub mod proved_state;
 pub mod state;
 pub mod tx;
 
@@ -45,4 +46,6 @@ pub enum LedgerError {
     Encoding,
     #[error("index de note introuvable")]
     UnknownIndex,
+    #[error("preuve de transaction invalide")]
+    InvalidProof,
 }

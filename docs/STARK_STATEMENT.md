@@ -138,8 +138,19 @@
 > (déséquilibre, nk falsifié, output_commitment falsifié, tx_digest falsifié, racine
 > erronée) toute rejetée. **L'ASSEMBLAGE VALIDITY-ONLY DE LA PHASE 3 EST COMPLET.**
 >
-> **Reste hors Phase-3-validity** : 3c (`apply_proved_tx` sur `ledger::state` +
-> signature hybride sur `tx_digest`), 3d (bench prof.32), et la **Phase 3z**
+> **3c (fait) — INTÉGRATION LEDGER : `apply_proved_tx` EST LA RÈGLE DE CONSENSUS**
+> (`proved_hash::merkle::ProvedMerkleTree` + `ledger::proved_state::ProvedLedgerState`).
+> Arbre de Merkle Rescue INCRÉMENTAL (append/root/path) dont les chemins sont
+> compatibles circuit (`merkle::root(cm, tree.path(i), i) == tree.root()`).
+> `apply_proved_tx(tx)` : anchor récent → `circuit::verify_tx` (P1–P7 + non-rejeu) →
+> nullifiers non dépensés → dépense atomique + insertion des sorties. Tests
+> (`--release`) : tx prouvée appliquée (nullifiers dépensés, 2 sorties insérées),
+> double-dépense/anchor inconnu/preuve falsifiée rejetés. `ProvedTx` porte désormais
+> son `anchor`. **Le mode transparent de dev n'est plus la seule voie : le circuit
+> STARK gouverne un vrai état de ledger.** Reste : signature hybride d'intention sur
+> `tx_digest` (côté ledger).
+>
+> **Reste hors Phase-3-validity** : 3d (bench prof.32), et la **Phase 3z**
 > (witness-hiding + monolithe privé + généralisation M-in/N-out).
 
 **Ce statement EST la règle de consensus d'une dépense valide.** Tout le reste du
