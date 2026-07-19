@@ -84,6 +84,23 @@
 > `proved_hash::note_commitment` (déterministe, hiding via `r`, binding) + cm altéré
 > rejeté. Le sponge n'ayant pas de colonne témoin constante, la preuve tourne en
 > DEBUG (contrairement aux gadgets gatés). **P7 prouvable en circuit.**
+>
+> **3b5a (fait) — PREUVE DE CLÉ : P2 ∧ P4 LIÉS PAR UN SECRET PARTAGÉ**
+> (`circuit::{prove_key, verify_key}`) : `owner = H_owner(s) ∧ nk = H_nk(s)` pour LE
+> MÊME `shielded_secret` s, dans **une seule trace**. Première tranche de l'assemblage
+> 3b5 (circuits d'action). **Raison d'être** : la composition de `prove_owner` +
+> `prove_nk` séparés ne force PAS `s₁ = s₂` (témoins indépendants) et publier `s` est
+> exclu (secret maître) → la liaison « même s » n'est sound que dans une trace
+> partagée. Disposition : deux éponges B=1 côte à côte (owner cols `0..12`, nk cols
+> `12..24`, longueur 8, mêmes ARK périodiques), tags de domaine distincts. **Contrainte
+> de liaison** gatée à la ligne 0 : `owner_state[7+k] − nk_state[19+k] = 0` (k<4) — les
+> 4 cellules du secret coïncident ; aucune n'est assertée à une valeur publique
+> (`s` reste témoin). Différentiel vert vs `rescue::hash(Owner/Nk, s)`, non-régression
+> vs preuves isolées, owner/nk altérés rejetés. **Test de liaison white-box (release)**
+> : une trace où owner vient de `s` et nk de `s'≠s` est REJETÉE — la contrainte mord.
+> Le sponge évoluant, la preuve tourne en DEBUG. **Prochaines** : 3b5b Spend
+> (P1+P3+P6+P7ᵢₙ), 3b5c Output (P6+P7), 3b5d Bundle (câblage public + équilibre +
+> `tx_digest`).
 
 **Ce statement EST la règle de consensus d'une dépense valide.** Tout le reste du
 protocole s'organise autour de lui. Le mode transparent actuel (`apply_transparent`)
