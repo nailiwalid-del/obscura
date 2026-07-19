@@ -18,7 +18,11 @@ use crate::{
     SpendNote, SpendProof, ValidityProof,
 };
 use crypto::hash::dual_hash;
+use crypto::sig::{HybridSignature, SigKeypair, SigPublicKey};
 use proved_hash::digest::{Digest, ShieldedSecret};
+
+/// Domaine de la signature d'intention (anti-malléabilité), signée sur `tx_digest`.
+pub const INTENT_DOMAIN: &str = "obscura/proved-tx-intent/v1";
 
 /// Une entrée à dépenser : la note, son chemin de Merkle et sa position.
 pub struct ProvedInput {
@@ -39,12 +43,18 @@ pub struct ProvedTx {
     pub outputs: [OutputProof; 2],
     pub output_commitments: [Digest; 2],
     pub fee: u64,
+    /// Clé publique d'intention (liée dans `tx_digest` → non échangeable).
+    pub signer: SigPublicKey,
     pub tx_digest: [u8; 64],
+    /// Signature hybride d'intention sur `tx_digest` (enveloppe anti-malléabilité,
+    /// PAS autorité d'ownership — celle-ci est établie par la preuve P2).
+    pub intent_sig: HybridSignature,
 }
 
 const TX_DOMAIN: &str = "obscura/proved-tx/v1";
 
 /// Encodage canonique injectif (tailles fixes) de toutes les données publiques.
+#[allow(clippy::too_many_arguments)]
 fn tx_digest_bytes(
     root: &Digest,
     spends: &[SpendProof; 2],
@@ -53,6 +63,7 @@ fn tx_digest_bytes(
     owner: &Digest,
     nk: &Digest,
     fee: u64,
+    signer: &SigPublicKey,
 ) -> [u8; 64] {
     let mut b = Vec::new();
     b.extend_from_slice(&root.to_bytes());
@@ -69,6 +80,9 @@ fn tx_digest_bytes(
     b.extend_from_slice(&owner.to_bytes());
     b.extend_from_slice(&nk.to_bytes());
     b.extend_from_slice(&fee.to_le_bytes());
+    // Le signataire d'intention est LIÉ dans le digest → il ne peut pas être échangé
+    // sans invalider la preuve (qui lie tx_digest).
+    b.extend_from_slice(&signer.to_bytes());
     dual_hash(TX_DOMAIN, &b)
 }
 
@@ -80,6 +94,7 @@ pub fn prove_tx(
     inputs: [ProvedInput; 2],
     outputs: [SpendNote; 2],
     fee: u64,
+    intent: &SigKeypair,
 ) -> (Digest, ProvedTx) {
     let (owner, nk, key) = prove_key(secret);
 
@@ -93,6 +108,7 @@ pub fn prove_tx(
     let spends = [sp0, sp1];
     let outputs_p = [op0, op1];
     let output_commitments = [oc0, oc1];
+    let signer = intent.public.clone();
     let tx_digest = tx_digest_bytes(
         &root0,
         &spends,
@@ -101,7 +117,10 @@ pub fn prove_tx(
         &owner,
         &nk,
         fee,
+        &signer,
     );
+    // Enveloppe d'intention : le porteur de la clé signe CETTE transaction.
+    let intent_sig = intent.sign(INTENT_DOMAIN, &tx_digest);
 
     (
         root0,
@@ -114,7 +133,9 @@ pub fn prove_tx(
             outputs: outputs_p,
             output_commitments,
             fee,
+            signer,
             tx_digest,
+            intent_sig,
         },
     )
 }
@@ -144,7 +165,9 @@ pub fn verify_tx(root: &Digest, depth: usize, tx: &ProvedTx) -> bool {
     if sum_in != sum_out {
         return false;
     }
-    // Non-rejeu : le tx_digest recalculé lie toutes les données publiques.
+    // Non-rejeu : le tx_digest recalculé lie toutes les données publiques (dont le
+    // signataire d'intention). NB : la signature elle-même est vérifiée côté ledger
+    // (`apply_proved_tx`) — verify_tx n'établit que la preuve STARK + la cohérence du digest.
     let expected = tx_digest_bytes(
         root,
         &tx.spends,
@@ -153,6 +176,7 @@ pub fn verify_tx(root: &Digest, depth: usize, tx: &ProvedTx) -> bool {
         &tx.owner,
         &tx.nk,
         tx.fee,
+        &tx.signer,
     );
     expected == tx.tx_digest
 }
@@ -210,7 +234,8 @@ mod tests {
             ProvedInput { note: n0, path: path0, index: 0 },
             ProvedInput { note: n1, path: path1, index: 3 },
         ];
-        let (proved_root, tx) = prove_tx(&secret, inputs, [o0, o1], 20);
+        let intent = SigKeypair::generate();
+        let (proved_root, tx) = prove_tx(&secret, inputs, [o0, o1], 20, &intent);
         assert_eq!(proved_root, root);
         (secret, root, tx)
     }

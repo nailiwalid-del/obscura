@@ -11,7 +11,8 @@
 //! généralisation M-in/N-out, witness-hiding.
 
 use crate::LedgerError;
-use circuit::{verify_tx, ProvedTx};
+use circuit::{verify_tx, ProvedTx, INTENT_DOMAIN};
+use crypto::sig;
 use proved_hash::digest::Digest;
 use proved_hash::merkle::ProvedMerkleTree;
 use std::collections::{HashSet, VecDeque};
@@ -88,6 +89,11 @@ impl ProvedLedgerState {
         if !verify_tx(&tx.anchor, self.tree.depth(), tx) {
             return Err(LedgerError::InvalidProof);
         }
+        // 2 bis. Enveloppe d'intention : signature hybride valide sur tx_digest
+        // (anti-malléabilité ; le signataire est lié dans tx_digest).
+        if !sig::verify(&tx.signer, INTENT_DOMAIN, &tx.tx_digest, &tx.intent_sig) {
+            return Err(LedgerError::InvalidSignature);
+        }
         // 3. Nullifiers non dépensés + pas de doublon dans la tx.
         let mut seen = HashSet::new();
         for sp in &tx.spends {
@@ -158,7 +164,8 @@ mod tests {
             ProvedInput { note: n0, path: path0, index: i0 },
             ProvedInput { note: n1, path: path1, index: i1 },
         ];
-        let (_root, tx) = prove_tx(&secret, inputs, [o0, o1], 20);
+        let intent = crypto::sig::SigKeypair::generate();
+        let (_root, tx) = prove_tx(&secret, inputs, [o0, o1], 20, &intent);
         (state, tx)
     }
 
@@ -204,6 +211,33 @@ mod tests {
         let (mut state, mut tx) = setup();
         // Sabotage de l'équilibre : anchor reste récent mais verify_tx échoue.
         tx.outputs[0].value += 1;
+        assert!(matches!(
+            state.apply_proved_tx(&tx),
+            Err(LedgerError::InvalidProof)
+        ));
+    }
+
+    /// Signature d'intention falsifiée (signée par une autre clé) → rejet.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "sous-preuves gatées : --release")]
+    fn signature_intention_falsifiee_rejetee() {
+        let (mut state, mut tx) = setup();
+        // Signature valide MAIS d'une autre clé que `tx.signer` → verify échoue.
+        let autre = crypto::sig::SigKeypair::generate();
+        tx.intent_sig = autre.sign(INTENT_DOMAIN, &tx.tx_digest);
+        assert!(matches!(
+            state.apply_proved_tx(&tx),
+            Err(LedgerError::InvalidSignature)
+        ));
+    }
+
+    /// Échanger le signataire casse `tx_digest` (il y est lié) → la preuve est rejetée
+    /// AVANT même la signature — le signataire n'est pas échangeable.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "sous-preuves gatées : --release")]
+    fn signataire_non_echangeable() {
+        let (mut state, mut tx) = setup();
+        tx.signer = crypto::sig::SigKeypair::generate().public;
         assert!(matches!(
             state.apply_proved_tx(&tx),
             Err(LedgerError::InvalidProof)

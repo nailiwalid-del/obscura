@@ -70,8 +70,9 @@ fn main() {
     ];
 
     // Génération.
+    let intent = crypto::sig::SigKeypair::generate();
     let t0 = Instant::now();
-    let (proved_root, tx) = prove_tx(&secret, inputs, [o0, o1], 20);
+    let (proved_root, tx) = prove_tx(&secret, inputs, [o0, o1], 20, &intent);
     let prove_ms = t0.elapsed().as_secs_f64() * 1e3;
     assert_eq!(proved_root, root);
 

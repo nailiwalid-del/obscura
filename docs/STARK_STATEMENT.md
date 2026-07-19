@@ -160,8 +160,16 @@
 > preuves → l'agrégation/récursion ou un monolithe (Phase 3z) est le levier de
 > compression, PAS le temps.
 >
-> **Reste hors Phase-3-validity** : signature d'intention sur `tx_digest`, et la
-> **Phase 3z** (witness-hiding + monolithe/agrégation privés + généralisation M-in/N-out).
+> **Signature d'intention (fait) — enveloppe anti-malléabilité** : `ProvedTx` porte
+> une clé publique d'intention `signer` (hybride Ed25519+Dilithium3) et une signature
+> `intent_sig` sur `tx_digest`. Le `signer` est **lié dans `tx_digest`** → il ne peut
+> pas être échangé sans invalider la preuve. `prove_tx` prend un `SigKeypair`
+> d'intention et signe ; `apply_proved_tx` vérifie la signature (`InvalidSignature`).
+> Ce n'est PAS l'autorité d'ownership (établie par P2) mais une enveloppe d'intention.
+> Tests : signature d'une autre clé rejetée, signataire échangé rejeté (via le digest).
+>
+> **Reste hors Phase-3-validity** : la **Phase 3z** (witness-hiding + monolithe/
+> agrégation privés + généralisation M-in/N-out).
 
 **Ce statement EST la règle de consensus d'une dépense valide.** Tout le reste du
 protocole s'organise autour de lui. Le mode transparent actuel (`apply_transparent`)

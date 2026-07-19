@@ -29,7 +29,7 @@ pub use output::{prove_output, verify_output, OutputProof};
 pub use owner_hash::{prove_owner, verify_owner};
 pub use rescue_perm::{prove_permutation, verify_permutation};
 pub use spend::{prove_spend, verify_spend, SpendNote, SpendProof};
-pub use tx::{prove_tx, verify_tx, ProvedInput, ProvedTx};
+pub use tx::{prove_tx, verify_tx, ProvedInput, ProvedTx, INTENT_DOMAIN};
 pub use sponge::{
     prove_nk, prove_note_commitment, prove_nullifier, prove_sponge, verify_note_commitment,
     verify_sponge,
