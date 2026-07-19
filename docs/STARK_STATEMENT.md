@@ -126,6 +126,21 @@
 > valeur fausse et `oc` falsifié rejetés. **Reste 3b5d** : Bundle 2-in/2-out
 > (`prove_key` + 2 Spend + 2 Output + équilibre natif sur montants publics +
 > `tx_digest`).
+>
+> **3b5d (fait) — TRANSACTION PROUVÉE `ProvedTx` : LE VALIDATEUR COMPLET**
+> (`circuit::{prove_tx, verify_tx, ProvedTx, ProvedInput}`) : assemble `prove_key`
+> (P2∧P4) + 2 `prove_spend` (P1+P3+P6+P7ᵢₙ) + 2 `prove_output` (P7+P6) + **équilibre
+> P5 natif** (`Σin = Σout + fee` sur montants publics) + **`tx_digest`** (dual_hash
+> BLAKE3‖SHA3 sur l'encodage canonique de toutes les données publiques = non-rejeu).
+> `verify_tx(root, depth, tx)` établit ainsi **P1–P7 pour la transaction 2-in/2-out
+> entière**, avec `owner`/`nk` de la clé LIÉS à chaque dépense et une racine commune.
+> Tests (`--release`, arbre profondeur 2) : tx valide acceptée + matrice de sabotage
+> (déséquilibre, nk falsifié, output_commitment falsifié, tx_digest falsifié, racine
+> erronée) toute rejetée. **L'ASSEMBLAGE VALIDITY-ONLY DE LA PHASE 3 EST COMPLET.**
+>
+> **Reste hors Phase-3-validity** : 3c (`apply_proved_tx` sur `ledger::state` +
+> signature hybride sur `tx_digest`), 3d (bench prof.32), et la **Phase 3z**
+> (witness-hiding + monolithe privé + généralisation M-in/N-out).
 
 **Ce statement EST la règle de consensus d'une dépense valide.** Tout le reste du
 protocole s'organise autour de lui. Le mode transparent actuel (`apply_transparent`)

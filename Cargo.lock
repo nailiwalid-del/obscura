@@ -162,6 +162,7 @@ dependencies = [
 name = "circuit"
 version = "0.1.0"
 dependencies = [
+ "crypto",
  "proved-hash",
  "winter-crypto",
  "winter-math",
