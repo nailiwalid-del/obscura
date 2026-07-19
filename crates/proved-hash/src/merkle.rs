@@ -24,10 +24,11 @@ pub fn node(left: &Digest, right: &Digest) -> Digest {
     rescue::merge(Domain::MerkleNode, left, right)
 }
 
-/// Racine obtenue en remontant `path` (frères, du bas vers le haut) depuis la
-/// feuille `cm`, l'ordre à chaque niveau étant dicté par le bit de `index`.
-pub fn root(cm: &Digest, path: &[Digest], index: u64) -> Digest {
-    let mut cur = leaf(cm);
+/// Repli d'un chemin depuis une feuille DÉJÀ hachée `leaf`, en remontant `path`
+/// selon les bits de `index`. C'est le cœur du calcul de racine (sans le hash de
+/// feuille) — la référence du différentiel du chaînage en circuit (3b2b).
+pub fn fold(leaf: &Digest, path: &[Digest], index: u64) -> Digest {
+    let mut cur = *leaf;
     for (level, sib) in path.iter().enumerate() {
         let bit = (index >> level) & 1;
         cur = if bit == 0 {
@@ -37,6 +38,12 @@ pub fn root(cm: &Digest, path: &[Digest], index: u64) -> Digest {
         };
     }
     cur
+}
+
+/// Racine obtenue en remontant `path` (frères, du bas vers le haut) depuis la
+/// feuille `cm`, l'ordre à chaque niveau étant dicté par le bit de `index`.
+pub fn root(cm: &Digest, path: &[Digest], index: u64) -> Digest {
+    fold(&leaf(cm), path, index)
 }
 
 #[cfg(test)]
