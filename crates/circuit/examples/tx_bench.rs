@@ -1,0 +1,91 @@
+//! 3d — Bench d'une transaction prouvée complète (2-in/2-out) à profondeur consensus.
+//!
+//! Mesure le temps de génération/vérification et la taille de preuve d'une `ProvedTx`,
+//! pour évaluer la faisabilité et informer la Phase 3z. Lancer en RELEASE :
+//!   cargo run --release --example tx_bench -p circuit
+
+use std::time::Instant;
+
+use circuit::{prove_tx, verify_tx, ProvedInput, ProvedTx, SpendNote, ValidityProof};
+use proved_hash::digest::{Digest, ShieldedSecret};
+use proved_hash::domain::Domain;
+use proved_hash::felt::Felt;
+use proved_hash::merkle::ProvedMerkleTree;
+use proved_hash::rescue;
+
+fn digest(seed: u64) -> Digest {
+    Digest(core::array::from_fn(|i| {
+        Felt::from_canonical_u64(seed + i as u64).unwrap()
+    }))
+}
+
+fn proof_bytes(p: &ValidityProof) -> usize {
+    p.0.to_bytes().len()
+}
+
+/// Taille totale (octets) de toutes les sous-preuves winterfell de la `ProvedTx`.
+fn total_proof_bytes(tx: &ProvedTx) -> usize {
+    let mut n = proof_bytes(&tx.key);
+    for sp in &tx.spends {
+        n += proof_bytes(&sp.commit);
+        n += proof_bytes(&sp.membership.leaf_proof);
+        n += proof_bytes(&sp.membership.path_proof);
+        n += proof_bytes(&sp.nf_proof);
+        n += proof_bytes(&sp.range);
+    }
+    for op in &tx.outputs {
+        n += proof_bytes(&op.commit);
+        n += proof_bytes(&op.range);
+    }
+    n
+}
+
+fn main() {
+    let depth = ProvedMerkleTree::consensus().depth(); // 32
+    println!("== Bench ProvedTx 2-in/2-out, arbre profondeur {depth} ==");
+
+    // Clé de dépense et deux notes d'entrée possédées par elle.
+    let secret = ShieldedSecret::from_felts(core::array::from_fn(|i| {
+        Felt::from_canonical_u64(700 + i as u64).unwrap()
+    }));
+    let owner = rescue::hash(Domain::Owner, secret.as_felts());
+    let n0 = SpendNote { value: 1_000, owner, rho: digest(20), r: digest(30) };
+    let n1 = SpendNote { value: 500, owner, rho: digest(40), r: digest(50) };
+    let cm0 = rescue::note_commitment(n0.value, &n0.owner, &n0.rho, &n0.r);
+    let cm1 = rescue::note_commitment(n1.value, &n1.owner, &n1.rho, &n1.r);
+
+    // Arbre consensus contenant les deux commitments.
+    let mut tree = ProvedMerkleTree::consensus();
+    let i0 = tree.append(&cm0);
+    let i1 = tree.append(&cm1);
+    let root = tree.root();
+    let path0 = tree.path(i0).unwrap();
+    let path1 = tree.path(i1).unwrap();
+
+    let o0 = SpendNote { value: 900, owner: digest(60), rho: digest(61), r: digest(62) };
+    let o1 = SpendNote { value: 580, owner: digest(70), rho: digest(71), r: digest(72) };
+    let inputs = [
+        ProvedInput { note: n0, path: path0, index: i0 },
+        ProvedInput { note: n1, path: path1, index: i1 },
+    ];
+
+    // Génération.
+    let t0 = Instant::now();
+    let (proved_root, tx) = prove_tx(&secret, inputs, [o0, o1], 20);
+    let prove_ms = t0.elapsed().as_secs_f64() * 1e3;
+    assert_eq!(proved_root, root);
+
+    // Vérification (moyenne sur quelques passes).
+    const V: u32 = 5;
+    let t1 = Instant::now();
+    for _ in 0..V {
+        assert!(verify_tx(&root, depth, &tx));
+    }
+    let verify_ms = t1.elapsed().as_secs_f64() * 1e3 / V as f64;
+
+    let bytes = total_proof_bytes(&tx);
+    println!("génération  : {prove_ms:8.1} ms");
+    println!("vérification: {verify_ms:8.1} ms  (moy. sur {V})");
+    println!("taille preuve totale : {bytes} o  ({:.1} Kio)", bytes as f64 / 1024.0);
+    println!("  = 1 clé + 2 dépenses (5 preuves ch.) + 2 sorties (2 preuves ch.) = 15 STARK");
+}

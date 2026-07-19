@@ -150,8 +150,17 @@
 > STARK gouverne un vrai état de ledger.** Reste : signature hybride d'intention sur
 > `tx_digest` (côté ledger).
 >
-> **Reste hors Phase-3-validity** : 3d (bench prof.32), et la **Phase 3z**
-> (witness-hiding + monolithe privé + généralisation M-in/N-out).
+> **3d (fait) — BENCH d'une `ProvedTx` 2-in/2-out à profondeur 32**
+> (`circuit/examples/tx_bench.rs`, `cargo run --release --example tx_bench -p circuit`).
+> Mesures indicatives (une machine dev) : **génération ≈ 225 ms**, **vérification ≈
+> 2,6 ms**, **taille de preuve ≈ 219 Kio** (15 STARK séparés : 1 clé + 2 dépenses×5 +
+> 2 sorties×2). Enseignement pour 3z : la vérification est très rapide et la génération
+> raisonnable, mais la TAILLE (~219 Kio) est dominée par la NON-agrégation des 15
+> preuves → l'agrégation/récursion ou un monolithe (Phase 3z) est le levier de
+> compression, PAS le temps.
+>
+> **Reste hors Phase-3-validity** : signature d'intention sur `tx_digest`, et la
+> **Phase 3z** (witness-hiding + monolithe/agrégation privés + généralisation M-in/N-out).
 
 **Ce statement EST la règle de consensus d'une dépense valide.** Tout le reste du
 protocole s'organise autour de lui. Le mode transparent actuel (`apply_transparent`)
