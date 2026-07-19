@@ -65,7 +65,7 @@ pub(crate) fn sponge_rows(preamble: &[BaseElement]) -> Vec<[BaseElement; TRACE_W
     let l = b * TRACE_LEN;
     assert!(
         l.is_power_of_two(),
-        "3b1 : B*8 doit être une puissance de 2 (padding B=3 repoussé à 3b4)"
+        "B*8 doit être une puissance de 2 (préambule aligné par `absorbed_len`, cf. 3b4)"
     );
 
     // blocs de rate (dernier bloc complété par des zéros).
@@ -206,7 +206,10 @@ impl winterfell::Air for SpongeAir {
             );
             STATE_WIDTH
         ];
-        let m = 3 + pi.payload_len as usize + 1;
+        // Longueur logique (PAD_ONE inclus) puis capacité alignée PAD_ZERO* (3b4).
+        // La capacité = longueur ABSORBÉE ; le PAD_ONE reste à sa position logique.
+        let m_logical = 3 + pi.payload_len as usize + 1;
+        let m = proved_hash::rescue::absorbed_len(m_logical);
         let l = trace_info.length();
         // assertions : capacité (4) + VERSION/tag/LEN (3) + PAD_ONE (1) + digest (4)
         // + payload public.
@@ -256,8 +259,9 @@ impl winterfell::Air for SpongeAir {
         put(&mut a, 0, BaseElement::new(ENCODING_VERSION as u64));
         put(&mut a, 1, BaseElement::new(self.pi.tag));
         put(&mut a, 2, BaseElement::new(self.pi.payload_len));
-        // PAD_ONE (dernier élément du préambule).
-        put(&mut a, self.m - 1, BaseElement::new(1));
+        // PAD_ONE : position LOGIQUE (juste après le payload), pas `capacité − 1`
+        // (elles diffèrent quand PAD_ZERO* a complété le préambule, cf. commitment).
+        put(&mut a, 3 + self.pi.payload_len as usize, BaseElement::new(1));
         // Payload public (positions relatives au payload → +3 dans le préambule).
         for (pi, val) in &self.pi.public_payload {
             put(&mut a, 3 + *pi, *val);
@@ -366,10 +370,15 @@ pub fn prove_sponge(
     payload: &[Felt],
     public_idx: &[usize],
 ) -> (Digest, ValidityProof) {
-    let preamble: Vec<BaseElement> = sponge_preamble(domain, payload)
+    let mut preamble: Vec<BaseElement> = sponge_preamble(domain, payload)
         .iter()
         .map(|f| f.to_winter())
         .collect();
+    // PAD_ZERO* : aligne sur un nombre de blocs puissance de 2 (3b4) — no-op sauf commitment.
+    preamble.resize(
+        proved_hash::rescue::absorbed_len(preamble.len()),
+        BaseElement::ZERO,
+    );
     let trace = build_sponge_trace(&preamble);
 
     let last = trace.length() - 1;
@@ -446,6 +455,27 @@ pub fn prove_nullifier(
     prove_sponge(Domain::Nullifier, &payload, &[])
 }
 
+/// P7 en circuit : `cm = H_NoteCommitment(value ‖ owner ‖ rho ‖ r)`.
+///
+/// Payload 13 Felts → préambule 17 → **3 blocs alignés à 4** par PAD_ZERO* (3b4,
+/// premier usage du padding). Note ENTIÈREMENT témoin (value/owner/rho/r) ; seul le
+/// commitment `cm` (= digest) est public. À générer en `--release`.
+pub fn prove_note_commitment(
+    value: u64,
+    owner: &Digest,
+    rho: &Digest,
+    r: &Digest,
+) -> (Digest, ValidityProof) {
+    let payload = proved_hash::rescue::note_commit_payload(value, owner, rho, r);
+    prove_sponge(Domain::NoteCommitment, &payload, &[])
+}
+
+/// Vérifie une preuve de commitment de note contre le `cm` public.
+pub fn verify_note_commitment(cm: &Digest, proof: &ValidityProof) -> bool {
+    // Payload de 13 Felts (value + 3 digests), aucun champ public.
+    verify_sponge(Domain::NoteCommitment, 1 + 3 * DIGEST_FELTS, cm, &[], proof)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -487,6 +517,31 @@ mod tests {
         let (d, proof) = prove_sponge(Domain::NoteCommitment, &payload, &[]);
         assert_eq!(d, rescue::hash(Domain::NoteCommitment, &payload));
         assert!(verify_sponge(Domain::NoteCommitment, payload.len(), &d, &[], &proof));
+    }
+
+    /// P7 : commitment de note prouvé (payload 13 → **padding 3→4 blocs**) ==
+    /// référence hors-circuit `note_commitment`. Premier usage du PAD_ZERO*.
+    #[test]
+    fn note_commitment_differentiel_p7() {
+        let owner = Digest([felt(10), felt(11), felt(12), felt(13)]);
+        let rho = Digest([felt(20), felt(21), felt(22), felt(23)]);
+        let r = Digest([felt(30), felt(31), felt(32), felt(33)]);
+        let (cm, proof) = prove_note_commitment(4_200, &owner, &rho, &r);
+        // Différentiel : le circuit reproduit le commitment hors-circuit.
+        assert_eq!(cm, rescue::note_commitment(4_200, &owner, &rho, &r));
+        assert!(verify_note_commitment(&cm, &proof));
+        // Un cm altéré est rejeté.
+        let mut faux = cm;
+        faux.0[0] = felt(faux.0[0].as_u64() ^ 1);
+        assert!(!verify_note_commitment(&faux, &proof));
+    }
+
+    /// Le padding PAD_ZERO* ne casse pas les hachages déjà alignés (owner B=1).
+    #[test]
+    fn padding_noop_sur_hachages_alignes() {
+        let s = ShieldedSecret::from_felts(core::array::from_fn(|i| felt(5 + i as u64)));
+        let (nk, _) = prove_nk(&s);
+        assert_eq!(nk, rescue::hash(Domain::Nk, s.as_felts()));
     }
 
     #[test]

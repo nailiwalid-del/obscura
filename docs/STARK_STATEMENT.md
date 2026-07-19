@@ -70,6 +70,20 @@
 > honnêtes (avec/sans fee, montants ≈ 2^59) acceptés, déséquilibre et fee falsifié
 > rejetés. Montants non révélés ici (témoins), mais preuve non witness-hiding ; la
 > liaison bits↔commitments est le monolithe 3b5. À générer en `--release`.
+>
+> **3b4 (fait) — COMMITMENT DE NOTE P7 PROUVÉ EN CIRCUIT** (`circuit::prove_note_commitment`) :
+> `cm = H_NoteCommitment(value ‖ owner ‖ rho ‖ r)` (payload 13 Felts, note
+> ENTIÈREMENT témoin, seul `cm` public). **Premier usage du padding PAD_ZERO\*** (le
+> B=3 repoussé depuis 3b1) : le préambule logique fait 17 éléments (3 blocs) ; il est
+> complété par des zéros jusqu'à un nombre de blocs PUISSANCE DE 2 (4 blocs = 32),
+> exigence de la longueur de trace STARK. `absorbed_len` centralise la règle et est
+> un NO-OP pour tous les hachages déjà alignés (owner/nk B=1, nullifier/merge B=2) →
+> golden vectors 3a1 INCHANGÉS. La capacité du sponge = longueur absorbée (32),
+> injective car `LEN=13` figure dans le préambule ; le PAD_ONE reste à sa position
+> logique (index 16, découplé de `capacité−1`). Différentiel vert vs
+> `proved_hash::note_commitment` (déterministe, hiding via `r`, binding) + cm altéré
+> rejeté. Le sponge n'ayant pas de colonne témoin constante, la preuve tourne en
+> DEBUG (contrairement aux gadgets gatés). **P7 prouvable en circuit.**
 
 **Ce statement EST la règle de consensus d'une dépense valide.** Tout le reste du
 protocole s'organise autour de lui. Le mode transparent actuel (`apply_transparent`)

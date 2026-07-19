@@ -22,7 +22,10 @@ pub use merkle_level::{prove_merkle_level, verify_merkle_level};
 pub use merkle_path::{prove_merkle_path, verify_merkle_path};
 pub use owner_hash::{prove_owner, verify_owner};
 pub use rescue_perm::{prove_permutation, verify_permutation};
-pub use sponge::{prove_nk, prove_nullifier, prove_sponge, verify_sponge};
+pub use sponge::{
+    prove_nk, prove_note_commitment, prove_nullifier, prove_sponge, verify_note_commitment,
+    verify_sponge,
+};
 
 use winterfell::{Proof, ProofOptions};
 
