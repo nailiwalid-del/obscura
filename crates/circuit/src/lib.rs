@@ -6,12 +6,14 @@
 //! Le witness-hiding est un jalon séparé et gaté (« Phase 3z »).
 
 pub mod merkle_level;
+pub mod merkle_path;
 pub mod owner_hash;
 pub mod rescue_perm;
 pub mod rescue_round;
 pub mod sponge;
 
 pub use merkle_level::{prove_merkle_level, verify_merkle_level};
+pub use merkle_path::{prove_merkle_path, verify_merkle_path};
 pub use owner_hash::{prove_owner, verify_owner};
 pub use rescue_perm::{prove_permutation, verify_permutation};
 pub use sponge::{prove_nk, prove_nullifier, prove_sponge, verify_sponge};
