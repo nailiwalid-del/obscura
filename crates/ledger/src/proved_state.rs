@@ -30,8 +30,38 @@ use crate::LedgerError;
 use circuit::{verify_tx, ProvedTx, INTENT_DOMAIN};
 use crypto::sig;
 use proved_hash::digest::Digest;
-use proved_hash::merkle::MerkleFrontier;
+use proved_hash::merkle::{FrontierDecodeError, MerkleFrontier};
 use std::collections::{HashSet, VecDeque};
+
+/// Erreur de désérialisation de l'état (`ProvedLedgerState::from_bytes`). Le
+/// fichier d'état est local et trusté : la validation détecte la corruption sans
+/// jamais paniquer.
+#[derive(Debug, PartialEq, Eq)]
+pub enum StateDecodeError {
+    /// Champ tronqué (moins d'octets que nécessaire).
+    TooShort,
+    /// Octets résiduels après la fin — encodage non canonique.
+    TrailingBytes,
+    /// La `MerkleFrontier` embarquée est corrompue.
+    BadFrontier(FrontierDecodeError),
+}
+
+/// Erreur de chargement d'un état depuis un fichier (`load`).
+#[derive(Debug)]
+pub enum StateLoadError {
+    Io(std::io::Error),
+    Decode(StateDecodeError),
+}
+
+impl std::fmt::Display for StateLoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StateLoadError::Io(e) => write!(f, "E/S : {e}"),
+            StateLoadError::Decode(e) => write!(f, "décodage d'état : {e:?}"),
+        }
+    }
+}
+impl std::error::Error for StateLoadError {}
 
 /// Fenêtre glissante de racines récentes acceptées (cf. `state::RECENT_ROOTS_WINDOW`).
 pub const RECENT_ROOTS_WINDOW: usize = 100;
@@ -138,6 +168,93 @@ impl ProvedLedgerState {
         let root = self.tree.root();
         self.remember_root(root);
         Ok(indices)
+    }
+
+    /// Encodage canonique de l'état consensus (durcissement #7) : `len(tree) u32 LE
+    /// ‖ tree ‖ N u64 LE ‖ nullifiers TRIÉS (32 o) ‖ M u64 LE ‖ roots_order FIFO
+    /// (32 o)`. Les nullifiers sont triés (le `HashSet` n'a pas d'ordre stable) →
+    /// même état ⇒ mêmes octets. `roots_order` garde son ordre FIFO (la fenêtre
+    /// glissante en dépend) ; `recent_roots` est reconstruit au chargement.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut b = Vec::new();
+        let tree = self.tree.to_bytes();
+        b.extend_from_slice(&(tree.len() as u32).to_le_bytes());
+        b.extend_from_slice(&tree);
+
+        let mut nfs: Vec<[u8; 32]> = self.nullifiers.iter().copied().collect();
+        nfs.sort_unstable();
+        b.extend_from_slice(&(nfs.len() as u64).to_le_bytes());
+        for nf in &nfs {
+            b.extend_from_slice(nf);
+        }
+
+        b.extend_from_slice(&(self.roots_order.len() as u64).to_le_bytes());
+        for r in &self.roots_order {
+            b.extend_from_slice(r);
+        }
+        b
+    }
+
+    /// Décode l'état depuis `to_bytes`. Curseur BORNÉ (chaque prise vérifie les
+    /// octets restants) et validant — aucune panique sur fichier corrompu.
+    pub fn from_bytes(b: &[u8]) -> Result<Self, StateDecodeError> {
+        let mut pos = 0usize;
+        fn take<'a>(b: &'a [u8], pos: &mut usize, n: usize) -> Result<&'a [u8], StateDecodeError> {
+            let end = pos.checked_add(n).ok_or(StateDecodeError::TooShort)?;
+            if end > b.len() {
+                return Err(StateDecodeError::TooShort);
+            }
+            let s = &b[*pos..end];
+            *pos = end;
+            Ok(s)
+        }
+
+        let tree_len = u32::from_le_bytes(take(b, &mut pos, 4)?.try_into().unwrap()) as usize;
+        let tree_bytes = take(b, &mut pos, tree_len)?;
+        let tree = MerkleFrontier::from_bytes(tree_bytes).map_err(StateDecodeError::BadFrontier)?;
+
+        let n = u64::from_le_bytes(take(b, &mut pos, 8)?.try_into().unwrap());
+        let n = usize::try_from(n).map_err(|_| StateDecodeError::TooShort)?;
+        let mut nullifiers = HashSet::with_capacity(n);
+        for _ in 0..n {
+            let d: [u8; 32] = take(b, &mut pos, 32)?.try_into().unwrap();
+            nullifiers.insert(d);
+        }
+
+        let m = u64::from_le_bytes(take(b, &mut pos, 8)?.try_into().unwrap());
+        let m = usize::try_from(m).map_err(|_| StateDecodeError::TooShort)?;
+        let mut roots_order = VecDeque::with_capacity(m);
+        let mut recent_roots = HashSet::with_capacity(m);
+        for _ in 0..m {
+            let d: [u8; 32] = take(b, &mut pos, 32)?.try_into().unwrap();
+            roots_order.push_back(d);
+            recent_roots.insert(d);
+        }
+
+        if pos != b.len() {
+            return Err(StateDecodeError::TrailingBytes);
+        }
+        Ok(ProvedLedgerState {
+            tree,
+            nullifiers,
+            recent_roots,
+            roots_order,
+        })
+    }
+
+    /// Sauvegarde ATOMIQUE : écrit dans `<path>.tmp` puis `rename` (aucun état à
+    /// moitié écrit après un crash — `rename` est atomique sur un même système de
+    /// fichiers).
+    pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, self.to_bytes())?;
+        std::fs::rename(&tmp, path)
+    }
+
+    /// Recharge un état depuis un fichier écrit par `save`.
+    pub fn load(path: &std::path::Path) -> Result<Self, StateLoadError> {
+        let bytes = std::fs::read(path).map_err(StateLoadError::Io)?;
+        Self::from_bytes(&bytes).map_err(StateLoadError::Decode)
     }
 }
 
@@ -383,6 +500,81 @@ mod tests {
         assert!(state.mint(&digest(1)).is_ok());
         assert!(state.mint(&digest(2)).is_ok());
         assert!(matches!(state.mint(&digest(3)), Err(LedgerError::TreeFull)));
+    }
+
+    /// Persistance (#7) : `from_bytes(to_bytes)` restaure un état au COMPORTEMENT
+    /// fidèle — nullifiers dépensés, fenêtre de racines, arbre. Aucune preuve STARK
+    /// ⇒ build nu.
+    #[test]
+    fn etat_serialisation_roundtrip_comportement() {
+        let mut state = ProvedLedgerState::with_depth(8);
+        state.mint(&digest(1)).unwrap();
+        state.mint(&digest(2)).unwrap();
+        // Simuler une dépense : marquer un nullifier (champ privé, accès module).
+        state.nullifiers.insert(digest(4242).to_bytes());
+        let root_courant = state.tree.root();
+
+        let bytes = state.to_bytes();
+        let reloaded = ProvedLedgerState::from_bytes(&bytes).expect("roundtrip");
+
+        assert_eq!(reloaded.to_bytes(), bytes, "canonique (même octets)");
+        assert_eq!(reloaded.tree.root(), root_courant);
+        assert_eq!(reloaded.tree.len(), state.tree.len());
+        assert!(reloaded.is_spent(&digest(4242)));
+        // La racine courante reste dans la fenêtre (anchor accepté après rechargement).
+        assert!(reloaded.recent_roots.contains(&root_courant.to_bytes()));
+    }
+
+    /// Matrice de rejet de `from_bytes` — jamais de panique.
+    #[test]
+    fn etat_serialisation_rejette_les_malformes() {
+        let state = ProvedLedgerState::with_depth(4);
+        let bytes = state.to_bytes();
+        assert!(matches!(
+            ProvedLedgerState::from_bytes(&bytes[..bytes.len() - 1]),
+            Err(StateDecodeError::TooShort)
+        ));
+        let mut trailing = bytes.clone();
+        trailing.push(7);
+        assert!(matches!(
+            ProvedLedgerState::from_bytes(&trailing),
+            Err(StateDecodeError::TrailingBytes)
+        ));
+        assert!(matches!(
+            ProvedLedgerState::from_bytes(&[]),
+            Err(StateDecodeError::TooShort)
+        ));
+    }
+
+    /// `save`/`load` à travers un vrai fichier temporaire : l'état rechargé égale
+    /// l'original (mêmes octets). Écriture atomique (tmp + rename).
+    #[test]
+    fn save_load_fichier_roundtrip() {
+        let mut state = ProvedLedgerState::with_depth(6);
+        state.mint(&digest(11)).unwrap();
+        state.mint(&digest(22)).unwrap();
+        state.nullifiers.insert(digest(7).to_bytes());
+
+        let path = std::env::temp_dir().join(format!(
+            "obscura_state_test_{}.bin",
+            std::process::id()
+        ));
+        state.save(&path).expect("save");
+        let reloaded = ProvedLedgerState::load(&path).expect("load");
+        assert_eq!(reloaded.to_bytes(), state.to_bytes());
+        assert!(reloaded.is_spent(&digest(7)));
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// Charger un fichier absent = erreur d'E/S (pas de panique).
+    #[test]
+    fn load_fichier_absent_est_erreur_io() {
+        let path = std::env::temp_dir().join("obscura_absent_zzz_introuvable.bin");
+        std::fs::remove_file(&path).ok();
+        assert!(matches!(
+            ProvedLedgerState::load(&path),
+            Err(StateLoadError::Io(_))
+        ));
     }
 
     /// Échanger le signataire casse `tx_digest` (il y est lié) → la preuve est rejetée
