@@ -1009,11 +1009,32 @@ mod tests {
     /// non recopiée par une porteuse) et l'accumulateur d'équilibre BAL_S. Pour
     /// chaque colonne : (a) aucune ouverture FRI ne vaut la valeur témoin
     /// correspondante (reconstruite hors-circuit depuis `w`, jamais lue dans la
-    /// trace) ; (b) les ouvertures ne sont pas toutes identiques (signal de
-    /// variation — une colonne non masquée retournerait sa constante partout) ;
-    /// (c) deux preuves de la MÊME tx (graines distinctes) ont des ouvertures
-    /// DISJOINTES sur chaque colonne. Motif et helper `ouvertures_colonne` repris
-    /// tels quels de T2 (DRY : aucune logique de parsing dupliquée).
+    /// trace) ; (b) les ouvertures ne sont pas toutes identiques ; (c) deux preuves
+    /// de la MÊME tx (graines distinctes) ont des ouvertures DISJOINTES sur chaque
+    /// colonne. Motif et helper `ouvertures_colonne` repris tels quels de T2
+    /// (DRY : aucune logique de parsing dupliquée).
+    ///
+    /// **Deux régimes de force, à ne pas confondre (revue post-implémentation) :**
+    /// - **13 colonnes PORTEUSES** (owner/nk/rho/cm/leaf/vin/vout) : polynômes
+    ///   CONSTANTS sur `[0, used)` (contrainte `next − cur = 0`). Sans blinding, un
+    ///   polynôme constant s'évalue à la MÊME valeur partout, y compris aux
+    ///   positions de requête FRI (domaine coset, disjoint de `[0, used)`) → (a)
+    ///   échouerait DÉTERMINISTIQUEMENT si le gating `blind_off` sautait. C'est un
+    ///   vrai DÉTECTEUR DE RÉGRESSION de la fuite catastrophique E1 (zk-spike).
+    /// - **3 cellules ÉVOLUTIVES** (`KEY_SECRET[0]`, `U0_COMMIT_VALUE`, `BAL_S`) :
+    ///   colonnes NON constantes par construction (même sans blinding, chaque
+    ///   ligne y porte une valeur différente) → leurs ouvertures aux positions de
+    ///   requête sont déjà génériques AVEC OU SANS blinding : (a) n'y détecte donc
+    ///   PAS une non-randomisation ciblée de la région de blinding, et (b)/(c) non
+    ///   plus — les positions de requête varient déjà via Fiat-Shamir sur les
+    ///   AUTRES colonnes randomisées, donc des ouvertures différentes entre `p1`
+    ///   et `p2` peuvent venir de là plutôt que du blinding de CETTE colonne
+    ///   précise. Ces 3 cellules sont incluses pour la DIVERSITÉ des familles
+    ///   couvertes (secret / éponge brute / équilibre), en couverture QUALITATIVE
+    ///   — pas comme détecteur dur au même titre que les porteuses. `BAL_S` en
+    ///   particulier est comparé à `fee`, qui est PUBLIC : (a) y agit comme un
+    ///   contrôle de cohérence (la cellule ne fuite pas la valeur publique par un
+    ///   canal witness), pas comme un test de masquage à proprement parler.
     #[test]
     #[cfg_attr(debug_assertions, ignore = "AIR gaté : générer en --release")]
     fn masquage_colonnes_temoins() {
