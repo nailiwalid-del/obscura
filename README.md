@@ -28,9 +28,14 @@ ses notes en scannant le ledger avec sa clé de réception (KEM hybride + AEAD c
 ## Build & tests
 
 ```
-cargo test              # crypto, ledger, gadgets, e2e, double dépense, altérations
-cargo test --release    # + les preuves STARK du monolithe (gatées --release, cf. monolith::air)
+cargo test --release                 # SURFACE CONSENSUS seule : monolithe, ProvedTx, ledger prouvé
+cargo test --release --all-features   # + mode transparent (dev) et sous-circuits standalone
 ```
+
+Par défaut, seule la **surface consensus** est compilée. Les chemins de développement sont
+derrière des features **désactivées par défaut** — pour ne pas les confondre avec le
+consensus : `dev-transparent` (ledger transparent, non-privé) et `dev-circuits`
+(sous-circuits autonomes `prove_*`/`verify_*`). Les preuves STARK sont gatées `--release`.
 
 ## Feuille de route (v0.2 : le STARK est le centre, pas une option)
 

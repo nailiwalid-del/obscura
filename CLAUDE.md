@@ -58,6 +58,14 @@ Puis phase 4 (P2P PQ + Dandelion++ + test key privacy) et phase 5 (nœud/wallet/
 
 ## Notes de build
 
+- **Features de dev, OFF par défaut** (le build/test nu = surface CONSENSUS seule) :
+  `dev-transparent` (ledger : mode transparent non-privé, `apply_transparent`,
+  `build_transparent_transaction`, `merkle`/`note` BLAKE3) et `dev-circuits` (circuit :
+  sous-circuits autonomes `prove_*`/`verify_*`). La suite complète = `cargo test
+  --all-features --release`. Ne jamais ajouter de dépendance du consensus vers du code
+  gaté (l'invariant « défaut = consensus seul » doit tenir). Les modules gadgets restent
+  compilés (le monolithe réutilise leurs helpers `pub(crate)`) ; seules leurs entrées
+  publiques standalone sont gatées.
 - Migration vers `pqcrypto-mlkem`/`pqcrypto-mldsa` (FIPS 203/204 finaux) : ce n'est
   PAS un simple changement d'import. FIPS 203/204 diffèrent de Kyber/Dilithium round-3
   (dérivation, encodages, errata NIST) → c'est une **nouvelle version d'algo `0x02`**
