@@ -1,0 +1,16 @@
+[package]
+name = "zk-spike"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+# Crate JETABLE — spike de faisabilité E2 (phase 3z-b, witness-hiding).
+# Ne fait PAS partie du protocole ; sert uniquement à mesurer la fuite de témoin
+# de winterfell 0.13.1 et à tester la technique des « lignes de blindage ».
+
+[dependencies]
+winterfell = { workspace = true }
+winter-crypto = { workspace = true }
+winter-math = { workspace = true }
+winter-air = "0.13"
+rand = "0.8"
