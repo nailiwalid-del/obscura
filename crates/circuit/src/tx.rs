@@ -12,8 +12,9 @@
 //! trace ; le vérificateur les fournit lui-même (root passée en argument, reste lu
 //! sur `tx`) et ne fait tourner qu'UN SEUL `winterfell::verify`.
 //!
-//! `tx_digest` (v2, domaine `obscura/proved-tx/v2`) lie `root ‖ nf ‖ oc ‖ fee ‖
-//! signer` — non-rejeu et anti-échange du signataire d'intention, comme en v1.
+//! `tx_digest` (v3, domaine `obscura/proved-tx/v3`) lie `root ‖ nf ‖ oc ‖ fee ‖
+//! signer ‖ enc_notes` — non-rejeu, anti-échange du signataire d'intention (comme en
+//! v1) ET anti-substitution des enveloppes chiffrées de sortie (`enc_notes`, v3).
 //! La signature hybride d'intention reste une enveloppe anti-malléabilité, PAS une
 //! autorisation d'ownership : l'autorité vient de la liaison `owner = H_owner(secret)`
 //! DANS le monolithe (contrainte AIR, cf. `monolith::air` « liaisons par porteuses »).
@@ -32,7 +33,7 @@ use proved_hash::felt::Felt;
 use winter_math::fields::f64::BaseElement;
 
 /// Domaine de la signature d'intention (anti-malléabilité), signée sur `tx_digest`.
-pub const INTENT_DOMAIN: &str = "obscura/proved-tx-intent/v2";
+pub const INTENT_DOMAIN: &str = "obscura/proved-tx-intent/v3";
 
 /// Une entrée à dépenser : la note, son chemin de Merkle et sa position.
 pub struct ProvedInput {
@@ -41,9 +42,21 @@ pub struct ProvedInput {
     pub index: u64,
 }
 
+/// Enveloppe chiffrée d'une note de sortie, destinée au destinataire (hors-circuit,
+/// pas de contrainte AIR dessus). `kem_ct` : encapsulation KEM hybride vers la clé du
+/// destinataire ; `enc_note` : la note (valeur, owner, rho, r, …) chiffrée sous la clé
+/// dérivée de `kem_ct`. Liée dans `tx_digest` (v3) pour empêcher toute substitution
+/// après preuve — voir Tâche 1 (docs/superpowers/sdd).
+#[derive(Clone)]
+pub struct EncNote {
+    pub kem_ct: Vec<u8>,
+    pub enc_note: Vec<u8>,
+}
+
 /// Transaction prouvée 2-in/2-out. `proof` est LA preuve monolithique unique ; les
 /// autres champs sont ses publics (racine, nullifiers, commitments de sortie, fee)
-/// plus l'enveloppe d'intention (signataire, digest, signature hybride).
+/// plus l'enveloppe d'intention (signataire, digest, signature hybride) et les
+/// enveloppes chiffrées des deux sorties (`enc_notes`, liées dans `tx_digest` v3).
 pub struct ProvedTx {
     /// Racine (anchor) contre laquelle les entrées prouvent leur appartenance.
     pub anchor: Digest,
@@ -59,18 +72,24 @@ pub struct ProvedTx {
     /// PAS autorité d'ownership — celle-ci est établie par la liaison `owner` du
     /// monolithe).
     pub intent_sig: HybridSignature,
+    /// Enveloppes chiffrées des deux sorties, dans le même ordre que
+    /// `output_commitments` ; liées dans `tx_digest` (v3) — non prouvées par l'AIR.
+    pub enc_notes: [EncNote; 2],
 }
 
-const TX_DOMAIN: &str = "obscura/proved-tx/v2";
+const TX_DOMAIN: &str = "obscura/proved-tx/v3";
 
-/// Encodage canonique injectif (tailles fixes) des publics : `root ‖ nf₁ ‖ nf₂ ‖
-/// oc₁ ‖ oc₂ ‖ fee LE ‖ signer`.
+/// Encodage canonique injectif des publics : `root ‖ nf₁ ‖ nf₂ ‖ oc₁ ‖ oc₂ ‖ fee LE ‖
+/// signer ‖ [len(kem_ctⱼ) LE ‖ kem_ctⱼ ‖ len(enc_noteⱼ) LE ‖ enc_noteⱼ]ⱼ₌₀,₁` (v3 :
+/// les enc_notes, de taille variable, sont préfixées par leur longueur LE pour rester
+/// injectif — cf. Tâche 1).
 fn tx_digest_bytes(
     root: &Digest,
     nullifiers: &[Digest; 2],
     output_commitments: &[Digest; 2],
     fee: u64,
     signer: &SigPublicKey,
+    enc_notes: &[EncNote; 2],
 ) -> [u8; 64] {
     let mut b = Vec::new();
     b.extend_from_slice(&root.to_bytes());
@@ -84,6 +103,13 @@ fn tx_digest_bytes(
     // Le signataire d'intention est LIÉ dans le digest → il ne peut pas être échangé
     // sans invalider la preuve (qui lie tx_digest).
     b.extend_from_slice(&signer.to_bytes());
+    // v3 : enc_notes liées après le bloc v2, dans l'ordre des sorties.
+    for enc in enc_notes {
+        b.extend_from_slice(&(enc.kem_ct.len() as u64).to_le_bytes());
+        b.extend_from_slice(&enc.kem_ct);
+        b.extend_from_slice(&(enc.enc_note.len() as u64).to_le_bytes());
+        b.extend_from_slice(&enc.enc_note);
+    }
     dual_hash(TX_DOMAIN, &b)
 }
 
@@ -117,6 +143,7 @@ pub fn prove_tx(
     outputs: [SpendNote; 2],
     fee: u64,
     intent: &SigKeypair,
+    enc_notes: [EncNote; 2],
 ) -> (Digest, ProvedTx) {
     let witness = MonolithWitness {
         secret: secret.clone(),
@@ -136,7 +163,8 @@ pub fn prove_tx(
         felts_to_digest(&pi.output_commitments[1]),
     ];
     let signer = intent.public.clone();
-    let tx_digest = tx_digest_bytes(&root, &nullifiers, &output_commitments, fee, &signer);
+    let tx_digest =
+        tx_digest_bytes(&root, &nullifiers, &output_commitments, fee, &signer, &enc_notes);
     // Enveloppe d'intention : le porteur de la clé signe CETTE transaction.
     let intent_sig = intent.sign(INTENT_DOMAIN, &tx_digest);
 
@@ -151,6 +179,7 @@ pub fn prove_tx(
             signer,
             tx_digest,
             intent_sig,
+            enc_notes,
         },
     )
 }
@@ -190,7 +219,14 @@ pub fn verify_tx(root: &Digest, depth: usize, tx: &ProvedTx) -> bool {
     if !verify_monolith(&pi, depth, &tx.proof) {
         return false;
     }
-    let expected = tx_digest_bytes(root, &tx.nullifiers, &tx.output_commitments, tx.fee, &tx.signer);
+    let expected = tx_digest_bytes(
+        root,
+        &tx.nullifiers,
+        &tx.output_commitments,
+        tx.fee,
+        &tx.signer,
+        &tx.enc_notes,
+    );
     expected == tx.tx_digest
 }
 
@@ -208,6 +244,15 @@ mod tests {
     }
 
     const DEPTH: usize = 2;
+
+    /// Deux enveloppes chiffrées non triviales et DISTINCTES pour les tests (le contenu
+    /// est opaque au niveau tx — seul son binding dans `tx_digest` v3 est testé ici).
+    fn enc_notes_test() -> [EncNote; 2] {
+        [
+            EncNote { kem_ct: vec![1, 2, 3], enc_note: vec![4, 5, 6] },
+            EncNote { kem_ct: vec![7, 8], enc_note: vec![9, 10, 11, 12] },
+        ]
+    }
 
     /// Arbre de profondeur 2 (4 feuilles) : `cm0` en index 0, `cm1` en index 3,
     /// deux feuilles muettes. Retourne (root, path0, path1) selon la convention `fold`.
@@ -260,7 +305,7 @@ mod tests {
     fn valid_tx() -> (ShieldedSecret, Digest, ProvedTx) {
         let (secret, root, inputs, outputs) = setup(None);
         let intent = SigKeypair::generate();
-        let (proved_root, tx) = prove_tx(&secret, inputs, outputs, 20, &intent);
+        let (proved_root, tx) = prove_tx(&secret, inputs, outputs, 20, &intent, enc_notes_test());
         assert_eq!(proved_root, root);
         (secret, root, tx)
     }
@@ -290,7 +335,7 @@ mod tests {
     fn desequilibre_rejete() {
         let (secret, root, inputs, outputs) = setup(None);
         let intent = SigKeypair::generate();
-        let (proved_root, tx) = prove_tx(&secret, inputs, outputs, 999, &intent);
+        let (proved_root, tx) = prove_tx(&secret, inputs, outputs, 999, &intent, enc_notes_test());
         assert_eq!(proved_root, root);
         assert!(!verify_tx(&root, DEPTH, &tx));
     }
@@ -359,7 +404,7 @@ mod tests {
             ProvedInput { note: n1, path: path1, index: 3 },
         ];
         let intent = SigKeypair::generate();
-        let (proved_root, tx) = prove_tx(&secret, inputs, [o0, o1], P - k, &intent);
+        let (proved_root, tx) = prove_tx(&secret, inputs, [o0, o1], P - k, &intent, enc_notes_test());
         assert_eq!(proved_root, root);
 
         // La preuve STARK est valide (S ≡ fee mod p) : le trou est bien réel...
@@ -393,7 +438,7 @@ mod tests {
     fn entree_d_un_autre_owner_rejetee() {
         let (secret, root, inputs, outputs) = setup(Some(digest(9999)));
         let intent = SigKeypair::generate();
-        let (proved_root, tx) = prove_tx(&secret, inputs, outputs, 20, &intent);
+        let (proved_root, tx) = prove_tx(&secret, inputs, outputs, 20, &intent, enc_notes_test());
         assert_eq!(proved_root, root);
         assert!(!verify_tx(&root, DEPTH, &tx));
     }
@@ -421,8 +466,8 @@ mod tests {
         // `prove_tx`.
         let (_secret2, _root2, inputs2, outputs2) = setup(None);
 
-        let (root1, tx1) = prove_tx(&secret, inputs, outputs, 20, &intent);
-        let (root2, tx2) = prove_tx(&secret, inputs2, outputs2, 20, &intent);
+        let (root1, tx1) = prove_tx(&secret, inputs, outputs, 20, &intent, enc_notes_test());
+        let (root2, tx2) = prove_tx(&secret, inputs2, outputs2, 20, &intent, enc_notes_test());
         assert_eq!(root1, root);
         assert_eq!(root2, root);
 
@@ -435,5 +480,21 @@ mod tests {
 
         assert!(verify_tx(&root, DEPTH, &tx1));
         assert!(verify_tx(&root, DEPTH, &tx2));
+    }
+
+    /// Tâche 1 — anti-substitution `enc_notes` : `tx_digest` v3 lie désormais
+    /// `kem_ct`/`enc_note` de chaque sortie. Une `ProvedTx` valide (2 enc_notes non
+    /// triviaux) est acceptée ; substituer `enc_notes[0].enc_note` (sans toucher à
+    /// la preuve STARK ni aux autres champs publics) doit faire diverger le digest
+    /// recomposé dans `verify_tx` → rejet. Ce test ne dépend PAS de l'AIR (aucune
+    /// contrainte de circuit ne porte sur enc_notes) : c'est une liaison au niveau
+    /// tx uniquement.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
+    fn enc_note_substitue_rejete() {
+        let (_s, root, mut tx) = valid_tx(); // valid_tx fournit désormais des enc_notes
+        assert!(verify_tx(&root, DEPTH, &tx));
+        tx.enc_notes[0].enc_note = vec![9, 9, 9];
+        assert!(!verify_tx(&root, DEPTH, &tx), "un enc_note substitué doit casser le digest");
     }
 }
