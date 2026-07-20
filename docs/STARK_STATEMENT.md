@@ -428,6 +428,16 @@ circuit. Un expéditeur malveillant qui chiffre du garbage ne lèse que son dest
 (fonds inutilisables, pas de création de monnaie) — P5/P7 tiennent indépendamment.
 Réévaluer quand le coût des circuits sera mesuré.
 
+**enc_notes portés + liés (fait) :** `ProvedTx` v3 porte les enveloppes chiffrées des
+sorties (`enc_notes: [EncNote{kem_ct, enc_note}; 2]`, `circuit::tx`) pour le scan des
+destinataires. Elles sont **liées dans `tx_digest` v3** (domaine
+`obscura/proved-tx/v3`, longueurs LE préfixées, injectif) → un relais qui les substitue
+casse le digest, donc la signature d'intention (anti-substitution, testé
+`enc_note_substitue_rejete`). Chiffrement/scan côté wallet (`ledger::proved_wallet`,
+réutilise KEM hybride + AEAD, `aad = commitment`). **P8 reste différé** (aucune
+contrainte AIR sur enc_notes) ; la **key-privacy IK-CCA** (indistinguabilité du
+destinataire) reste un test de phase 4.
+
 ## Décision : hash consensus vs hash prouvé (point 3 de la revue)
 
 `dual_hash` (BLAKE3‖SHA3) est excellent hors circuit mais prohibitif en STARK

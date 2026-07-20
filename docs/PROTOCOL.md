@@ -83,6 +83,11 @@ Tx { proof, root, nullifiers[], output_commitments[], enc_notes[], fee }
 Validation = vérifier la preuve STARK (statement P1–P7) contre tx_digest + unicité
 des nullifiers. Aucune clé publique, aucun chemin de Merkle, aucun montant d'entrée publié.
 
+**État (2-in/2-out, implémenté) :** `circuit::ProvedTx` v3 porte tous ces champs, dont
+`enc_notes` (liés dans `tx_digest` v3, anti-substitution). Scan des destinataires :
+`ledger::proved_wallet::{encrypt_note, scan_proved_output}`. Arité fixe 2/2 (la
+généralisation M-in/N-out = phase 3z-c). P8 (cohérence enc_note↔commitment) différé.
+
 ### Mode transparent (DEV UNIQUEMENT — actuel)
 
 ```

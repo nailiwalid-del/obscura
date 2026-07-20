@@ -16,11 +16,14 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
 - `crates/circuit` : circuit STARK **monolithe** (`monolith/`) — P1–P7 d'une tx
   2-in/2-out en UNE SEULE trace/preuve (201 col × 1024 lignes dont 40 lignes de
   blinding), publics minimaux (root, nullifiers, output_commitments, fee),
-  `ProvedTx` v2 — **witness-hiding (HVZK en ROM)** depuis 3z-b1 (lignes de
+  `ProvedTx` **v3** — **witness-hiding (HVZK en ROM)** depuis 3z-b1 (lignes de
   blinding, gating global `blind_off`, aléa OsRng frais par preuve) — testé,
   benché (≈1477,7 ms génération, ≈3,0 ms vérification, ≈90,5 Kio/preuve).
   Caveat : honnête-vérifieur, prototype non audité (voir docs/STARK_STATEMENT.md,
-  « Argument HVZK »). Les gadgets autonomes du crate restent validity-only
+  « Argument HVZK »). Les gadgets autonomes du crate restent validity-only.
+  `ProvedTx` v3 porte les `enc_notes` (enveloppes chiffrées des sorties, scan wallet
+  via `ledger::proved_wallet`), liées dans `tx_digest` v3 (anti-substitution) ; P8
+  différé, IK-CCA = phase 4
 - `docs/PROTOCOL.md`, `docs/THREAT_MODEL.md` et `docs/STARK_STATEMENT.md` : spécification de référence
 - `cargo test` : suite verte (crypto/ledger/circuit)
 
