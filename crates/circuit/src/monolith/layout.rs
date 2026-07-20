@@ -82,9 +82,10 @@ mod tests {
     const _: () = assert!(WIDTH <= winterfell::TraceInfo::MAX_TRACE_WIDTH);
 
     // Marge de blinding : garde-fou COMPILE-TIME (même motif). 32 = nombre de
-    // requêtes de `proof_options_hi`, +2 = évaluations OOD ; la liaison RUNTIME
-    // aux options réelles est assertée dans `MonolithAir::new`.
-    const _: () = assert!(BLIND_ROWS >= 32 + 2);
+    // requêtes de `proof_options_hi`, +4 = 2 évaluations OOD × 2 composantes base-field
+    // (extension quadratique) ; la liaison RUNTIME aux options réelles est assertée
+    // dans `MonolithAir::new`.
+    const _: () = assert!(BLIND_ROWS >= 32 + 4);
 
     #[test]
     fn budget_colonnes_respecte() {

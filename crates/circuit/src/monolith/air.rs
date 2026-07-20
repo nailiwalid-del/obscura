@@ -155,15 +155,16 @@ impl winterfell::Air for MonolithAir {
     fn new(trace_info: TraceInfo, pi: MonolithPublicInputs, options: ProofOptions) -> Self {
         // Witness-hiding (3z-b1) : chaque requête FRI ouvre UNE ligne de la
         // trace LDE ; le frame cur/next n'existe qu'au point OOD (évaluations
-        // en z et z·g). Il faut au moins q + 2 lignes de blinding pour que les
-        // q ouvertures de requête + les 2 évaluations OOD ne déterminent pas le
-        // témoin (comptage par colonne de trace — cf. STARK_STATEMENT.md,
-        // « argument HVZK », qui couvre aussi composition/FRI).
+        // en z et z·g). Sur l'extension QUADRATIQUE, chaque évaluation OOD compte
+        // pour 2 composantes base-field → il faut au moins q + 4 lignes de blinding
+        // (base-field) pour que les q ouvertures de requête + les 2×2 composantes OOD
+        // ne déterminent pas le témoin (comptage par colonne de trace — cf.
+        // STARK_STATEMENT.md, « argument HVZK », qui couvre aussi composition/FRI).
         assert!(
-            BLIND_ROWS >= options.num_queries() + 2,
-            "BLIND_ROWS ({}) doit couvrir num_queries + 2 ({})",
+            BLIND_ROWS >= options.num_queries() + 4,
+            "BLIND_ROWS ({}) doit couvrir num_queries + 4 ({})",
             BLIND_ROWS,
-            options.num_queries() + 2
+            options.num_queries() + 4
         );
         let l = trace_info.length();
         let depth = pi.depth;
