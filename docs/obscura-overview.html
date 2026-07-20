@@ -189,7 +189,7 @@
   <div class="shell">
     <p class="eyebrow">Note de conception &middot; Prototype de recherche Rust &middot; 2026</p>
     <h1 class="title serif">Obscura — une monnaie numérique <em>post-quantique</em>, conçue pour la <em>confidentialité</em></h1>
-    <span class="status-badge mono">● État actuel : <b>validity-only</b> — non witness-hiding</span>
+    <span class="status-badge mono">● État actuel : monolithe <b>witness-hiding</b> (HVZK en ROM, 3z-b1) — prototype non audité</span>
     <p class="lede">Un prototype qui vise deux objectifs : payer sans être surveillé, avec une sécurité qui tiendrait face à un ordinateur quantique. Ce document explique le projet pour tous, puis en détaille l'architecture — en distinguant soigneusement ce qui est <strong>déjà prouvé</strong> de ce qui reste <strong>à venir</strong>.</p>
     <div class="stat-row">
       <div class="stat"><b>4</b><span>crates Rust</span></div>
@@ -270,16 +270,16 @@
   <p>L'astuce centrale ressemble à un tour de magie mathématique : <strong>prouver qu'une transaction respecte toutes les règles, sans avoir à en révéler les détails</strong>. On ne montre pas les billets ; on prouve juste, de façon irréfutable, qu'on a le droit de dépenser et que les comptes sont équilibrés.</p>
   </div>
 
-  <div class="callout secret"><span class="lab">État du prototype — à lire</span><p>La <strong>validité</strong> d'une transaction (les règles ci-dessous) est déjà entièrement prouvée en circuit. En revanche, la <strong>confidentialité au sens cryptographique fort</strong> — le fait que la preuve elle-même ne fuite <em>rien</em> — n'est <strong>pas encore</strong> atteinte : c'est le jalon suivant (« Phase 3z »). Ce document dit « conçue pour » et « vise » à dessein. Voir la section&nbsp;13.</p></div>
+  <div class="callout secret"><span class="lab">État du prototype — à lire</span><p>La <strong>validité</strong> d'une transaction (les règles ci-dessous) est entièrement prouvée en circuit, et depuis 3z-b1 la preuve monolithique du chemin de consensus est <strong>witness-hiding</strong> — au sens précis HVZK dans le modèle de l'oracle aléatoire (vérifieur honnête), pas davantage. Prototype non audité : ce document dit « conçue pour » à dessein. Voir la section&nbsp;14.</p></div>
 
   <div class="col">
   <h3 id="etat">3. Où en est le prototype, en une phrase</h3>
-  <p>Le circuit sait aujourd'hui <strong>vérifier qu'une transaction est valide</strong> (elle existe, m'appartient, est équilibrée, sans double-dépense) et il gouverne un vrai registre. Ce qu'il ne garantit pas <em>encore</em> : que la preuve ne laisse filtrer aucune information sur les montants ou les parties. La brique manquante est bien identifiée et n'exige pas de refaire l'existant.</p>
+  <p>Le circuit sait aujourd'hui <strong>vérifier qu'une transaction est valide</strong> (elle existe, m'appartient, est équilibrée, sans double-dépense), il gouverne un vrai registre, et la preuve de consensus <strong>masque ses témoins</strong> (witness-hiding par lignes de blinding, 3z-b1 — HVZK en ROM, vérifieur honnête). Les réserves restantes : pas de zero-knowledge à vérifieur malicieux revendiqué, argument non formalisé au niveau publication, prototype non audité.</p>
   </div>
 
   <div class="col">
   <h3 id="briques">4. Comment ça marche, en clair</h3>
-  <p>Le cœur du système est une <em class="term">preuve à divulgation nulle</em> (l'objectif visé). L'analogie classique : prouver à quelqu'un que vous connaissez le mot de passe d'une porte, <strong>sans prononcer le mot de passe</strong> — juste en franchissant la porte devant lui. La preuve convainc ; le secret reste secret.</p>
+  <p>Le cœur du système est une <em class="term">preuve à divulgation nulle</em> (réalisée ici comme un masquage <em>witness-hiding</em>, avec les réserves de la section&nbsp;14). L'analogie classique : prouver à quelqu'un que vous connaissez le mot de passe d'une porte, <strong>sans prononcer le mot de passe</strong> — juste en franchissant la porte devant lui. La preuve convainc ; le secret reste secret.</p>
   <p>Dans Obscura, quand vous dépensez, votre logiciel fabrique une preuve qui garantit simultanément que&nbsp;:</p>
   <ul>
     <li>la note que vous dépensez <strong>existe vraiment</strong> (elle est dans le grand registre) ;</li>
@@ -334,7 +334,7 @@
     <div class="deps">
       <div class="row"><div class="node accent"><span class="h">ledger</span><span class="m">notes · état · apply_proved_tx</span></div></div>
       <div class="lbl" aria-hidden="true">↓ dépend de</div>
-      <div class="row"><div class="node"><span class="h">circuit</span><span class="m">AIR zk-STARK · ProvedTx</span></div></div>
+      <div class="row"><div class="node"><span class="h">circuit</span><span class="m">AIR STARK witness-hiding · ProvedTx</span></div></div>
       <div class="lbl" aria-hidden="true">↓ dépend de</div>
       <div class="row">
         <div class="node"><span class="h">proved-hash</span><span class="m">Rescue · Felt · arbre</span></div>
@@ -403,15 +403,15 @@
   </section>
 
   <div class="col">
-  <h3 id="stark">10. Le circuit STARK de validité (zk-STARK cible)</h3>
+  <h3 id="stark">10. Le circuit STARK (validité + witness-hiding)</h3>
   <p>Un <strong>STARK</strong> est un système de preuve qui démontre qu'un calcul a été effectué correctement, avec une preuve <strong>rapide à vérifier</strong>. Ses atouts pour une monnaie : <strong>pas de « cérémonie » de confiance</strong> initiale, et une sécurité <strong>post-quantique</strong> (fondée uniquement sur des fonctions de hachage).</p>
-  <p>Précision importante : un STARK n'est <strong>pas</strong> à divulgation nulle par défaut. L'implémentation actuelle d'Obscura est un <strong>STARK de validité</strong> — il prouve l'intégrité des règles, mais ne masque pas encore ses témoins. Le <strong>zk-STARK</strong> (avec masquage prouvé) est la cible, gatée en Phase 3z. Voir la section&nbsp;14.</p>
+  <p>Précision importante : un STARK n'est <strong>pas</strong> à divulgation nulle par défaut. Le chemin de consensus d'Obscura (le circuit <em>monolithe</em>, <code>prove_tx</code>/<code>verify_tx</code>) prouve l'intégrité des règles ET, depuis 3z-b1, est <strong>witness-hiding</strong> — HVZK dans le modèle de l'oracle aléatoire (vérifieur honnête), obtenu par des <em>lignes de blinding</em> au niveau AIR. Les gadgets autonomes (éponge, équilibre, spend…) restent validity-only. Voir la section&nbsp;14.</p>
   <p>Obscura est bâti sur <strong>winterfell</strong>, un prouveur STARK en Rust. Le corps de travail est celui de <em>Goldilocks</em> (p = 2<sup>64</sup>−2<sup>32</sup>+1) et la fonction de hachage interne est <em>Rescue-Prime Rp64_256</em>. Le calcul à prouver est décrit par un <strong>AIR</strong> (<em>Algebraic Intermediate Representation</em>) : une trace d'exécution en colonnes, plus des contraintes polynomiales que la trace doit satisfaire.</p>
   </div>
 
   <div class="col">
   <h3 id="statement">11. Le statement : sept propriétés</h3>
-  <p>Le document <code>STARK_STATEMENT.md</code> définit ce qu'est une <strong>dépense valide</strong>. Ce n'est pas un détail d'implémentation : <strong>ce statement EST la règle de consensus</strong>. Une preuve atteste les sept propriétés suivantes, sur des <em>entrées publiques</em> (racine, nullifiers, commitments de sortie, frais, <code>tx_digest</code>) et des <em>témoins</em> (notes, chemins, secret) — <strong>non publiés, mais non garantis cachés avant la Phase 3z</strong>.</p>
+  <p>Le document <code>STARK_STATEMENT.md</code> définit ce qu'est une <strong>dépense valide</strong>. Ce n'est pas un détail d'implémentation : <strong>ce statement EST la règle de consensus</strong>. Une preuve atteste les sept propriétés suivantes, sur des <em>entrées publiques</em> (racine, nullifiers, commitments de sortie, frais, <code>tx_digest</code>) et des <em>témoins</em> (notes, chemins, secret) — <strong>non publiés, et masqués par la preuve monolithique elle-même (witness-hiding HVZK en ROM, 3z-b1)</strong>.</p>
   </div>
 
   <div class="props">
@@ -424,7 +424,7 @@
     <div class="prop"><div class="id">P7</div><div class="nm">Commitments</div><div class="ds">Chaque commitment de sortie engage correctement sa note.</div></div>
   </div>
 
-  <div class="callout"><span class="lab">Ce que le statement supprime</span><p>Par rapport à un mode « transparent », la preuve retire la clé de dépense publique (les paiements d'une même clé ne sont plus reliables via cette clé) et le chemin de Merkle (le lien direct vers la note dépensée), tout en vérifiant enfin ce qui ne l'était pas : liaison nullifier↔note, autorité, équilibre. La confidentialité <em>complète</em> exige en plus le witness-hiding (Phase 3z).</p></div>
+  <div class="callout"><span class="lab">Ce que le statement supprime</span><p>Par rapport à un mode « transparent », la preuve retire la clé de dépense publique (les paiements d'une même clé ne sont plus reliables via cette clé) et le chemin de Merkle (le lien direct vers la note dépensée), tout en vérifiant enfin ce qui ne l'était pas : liaison nullifier↔note, autorité, équilibre. Depuis 3z-b1, la preuve monolithique masque en outre ses propres témoins (witness-hiding, HVZK en ROM).</p></div>
 
   <div class="col">
   <h3 id="assemblage">12. L'assemblage en « circuits d'action »</h3>
@@ -453,12 +453,12 @@
   <p>C'est exactement ce que fait la <em>Preuve de Clé</em> : deux éponges Rescue côte à côte, avec une contrainte qui impose l'égalité des cellules du secret — sans jamais l'exposer comme valeur publique. Un test « white-box » le confirme : une trace où <code>owner</code> vient de <code>s</code> et <code>nk</code> de <code>s′≠s</code> est <strong>rejetée</strong>.</p>
   </div>
 
-  <div class="callout secret"><span class="lab">Le secret n'est jamais une entrée publique</span><p>Dans tout le circuit, le <code>shielded_secret</code> reste un témoin : <strong>aucune assertion ne le référence</strong>. Il n'apparaît donc dans aucune entrée publique, tout en étant prouvé unique. (Rappel : « pas dans les entrées publiques » n'équivaut pas à « cryptographiquement caché » tant que le witness-hiding n'est pas en place — voir ci-dessous.)</p></div>
+  <div class="callout secret"><span class="lab">Le secret n'est jamais une entrée publique</span><p>Dans tout le circuit, le <code>shielded_secret</code> reste un témoin : <strong>aucune assertion ne le référence</strong>. Il n'apparaît donc dans aucune entrée publique, tout en étant prouvé unique. (Rappel : « pas dans les entrées publiques » n'équivaudrait pas à « caché » sans le witness-hiding — livré pour le monolithe en 3z-b1, HVZK en ROM ; voir ci-dessous.)</p></div>
 
   <div class="col">
-  <h3 id="honnetete">14. Validité aujourd'hui, confidentialité demain</h3>
-  <p>Un point d'honnêteté central. L'implémentation actuelle prouve l'<strong>intégrité</strong> (les sept propriétés), mais <strong>pas la confidentialité au sens cryptographique fort</strong> : un STARK n'est pas « zero-knowledge » par défaut — il ne masque pas ses témoins. Concrètement, garder une valeur hors des <em>entrées publiques</em> ne la rend pas cachée tant que la preuve elle-même n'est pas witness-hiding. Ce masquage prouvable est un jalon séparé et explicitement gaté (« Phase 3z »).</p>
-  <p>Ce choix est délibéré : les contraintes P1–P7 sont <strong>identiques</strong> avec ou sans masquage, donc aucun travail n'est à refaire ; le masquage est une couche additive. Rouler un tel masquage « maison » exposerait à des fuites <em>silencieuses</em> — le pire cas pour une monnaie privée. On préfère bâtir la validité proprement, et réserver la confidentialité forte à une bibliothèque auditée ou à un effort audité.</p>
+  <h3 id="honnetete">14. Validité et witness-hiding — ce qui est revendiqué, ce qui ne l'est pas</h3>
+  <p>Un point d'honnêteté central. Un STARK n'est pas à divulgation nulle par défaut — il ne masque pas ses témoins. Depuis <strong>3z-b1</strong>, le chemin de consensus (le monolithe <code>prove_tx</code>/<code>verify_tx</code>) est <strong>witness-hiding</strong> : des <em>lignes de blinding</em> au niveau AIR (aléa système frais par preuve dans toutes les colonnes témoins, contraintes désactivées sur la région de blinding) font que les ouvertures de trace ne valent plus le témoin en clair. La revendication précise est <strong>HVZK dans le modèle de l'oracle aléatoire</strong> (vérifieur honnête) — <em>pas</em> de zero-knowledge à vérifieur malicieux, pas de « perfect ZK », et l'argument n'est pas formalisé au niveau publication (prototype non audité). Voir l'argument dans <code>STARK_STATEMENT.md</code>.</p>
+  <p>Les contraintes P1–P7 sont restées <strong>identiques</strong> : le masquage est une couche additive (trace doublée, gating), sans refonte du statement. Les <strong>gadgets autonomes</strong> (éponge, équilibre, spend…) et le banc d'essai <code>zk-spike</code> restent quant à eux <strong>validity-only</strong> — seul le monolithe porte la revendication de witness-hiding.</p>
   </div>
 
   <!-- ============ PARTIE IV ============ -->
@@ -530,7 +530,7 @@
   <section class="part-divider big" id="p6">
     <div class="k">Partie VI</div>
     <h2 class="serif">État du projet &amp; feuille de route</h2>
-    <p class="sub">Ce qui est fait, ce qui reste. L'assemblage validity-only de la Phase 3 est complet.</p>
+    <p class="sub">Ce qui est fait, ce qui reste. L'assemblage de la Phase 3 est complet et le monolithe est witness-hiding (3z-b1).</p>
   </section>
 
   <div class="board" id="board">
@@ -556,7 +556,7 @@
     <div class="lane">
       <h4>À venir</h4>
       <div class="item todo"><span class="dot todo"></span><span class="t">Signature d'intention</span></div>
-      <div class="item todo"><span class="dot todo"></span><span class="t">Witness-hiding (3z)</span></div>
+      <div class="item"><span class="dot done"></span><span class="t">Witness-hiding (3z-b1)</span></div>
       <div class="item todo"><span class="dot todo"></span><span class="t">Agrégation / monolithe</span></div>
       <div class="item todo"><span class="dot todo"></span><span class="t">M-in / N-out</span></div>
       <div class="item todo"><span class="dot todo"></span><span class="t">Réseau P2P (phase 4)</span></div>
@@ -566,7 +566,7 @@
 
   <div class="col">
   <h3 id="roadmap">20. Feuille de route</h3>
-  <p>La <strong>Phase 3 (validity-only) est complète</strong> : le circuit valide une transaction entière et gouverne l'état. Les grands jalons restants&nbsp;:</p>
+  <p>La <strong>Phase 3 est complète</strong> — le circuit valide une transaction entière, gouverne l'état, et le monolithe est <strong>witness-hiding</strong> depuis 3z-b1 (HVZK en ROM). Les grands jalons restants&nbsp;:</p>
   </div>
 
   <figure class="fig" aria-label="Feuille de route">
@@ -575,7 +575,7 @@
       <div class="arrow" aria-hidden="true">→</div>
       <div class="node"><span class="h">Signature</span><span class="m">d'intention sur tx_digest</span></div>
       <div class="arrow" aria-hidden="true">→</div>
-      <div class="node secret"><span class="h">Phase 3z</span><span class="m">confidentialité forte · witness-hiding · agrégation</span></div>
+      <div class="node secret"><span class="h">Phase 3z</span><span class="m">witness-hiding livré (3z-b1) · reste M-in/N-out (3z-c)</span></div>
       <div class="arrow" aria-hidden="true">→</div>
       <div class="node"><span class="h">Phase 4</span><span class="m">réseau P2P post-Q</span></div>
       <div class="arrow" aria-hidden="true">→</div>
@@ -585,8 +585,8 @@
   </figure>
 
   <footer class="footer">
-    <p><span class="tag ok">Phase 3 validity-only · complète</span> &nbsp; <span class="tag wip">Confidentialité forte (3z) · à venir</span></p>
-    <p class="mono">Obscura — prototype de recherche · Rust · dépôt privé <code>nailiwalid-del/obscura</code><br>Défense en profondeur · post-quantique · STARK de validité (winterfell / Goldilocks / Rescue-Prime), zk-STARK cible.</p>
+    <p><span class="tag ok">Phase 3 · complète</span> &nbsp; <span class="tag ok">Witness-hiding du monolithe (3z-b1) · livré</span> &nbsp; <span class="tag wip">M-in/N-out (3z-c) · à venir</span></p>
+    <p class="mono">Obscura — prototype de recherche · Rust · dépôt privé <code>nailiwalid-del/obscura</code><br>Défense en profondeur · post-quantique · STARK witness-hiding (HVZK en ROM) sur le chemin de consensus (winterfell / Goldilocks / Rescue-Prime).</p>
     <p style="font-size:13px">Document de synthèse — 19 juillet 2026, au commit <code>a47d280</code>. Chiffres reproductibles : <code>find crates -name '*.rs' | xargs wc -l</code> → 6&nbsp;485 lignes ; <code>grep -rn '#[test]' crates</code> → 110 marqueurs ; performances via <code>cargo run --release --example tx_bench -p circuit</code> (une mesure, machine de développement). Ce prototype n'est pas audité et ne doit pas être utilisé en production.</p>
   </footer>
 
