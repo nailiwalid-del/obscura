@@ -158,7 +158,8 @@
 > 2 sorties×2). Enseignement pour 3z : la vérification est très rapide et la génération
 > raisonnable, mais la TAILLE (~219 Kio) est dominée par la NON-agrégation des 15
 > preuves → l'agrégation/récursion ou un monolithe (Phase 3z) est le levier de
-> compression, PAS le temps.
+> compression, PAS le temps. **Remplacé par 3z-a** : l'assemblage v1 mesuré ici
+> (15 preuves séparées) est supprimé ; voir les chiffres du monolithe ci-dessous.
 >
 > **Signature d'intention (fait) — enveloppe anti-malléabilité** : `ProvedTx` porte
 > une clé publique d'intention `signer` (hybride Ed25519+Dilithium3) et une signature
@@ -168,8 +169,41 @@
 > Ce n'est PAS l'autorité d'ownership (établie par P2) mais une enveloppe d'intention.
 > Tests : signature d'une autre clé rejetée, signataire échangé rejeté (via le digest).
 >
-> **Reste hors Phase-3-validity** : la **Phase 3z** (witness-hiding + monolithe/
-> agrégation privés + généralisation M-in/N-out).
+> **3z-a (fait) — MONOLITHE PRIVÉ : P1–P7 EN UNE SEULE TRACE** (`circuit::monolith`,
+> `circuit::tx::{prove_tx, verify_tx}` v2) : remplace l'assemblage v1 (3b5d, 15
+> preuves composées) par UNE SEULE preuve STARK. **Le statement lui-même force une
+> trace unique** : owner/nk (P2∧P4), les deux dépenses empilées (P7ᵢₙ → feuille →
+> nullifier P3, chemin Merkle P1) et les deux sorties (P7) sont liés par **36
+> colonnes porteuses constantes** (owner, nk, rho×2, cm×2, leaf×2, vin×2, vout×2)
+> avec égalités gatées entre segments, plus l'équilibre P5/P6 natif (3 colonnes,
+> accumulateur signé). Layout : **201 colonnes × 512 lignes** (profondeur 32 ; 165
+> colonnes de segments + 36 porteuses, sous la limite winterfell). **Publics
+> réduits au minimum du statement v2** : `root`, `nullifiers[2]`,
+> `output_commitments[2]`, `fee` (+ `depth` technique) — plus aucun `owner`/`nk`
+> publiés, plus aucune sous-preuve à assembler séparément ; le témoin (notes,
+> chemins de Merkle, `shielded_secret`, `nk`) reste privé. `tx_digest` v2 =
+> `dual_hash("obscura/proved-tx/v2", root‖nf₁‖nf₂‖oc₁‖oc₂‖fee‖signer)` ; enveloppe
+> d'intention inchangée sur le nouveau domaine `obscura/proved-tx-intent/v2`.
+> `ProvedTx` v2 = `{ anchor, proof, nullifiers, output_commitments, fee, signer,
+> tx_digest, intent_sig }` — UNE seule `ValidityProof`. **Bench réel (profondeur
+> 32, une machine dev)** : génération ≈ **634 ms**, vérification ≈ **1,5 ms**,
+> taille de preuve ≈ **85,3 Kio** (vs ≈219 Kio/15 preuves en v1, **−61 %**) —
+> remplace les chiffres 3d, désormais caducs (mesure de l'assemblage v1 supprimé).
+> Taille dominée par l'ouverture des 201 colonnes de trace aux 32 requêtes FRI
+> (structurel pour ce layout) ; leviers de réduction futurs : empilement accru des
+> colonnes (3z-c), grinding FRI. Tests : différentiels par famille, matrice de
+> sabotage (déséquilibre, nk/owner falsifié, cm@feuille ET cm@47 anti-double-
+> dépense, feuille↔chemin, VIN/VOUT isolés), white-box par porteuse, e2e ledger,
+> roundtrip consensus `#[ignore]`. **⚠️ Toujours validity-only** : ce monolithe
+> réduit drastiquement ce qui est PUBLIÉ, mais ne rend PAS la preuve elle-même
+> witness-hiding (winterfell 0.13.1 confirmé sans support zk) — les requêtes de
+> trace peuvent encore fuiter des cellules témoins. **Ne jamais qualifier cette
+> preuve de `zk`/`private`/`shielded`.** Le witness-hiding reste **3z-b** (fork
+> winterfell ou stack alternative, à trancher au spec 3z-b).
+>
+> **Reste hors Phase-3-validity** : **3z-b** (witness-hiding — fork winterfell ou
+> stack alternative, à trancher au spec 3z-b) et **3z-c** (généralisation
+> M-in/N-out, empilement accru des colonnes de trace).
 
 **Ce statement EST la règle de consensus d'une dépense valide.** Tout le reste du
 protocole s'organise autour de lui. Le mode transparent actuel (`apply_transparent`)

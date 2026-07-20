@@ -13,19 +13,24 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
 
 - `crates/crypto` : hash, kem, sig, aead — testés
 - `crates/ledger` : notes engagées, nullifiers, Merkle (BLAKE3, prof. 16), tx, validation — testés
-- `docs/PROTOCOL.md` et `docs/THREAT_MODEL.md` : spécification de référence
-- `cargo test` : 26 tests verts
+- `crates/circuit` : circuit STARK **monolithe** (`monolith/`) — P1–P7 d'une tx
+  2-in/2-out en UNE SEULE trace/preuve (201 col × 512 lignes), publics minimaux
+  (root, nullifiers, output_commitments, fee), `ProvedTx` v2 — testé, benché
+  (≈634 ms génération, ≈1,5 ms vérification, ≈85,3 Kio/preuve). Validity-only
+  (pas encore witness-hiding, voir docs/STARK_STATEMENT.md)
+- `docs/PROTOCOL.md`, `docs/THREAT_MODEL.md` et `docs/STARK_STATEMENT.md` : spécification de référence
+- `cargo test` : suite verte (crypto/ledger/circuit)
 
-## Prochaine étape : PHASE 3 — le circuit STARK EST la règle de consensus
+## Prochaine étape : PHASE 3z — witness-hiding puis généralisation
 
-Le statement exact (P1–P7) est dans docs/STARK_STATEMENT.md — c'est LA référence.
-Le mode transparent actuel (fonctions `_transparent`) est un échafaudage de dev :
-il ne définit pas la validité. Travaux phase 3 :
-1. migrer commitments + Merkle + PRF nullifier vers Rescue-Prime (winterfell),
-   EN MÊME TEMPS que le circuit (arbre consensus = arbre prouvé) ;
-2. implémenter le circuit P1–P7, preuve liée à tx_digest ;
-3. nouveau format de tx : { proof, root, nullifiers, output_commitments, enc_notes, fee } ;
-4. benchmarker taille/temps de preuve (2-in/2-out, profondeur 32).
+Phase 3 validity-only est terminée (statement P1–P7, monolithe, intégration
+ledger, bench) — voir le journal de tête de docs/STARK_STATEMENT.md, c'est LA
+référence. Reste :
+1. **3z-b — witness-hiding** : le monolithe actuel prouve l'intégrité mais fuit
+   potentiellement des cellules témoins (winterfell 0.13.1 sans support zk,
+   confirmé) ; trancher fork winterfell vs stack alternative au spec 3z-b ;
+2. **3z-c — généralisation M-in/N-out** : au-delà du 2-in/2-out figé, empilement
+   accru des colonnes (levier de réduction de taille de preuve additionnel).
 Puis phase 4 (P2P PQ + Dandelion++ + test key privacy) et phase 5 (nœud/wallet/testnet).
 
 ## Décisions v0.2 (revue intégrée — ne pas régresser)
