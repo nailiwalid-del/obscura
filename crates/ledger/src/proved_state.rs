@@ -175,7 +175,13 @@ mod tests {
             ProvedInput { note: n1, path: path1, index: i1 },
         ];
         let intent = crypto::sig::SigKeypair::generate();
-        let (_root, tx) = prove_tx(&secret, inputs, [o0, o1], 20, &intent);
+        // enc_notes opaques (le scan wallet est testé ailleurs) — leur binding dans
+        // tx_digest v3 est couvert par le test d'anti-substitution côté circuit.
+        let enc_notes = [
+            circuit::EncNote { kem_ct: vec![1, 2, 3], enc_note: vec![4, 5, 6] },
+            circuit::EncNote { kem_ct: vec![7, 8], enc_note: vec![9, 10, 11] },
+        ];
+        let (_root, tx) = prove_tx(&secret, inputs, [o0, o1], 20, &intent, enc_notes);
         (state, tx)
     }
 
