@@ -1,11 +1,13 @@
 //! Géométrie de segment du monolithe empilé (3z-c1) : offsets de colonne,
 //! schedule et budget.
 //!
-//! La trace utile est une **suite ordonnée de segments séquentiels de largeur
-//! uniforme** : `[KEY] → [IN0] → [IN1] → [OUT0] → [OUT1] → [blinding]`. Chaque
-//! segment occupe `seg_len(depth)` lignes contiguës ; le schedule 2-in/2-out est
-//! FIGÉ mais construit à partir d'une liste de types (`SegKind`) — c'est la
-//! **couture** que 3z-c2 fera varier (M-in/N-out).
+//! La trace utile est une **suite ordonnée de segments séquentiels de LARGEUR
+//! uniforme et de LONGUEURS variables par type** :
+//! `[KEY] → [IN0] → [IN1] → [OUT0] → [OUT1] → [blinding]`. Chaque segment occupe
+//! `seg_len(kind, depth)` lignes contiguës (une longueur uniforme calée sur le
+//! chemin de Merkle gaspillait ~480 lignes sur KEY/OUT et quadruplait la trace) ;
+//! le schedule 2-in/2-out est FIGÉ mais construit à partir d'une liste de types
+//! (`SegKind`) — c'est la **couture** que 3z-c2 fera varier (M-in/N-out).
 //!
 //! **Décision de géométrie (parallélisme intra-segment)** : dans un segment IN,
 //! la pile d'éponge cm→feuille→nullifier (56 lignes) et le chemin de Merkle
@@ -13,7 +15,7 @@
 //! la ligne 0** (liés par la porteuse `LEAF_C`, comme dans le côte-à-côte). Ils
 //! ne peuvent donc PAS partager le même groupe d'éponge : le motif `merkle_path`
 //! garde son éponge embarquée (29 colonnes complètes, disjointes des 20 de la
-//! pile). C'est ce qui permet `seg_len = max(64, 16·depth)` — le **max** des deux
+//! pile). C'est ce qui permet `in_len = max(64, 16·depth)` — le **max** des deux
 //! longueurs, pas leur somme.
 //!
 //! Tous les offsets sont dérivés par addition des tailles de groupe précédentes,
@@ -119,11 +121,20 @@ mod plan {
     /// Lignes par niveau du chemin de Merkle (= `merkle_path::BLOCK`, bloc B=2).
     pub(crate) const MERKLE_LEVEL_ROWS: usize = 16;
 
-    /// Plancher de longueur d'un segment. 64 car il faut couvrir la pile d'éponge
-    /// d'une entrée (`NF_ROWS_END` = 56) et les 60 lignes de bits du range-check
-    /// (`RANGE_BITS`), en restant un multiple de `MERKLE_LEVEL_ROWS` (pavage) et
-    /// une puissance de 2 (arrondis de trace amicaux).
-    pub(crate) const MIN_SEG_LEN: usize = 64;
+    /// Longueur d'un segment KEY : 1 bloc de permutation Rescue (8 lignes) — les
+    /// deux éponges owner/nk tournent CÔTE À CÔTE en colonnes (`SEG_KEY_W` = 24).
+    pub(crate) const KEY_LEN: usize = crate::rescue_round::TRACE_LEN; // 8
+
+    /// Plancher de longueur d'un segment IN. 64 car il faut couvrir la pile
+    /// d'éponge d'une entrée (`NF_ROWS_END` = 56) et les 60 lignes de bits du
+    /// range-check (`RANGE_BITS`), en restant un multiple de `MERKLE_LEVEL_ROWS`
+    /// (pavage du chemin) et une puissance de 2 (arrondis de trace amicaux).
+    pub(crate) const MIN_IN_LEN: usize = 64;
+
+    /// Longueur d'un segment OUT : l'éponge de commitment (`CM_ROWS_END` = 32) et
+    /// les 60 lignes de bits du range-check tournent en parallèle (groupes de
+    /// colonnes disjoints) → max(32, 60) arrondi à 64 (puissance de 2).
+    pub(crate) const OUT_LEN: usize = 64;
 
     /// Lignes de blinding (witness-hiding, 3z-b1). Dérivé : ≥ q(32) + OOD(2) + marge(6).
     /// `q` = nombre de requêtes de `proof_options_hi`. Assertion de cohérence dans air.rs.
@@ -152,21 +163,40 @@ mod plan {
         ]
     }
 
-    /// Lignes par segment (uniforme) : `max(MIN_SEG_LEN, 16·depth)`. Le chemin de
-    /// Merkle d'un segment IN domine dès `depth ≥ 4` ; KEY (8 lignes) et OUT
-    /// (32 lignes) sont plus courts et sont paddés DANS leur segment.
-    pub(crate) fn seg_len(depth: usize) -> usize {
-        core::cmp::max(MIN_SEG_LEN, MERKLE_LEVEL_ROWS * depth)
+    /// Lignes du segment selon son TYPE — longueurs VARIABLES par type (décision
+    /// utilisateur, 3z-c1 révisé : une longueur uniforme calée sur le chemin de
+    /// Merkle gaspillait ~480 lignes sur KEY/OUT et quadruplait la trace).
+    pub(crate) fn seg_len(kind: SegKind, depth: usize) -> usize {
+        match kind {
+            SegKind::Key => KEY_LEN,
+            SegKind::Input => in_len(depth),
+            SegKind::Output => OUT_LEN,
+        }
     }
 
-    /// Ligne de début du segment `i` du schedule : pavage contigu, sans trou.
+    /// Longueur d'un segment IN : `max(MIN_IN_LEN, 16·depth)` — le chemin de
+    /// Merkle domine dès `depth ≥ 4` (512 au consensus, 64 en dev).
+    pub(crate) fn in_len(depth: usize) -> usize {
+        core::cmp::max(MIN_IN_LEN, MERKLE_LEVEL_ROWS * depth)
+    }
+
+    /// Ligne de début du segment `i` du schedule : somme CUMULÉE des longueurs
+    /// des segments précédents (frontières irrégulières — au consensus :
+    /// 0, 8, 520, 1032, 1096). Pavage contigu, sans trou ni chevauchement.
     pub(crate) fn seg_start(i: usize, depth: usize) -> usize {
-        i * seg_len(depth)
+        schedule_2in2out()[..i]
+            .iter()
+            .map(|k| seg_len(*k, depth))
+            .sum()
     }
 
-    /// Lignes utiles (contraintes + assertions) : les 5 segments du schedule.
+    /// Lignes utiles (contraintes + assertions) : somme des longueurs des
+    /// segments du schedule (au consensus : 8 + 2·512 + 2·64 = 1160).
     pub(crate) fn used_rows(depth: usize) -> usize {
-        N_SEGMENTS * seg_len(depth)
+        schedule_2in2out()
+            .iter()
+            .map(|k| seg_len(*k, depth))
+            .sum()
     }
 
     /// Longueur de trace pour une profondeur d'arbre donnée : lignes utiles +
@@ -176,12 +206,14 @@ mod plan {
     }
 
     // Garde-fous COMPILE-TIME de la géométrie (voir aussi ceux du mod tests) :
-    // le plancher couvre la pile d'éponge, les bits du range-check, et pave en
-    // blocs de Merkle entiers.
-    const _: () = assert!(MIN_SEG_LEN >= NF_ROWS_END);
-    const _: () = assert!(MIN_SEG_LEN >= crate::range_check::RANGE_BITS);
-    const _: () = assert!(MIN_SEG_LEN % MERKLE_LEVEL_ROWS == 0);
-    const _: () = assert!(MIN_SEG_LEN.is_power_of_two());
+    // le plancher IN couvre la pile d'éponge, les bits du range-check, et pave
+    // en blocs de Merkle entiers ; OUT couvre l'éponge de commitment et les bits.
+    const _: () = assert!(MIN_IN_LEN >= NF_ROWS_END);
+    const _: () = assert!(MIN_IN_LEN >= crate::range_check::RANGE_BITS);
+    const _: () = assert!(MIN_IN_LEN % MERKLE_LEVEL_ROWS == 0);
+    const _: () = assert!(MIN_IN_LEN.is_power_of_two());
+    const _: () = assert!(OUT_LEN >= CM_ROWS_END);
+    const _: () = assert!(OUT_LEN >= crate::range_check::RANGE_BITS);
     // Le bloc KEY tient dans la largeur d'un segment.
     const _: () = assert!(SEG_KEY_OFF + SEG_KEY_W <= SEG_WIDTH);
 }
@@ -251,22 +283,33 @@ mod tests {
     }
 
     #[test]
-    fn seg_len_couvre_pile_et_chemin() {
-        // Un segment doit contenir la pile d'éponge d'une entrée (cm 32 + leaf 8 +
-        // nf 16 = 56 lignes) ET le chemin de Merkle (16·depth lignes) qui tournent
-        // en PARALLÈLE (groupes de colonnes disjoints). seg_len = max des deux.
+    fn longueurs_par_type_couvrent_leurs_gadgets() {
+        // KEY : 1 bloc de permutation (owner/nk côte à côte en colonnes).
+        assert_eq!(KEY_LEN, crate::rescue_round::TRACE_LEN); // 8
+        // IN : la pile d'éponge (cm 32 + leaf 8 + nf 16 = 56 lignes) ET le chemin
+        // de Merkle (16·depth) tournent en PARALLÈLE (groupes de colonnes
+        // disjoints). in_len = max des deux, jamais la somme.
         assert_eq!(NF_ROWS_END, 56);
-        assert_eq!(seg_len(32), MERKLE_LEVEL_ROWS * 32); // consensus : le chemin domine
-        assert_eq!(seg_len(2), MIN_SEG_LEN); // dev : 16·2 = 32 < 56 → plancher 64
-        assert_eq!(seg_len(4), MIN_SEG_LEN); // 16·4 = 64 = plancher
+        assert_eq!(in_len(32), MERKLE_LEVEL_ROWS * 32); // consensus : le chemin domine
+        assert_eq!(in_len(2), MIN_IN_LEN); // dev : 16·2 = 32 < 56 → plancher 64
+        assert_eq!(in_len(4), MIN_IN_LEN); // 16·4 = 64 = plancher
         for depth in [2, 4, 16, 32] {
-            assert!(seg_len(depth) >= NF_ROWS_END, "pile d'éponge couverte");
-            assert!(seg_len(depth) >= MERKLE_LEVEL_ROWS * depth, "chemin couvert");
+            assert!(in_len(depth) >= NF_ROWS_END, "pile d'éponge couverte");
+            assert!(in_len(depth) >= MERKLE_LEVEL_ROWS * depth, "chemin couvert");
             assert!(
-                seg_len(depth) >= crate::range_check::RANGE_BITS,
+                in_len(depth) >= crate::range_check::RANGE_BITS,
                 "60 lignes de bits du range-check couvertes"
             );
-            assert_eq!(seg_len(depth) % MERKLE_LEVEL_ROWS, 0, "pavage en blocs de 16");
+            assert_eq!(in_len(depth) % MERKLE_LEVEL_ROWS, 0, "pavage en blocs de 16");
+        }
+        // OUT : éponge de commitment (32) et bits de range (60) en parallèle.
+        assert!(OUT_LEN >= CM_ROWS_END, "éponge de commitment couverte");
+        assert!(OUT_LEN >= crate::range_check::RANGE_BITS, "bits de range couverts");
+        // seg_len route la bonne longueur selon le type.
+        for depth in [2, 32] {
+            assert_eq!(seg_len(SegKind::Key, depth), KEY_LEN);
+            assert_eq!(seg_len(SegKind::Input, depth), in_len(depth));
+            assert_eq!(seg_len(SegKind::Output, depth), OUT_LEN);
         }
     }
 
@@ -293,31 +336,37 @@ mod tests {
     #[test]
     fn segments_pavent_sans_trou() {
         for depth in [2, 4, 32] {
-            let l = seg_len(depth);
-            // seg_start strictement croissant, segments contigus (pas de trou, pas
-            // de chevauchement), et la fin du dernier segment == used_rows.
-            for i in 0..N_SEGMENTS {
-                assert_eq!(seg_start(i, depth), i * l);
-                if i > 0 {
-                    assert_eq!(seg_start(i, depth), seg_start(i - 1, depth) + l);
-                }
+            // seg_start = somme cumulée des longueurs du schedule : strictement
+            // croissant, segments contigus (pas de trou, pas de chevauchement),
+            // et la fin du dernier segment == used_rows.
+            let sched = schedule_2in2out();
+            let mut attendu = 0;
+            for (i, kind) in sched.iter().enumerate() {
+                assert_eq!(seg_start(i, depth), attendu, "depth={depth} i={i}");
+                attendu += seg_len(*kind, depth);
             }
-            assert_eq!(used_rows(depth), N_SEGMENTS * l);
-            assert_eq!(used_rows(depth), seg_start(N_SEGMENTS - 1, depth) + l);
+            assert_eq!(used_rows(depth), attendu);
         }
+        // Frontières concrètes au consensus (profondeur 32) : KEY 8, IN 512.
+        assert_eq!(seg_start(0, 32), 0);
+        assert_eq!(seg_start(1, 32), 8);
+        assert_eq!(seg_start(2, 32), 520);
+        assert_eq!(seg_start(3, 32), 1032);
+        assert_eq!(seg_start(4, 32), 1096);
     }
 
     #[test]
     fn trace_len_avec_blinding() {
-        // Consensus (profondeur 32) : 5 segments de 512 lignes.
-        assert_eq!(used_rows(32), 5 * 512);
-        assert_eq!(trace_len(32), (5 * 512 + BLIND_ROWS).next_power_of_two());
-        assert_eq!(trace_len(32), 4096);
+        // Consensus (profondeur 32) : 8 + 2·512 + 2·64 = 1160 lignes utiles.
+        assert_eq!(used_rows(32), KEY_LEN + 2 * in_len(32) + 2 * OUT_LEN);
+        assert_eq!(used_rows(32), 1160);
+        assert_eq!(trace_len(32), (used_rows(32) + BLIND_ROWS).next_power_of_two());
+        assert_eq!(trace_len(32), 2048);
         assert!(trace_len(32).is_power_of_two());
         assert!(trace_len(32) >= used_rows(32) + BLIND_ROWS);
-        // Dev (profondeur 2) : 5 segments au plancher de 64 lignes.
-        assert_eq!(used_rows(2), 5 * MIN_SEG_LEN);
-        assert_eq!(trace_len(2), (5 * MIN_SEG_LEN + BLIND_ROWS).next_power_of_two());
+        // Dev (profondeur 2) : 8 + 2·64 + 2·64 = 264 lignes utiles.
+        assert_eq!(used_rows(2), KEY_LEN + 2 * MIN_IN_LEN + 2 * OUT_LEN);
+        assert_eq!(trace_len(2), (used_rows(2) + BLIND_ROWS).next_power_of_two());
         assert_eq!(trace_len(2), 512);
     }
 }
