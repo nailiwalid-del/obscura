@@ -28,7 +28,10 @@ ledger, bench) — voir le journal de tête de docs/STARK_STATEMENT.md, c'est LA
 référence. Reste :
 1. **3z-b — witness-hiding** : le monolithe actuel prouve l'intégrité mais fuit
    potentiellement des cellules témoins (winterfell 0.13.1 sans support zk,
-   confirmé) ; trancher fork winterfell vs stack alternative au spec 3z-b ;
+   confirmé). **Spike 3z-b0 fait** (`docs/superpowers/specs/2026-07-20-3zb0-spike-rapport.md`) :
+   voie tranchée = **lignes de blinding au niveau AIR** (ni fork winterfell ni
+   migration), démontrée sur code réel (`crates/zk-spike`). Reste 3z-b1 :
+   implémenter l'extension sur le monolithe + argument de sécurité + re-bench (~2×) ;
 2. **3z-c — généralisation M-in/N-out** : au-delà du 2-in/2-out figé, empilement
    accru des colonnes (levier de réduction de taille de preuve additionnel).
 Puis phase 4 (P2P PQ + Dandelion++ + test key privacy) et phase 5 (nœud/wallet/testnet).
