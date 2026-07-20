@@ -237,9 +237,35 @@
 > gadgets autonomes (`sponge`, `balance`, `spend`, …) et le banc `crates/zk-spike`
 > restent validity-only.
 >
+> **ProvedTx v3 — enc_notes portés + liés (fait)** : les enveloppes chiffrées
+> des sorties voyagent dans `ProvedTx` et sont liées dans `tx_digest` v3
+> (anti-substitution passive) ; scan wallet via `ledger::proved_wallet`. Détails,
+> portée exacte et limite du relais actif : section « Cohérence commitment ↔
+> note chiffrée (P8, différé) » ci-dessous.
+>
+> **Durcissement pré-testnet #7 — sérialisation canonique de `ProvedTx` (fait)** :
+> `ProvedTx::{to_bytes, from_bytes}` (`circuit::tx`), encodage wire **injectif**
+> (digests 32 o, `fee` u64 LE, longueurs `u32` LE préfixées pour le variable).
+> `from_bytes → Result<_, TxDecodeError>` est LE point d'entrée réseau qui
+> VALIDE : curseur borné (aucune panique sur entrée arbitraire), digests
+> canoniques, bornes `EncNote` (anti-DoS au parse, avant toute allocation
+> coûteuse), rejet des octets résiduels (canonicité : une seule sérialisation
+> valide par tx). Pas de `serde` (il ne garantit pas l'injectivité/canonicité).
+> Tests : roundtrip réel (`--release`) + matrice de rejet (tronqué, résiduel,
+> digest non canonique, enc_note hors bornes, preuve corrompue). Spec :
+> `docs/superpowers/specs/2026-07-20-provedtx-serialisation-design.md`. Pièces
+> suivantes de #7 : `zeroize` des secrets (spec écrite,
+> `2026-07-20-zeroize-secrets-design.md`), Merkle frontier persistant,
+> key-privacy IK-CCA (phase 4).
+>
 > **Reste hors Phase-3-validity** : **3z-c** (généralisation M-in/N-out,
 > empilement accru des colonnes de trace — levier additionnel de réduction de
-> taille de preuve). Le witness-hiding (3z-b) est livré.
+> taille de preuve). Le witness-hiding (3z-b) est livré. Statut 3z-c : la
+> première tranche **3z-c1** (refonte segmentée à parité 2-in/2-out) a été
+> entamée puis **parquée** (commit 333e4e4) au profit des priorités protocole
+> (enc_notes, cohérence, durcissement #7) — master reste sur le monolithe
+> côte-à-côte 3z-b1 ; le design (`2026-07-20-3zc1-monolithe-empile-design.md`)
+> et le travail T1 (aa4076f, 7cceb27) restent disponibles pour reprise.
 
 **Ce statement EST la règle de consensus d'une dépense valide.** Tout le reste du
 protocole s'organise autour de lui. Le mode transparent actuel (`apply_transparent`)

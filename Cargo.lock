@@ -216,6 +216,7 @@ dependencies = [
  "sha3",
  "thiserror",
  "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]
@@ -448,6 +449,7 @@ dependencies = [
  "rand_core 0.6.4",
  "serde",
  "thiserror",
+ "zeroize",
 ]
 
 [[package]]
