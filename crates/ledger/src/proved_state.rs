@@ -7,8 +7,14 @@
 //! L'arbre est le MÊME que celui contre lequel le circuit prouve l'appartenance
 //! (`proved_hash::merkle::ProvedMerkleTree`).
 //!
-//! Hors périmètre (→ ledger/Phase 3z) : signature hybride d'intention sur `tx_digest`,
-//! généralisation M-in/N-out, witness-hiding.
+//! Depuis 3z-a6, `ProvedTx` est la v2 (3z-a5) : `proof` est LA preuve monolithique
+//! unique (P1–P7 pour toute la tx, une seule trace) et les nullifiers/commitments
+//! de sortie sont des champs publics top-level (`tx.nullifiers`, plus de
+//! `tx.spends[i].nullifier`) — la provenance change, la logique de consensus
+//! ci-dessous (anchor → preuve → signature d'intention → nullifiers → application
+//! atomique) est inchangée.
+//!
+//! Hors périmètre (→ ledger/Phase 3z) : généralisation M-in/N-out, witness-hiding.
 
 use crate::LedgerError;
 use circuit::{verify_tx, ProvedTx, INTENT_DOMAIN};
@@ -96,15 +102,15 @@ impl ProvedLedgerState {
         }
         // 3. Nullifiers non dépensés + pas de doublon dans la tx.
         let mut seen = HashSet::new();
-        for sp in &tx.spends {
-            let nf = sp.nullifier.to_bytes();
+        for nf in &tx.nullifiers {
+            let nf = nf.to_bytes();
             if self.nullifiers.contains(&nf) || !seen.insert(nf) {
                 return Err(LedgerError::DoubleSpend);
             }
         }
         // Application atomique.
-        for sp in &tx.spends {
-            self.nullifiers.insert(sp.nullifier.to_bytes());
+        for nf in &tx.nullifiers {
+            self.nullifiers.insert(nf.to_bytes());
         }
         let mut indices = Vec::with_capacity(tx.output_commitments.len());
         for oc in &tx.output_commitments {
@@ -174,12 +180,12 @@ mod tests {
     fn applique_une_tx_prouvee() {
         let (mut state, tx) = setup();
         // Les nullifiers ne sont pas encore dépensés.
-        assert!(!state.is_spent(&tx.spends[0].nullifier));
+        assert!(!state.is_spent(&tx.nullifiers[0]));
         let indices = state.apply_proved_tx(&tx).expect("tx valide");
         assert_eq!(indices.len(), 2); // 2 sorties insérées
         // Nullifiers désormais dépensés.
-        assert!(state.is_spent(&tx.spends[0].nullifier));
-        assert!(state.is_spent(&tx.spends[1].nullifier));
+        assert!(state.is_spent(&tx.nullifiers[0]));
+        assert!(state.is_spent(&tx.nullifiers[1]));
     }
 
     #[test]
@@ -205,12 +211,32 @@ mod tests {
         ));
     }
 
+    // En v2, les montants ne sont plus des champs publics visibles (`tx.outputs` a
+    // disparu) : on ne peut plus saboter l'équilibre en mutant une valeur en clair
+    // après-coup. On falsifie donc un autre public — le commitment de sortie —, ce
+    // qui casse à la fois l'assertion du monolithe (cellule liée) et `tx_digest`.
     #[test]
     #[cfg_attr(debug_assertions, ignore = "sous-preuves gatées : --release")]
     fn preuve_falsifiee_rejetee() {
         let (mut state, mut tx) = setup();
-        // Sabotage de l'équilibre : anchor reste récent mais verify_tx échoue.
-        tx.outputs[0].value += 1;
+        // Sabotage d'un public de la preuve : anchor reste récent mais verify_tx échoue.
+        tx.output_commitments[0] = digest(321);
+        assert!(matches!(
+            state.apply_proved_tx(&tx),
+            Err(LedgerError::InvalidProof)
+        ));
+    }
+
+    /// Un nullifier ne peut pas être substitué après coup : il est asserté DANS la
+    /// preuve du monolithe (cellule liée au commitment consommé) ET lié dans
+    /// `tx_digest`. Le remplacer par un digest arbitraire casse les deux — rejet
+    /// `InvalidProof`, distinct de `preuve_falsifiee_rejetee` qui falsifie le
+    /// commitment de sortie plutôt que le nullifier.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "sous-preuves gatées : --release")]
+    fn nullifier_ne_peut_etre_substitue() {
+        let (mut state, mut tx) = setup();
+        tx.nullifiers[0] = digest(999_999);
         assert!(matches!(
             state.apply_proved_tx(&tx),
             Err(LedgerError::InvalidProof)
