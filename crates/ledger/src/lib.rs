@@ -4,6 +4,7 @@ pub mod keys;
 pub mod merkle;
 pub mod note;
 pub mod proved_state;
+pub mod proved_wallet;
 pub mod state;
 pub mod tx;
 
