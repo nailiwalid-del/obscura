@@ -23,21 +23,9 @@ fn proof_bytes(p: &ValidityProof) -> usize {
     p.0.to_bytes().len()
 }
 
-/// Taille totale (octets) de toutes les sous-preuves winterfell de la `ProvedTx`.
+/// Taille de LA preuve monolithique unique (v2 : plus de sous-preuves à sommer).
 fn total_proof_bytes(tx: &ProvedTx) -> usize {
-    let mut n = proof_bytes(&tx.key);
-    for sp in &tx.spends {
-        n += proof_bytes(&sp.commit);
-        n += proof_bytes(&sp.membership.leaf_proof);
-        n += proof_bytes(&sp.membership.path_proof);
-        n += proof_bytes(&sp.nf_proof);
-        n += proof_bytes(&sp.range);
-    }
-    for op in &tx.outputs {
-        n += proof_bytes(&op.commit);
-        n += proof_bytes(&op.range);
-    }
-    n
+    proof_bytes(&tx.proof)
 }
 
 fn main() {
@@ -88,5 +76,5 @@ fn main() {
     println!("génération  : {prove_ms:8.1} ms");
     println!("vérification: {verify_ms:8.1} ms  (moy. sur {V})");
     println!("taille preuve totale : {bytes} o  ({:.1} Kio)", bytes as f64 / 1024.0);
-    println!("  = 1 clé + 2 dépenses (5 preuves ch.) + 2 sorties (2 preuves ch.) = 15 STARK");
+    println!("  = 1 SEULE preuve STARK monolithique (P1–P7, v2)");
 }

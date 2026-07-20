@@ -1,28 +1,37 @@
-//! 3b5d — Transaction prouvée (`ProvedTx`) : le validateur complet 2-in/2-out.
+//! 3z-a5 — `ProvedTx` v2 : la transaction prouvée par LE monolithe.
 //!
-//! DERNIÈRE brique de l'assemblage 3b5 (validity-only). Assemble `prove_key` (P2∧P4),
-//! deux `prove_spend` (P1+P3+P6+P7ᵢₙ), deux `prove_output` (P7+P6), l'équilibre P5
-//! (natif, montants publics) et le `tx_digest` (non-rejeu). `verify_tx` établit ainsi
-//! **P1–P7 pour la transaction entière**, liée à `tx_digest`.
+//! Remplace l'assemblage v1 (3b5, composition de 15 sous-preuves : `prove_key` +
+//! 2×`prove_spend` + 2×`prove_output` + équilibre natif) par UNE SEULE preuve
+//! STARK — celle du monolithe (`monolith::air::prove_monolith`), qui établit
+//! **P1–P7 pour la transaction entière** (clé, deux dépenses, deux sorties,
+//! équilibre, TOUTES les liaisons inter-segments) dans une trace unique.
 //!
-//! Liaisons : `owner`/`nk` sortis de la clé sont passés à CHAQUE dépense (autorité +
-//! clé de nullifier communes) ; les deux dépenses partagent la même racine ; les
-//! nullifiers/commitments proviennent des sous-preuves. La signature hybride (côté
-//! ledger, hors périmètre) signe `tx_digest`.
+//! Publics MINIMAUX : racine, les deux nullifiers, les deux commitments de sortie,
+//! les frais. Plus aucun `owner`/`nk` publiés en clair, plus aucune sous-preuve —
+//! le prouveur (`prove_monolith`) extrait ces publics directement des cellules de
+//! trace ; le vérificateur les fournit lui-même (root passée en argument, reste lu
+//! sur `tx`) et ne fait tourner qu'UN SEUL `winterfell::verify`.
 //!
-//! ⚠️ **À générer en `--release`** (spends/outputs gatés). Forme figée 2-in/2-out ;
-//! M-in/N-out + witness-hiding = Phase 3z.
+//! `tx_digest` (v2, domaine `obscura/proved-tx/v2`) lie `root ‖ nf ‖ oc ‖ fee ‖
+//! signer` — non-rejeu et anti-échange du signataire d'intention, comme en v1.
+//! La signature hybride d'intention reste une enveloppe anti-malléabilité, PAS une
+//! autorisation d'ownership : l'autorité vient de la liaison `owner = H_owner(secret)`
+//! DANS le monolithe (contrainte AIR, cf. `monolith::air` « liaisons par porteuses »).
+//!
+//! ⚠️ **À générer en `--release`** (AIR du monolithe gatée, cf. `monolith::air`).
 
-use crate::{
-    prove_key, prove_output, prove_spend, verify_key, verify_output, verify_spend, OutputProof,
-    SpendNote, SpendProof, ValidityProof,
-};
+use crate::monolith::air::{prove_monolith, verify_monolith, MonolithPublicInputs};
+use crate::monolith::trace::MonolithWitness;
+use crate::spend::SpendNote;
+use crate::ValidityProof;
 use crypto::hash::dual_hash;
 use crypto::sig::{HybridSignature, SigKeypair, SigPublicKey};
-use proved_hash::digest::{Digest, ShieldedSecret};
+use proved_hash::digest::{Digest, ShieldedSecret, DIGEST_FELTS};
+use proved_hash::felt::Felt;
+use winter_math::fields::f64::BaseElement;
 
 /// Domaine de la signature d'intention (anti-malléabilité), signée sur `tx_digest`.
-pub const INTENT_DOMAIN: &str = "obscura/proved-tx-intent/v1";
+pub const INTENT_DOMAIN: &str = "obscura/proved-tx-intent/v2";
 
 /// Une entrée à dépenser : la note, son chemin de Merkle et sa position.
 pub struct ProvedInput {
@@ -31,54 +40,45 @@ pub struct ProvedInput {
     pub index: u64,
 }
 
-/// Transaction prouvée 2-in/2-out. Les valeurs de liaison (owner/nk, cm_in/rho/value
-/// dans les `SpendProof`, `output_commitments`, fee) sont publiques (validity-only).
+/// Transaction prouvée 2-in/2-out. `proof` est LA preuve monolithique unique ; les
+/// autres champs sont ses publics (racine, nullifiers, commitments de sortie, fee)
+/// plus l'enveloppe d'intention (signataire, digest, signature hybride).
 pub struct ProvedTx {
     /// Racine (anchor) contre laquelle les entrées prouvent leur appartenance.
     pub anchor: Digest,
-    pub owner: Digest,
-    pub nk: Digest,
-    pub key: ValidityProof,
-    pub spends: [SpendProof; 2],
-    pub outputs: [OutputProof; 2],
+    /// LA preuve monolithique : établit P1–P7 pour toute la transaction.
+    pub proof: ValidityProof,
+    pub nullifiers: [Digest; 2],
     pub output_commitments: [Digest; 2],
     pub fee: u64,
     /// Clé publique d'intention (liée dans `tx_digest` → non échangeable).
     pub signer: SigPublicKey,
     pub tx_digest: [u8; 64],
     /// Signature hybride d'intention sur `tx_digest` (enveloppe anti-malléabilité,
-    /// PAS autorité d'ownership — celle-ci est établie par la preuve P2).
+    /// PAS autorité d'ownership — celle-ci est établie par la liaison `owner` du
+    /// monolithe).
     pub intent_sig: HybridSignature,
 }
 
-const TX_DOMAIN: &str = "obscura/proved-tx/v1";
+const TX_DOMAIN: &str = "obscura/proved-tx/v2";
 
-/// Encodage canonique injectif (tailles fixes) de toutes les données publiques.
-#[allow(clippy::too_many_arguments)]
+/// Encodage canonique injectif (tailles fixes) des publics : `root ‖ nf₁ ‖ nf₂ ‖
+/// oc₁ ‖ oc₂ ‖ fee LE ‖ signer`.
 fn tx_digest_bytes(
     root: &Digest,
-    spends: &[SpendProof; 2],
+    nullifiers: &[Digest; 2],
     output_commitments: &[Digest; 2],
-    outputs: &[OutputProof; 2],
-    owner: &Digest,
-    nk: &Digest,
     fee: u64,
     signer: &SigPublicKey,
 ) -> [u8; 64] {
     let mut b = Vec::new();
     b.extend_from_slice(&root.to_bytes());
-    for sp in spends {
-        b.extend_from_slice(&sp.nullifier.to_bytes());
-        b.extend_from_slice(&sp.cm_in.to_bytes());
-        b.extend_from_slice(&sp.rho.to_bytes());
-        b.extend_from_slice(&sp.value.to_le_bytes());
+    for nf in nullifiers {
+        b.extend_from_slice(&nf.to_bytes());
     }
-    for (oc, op) in output_commitments.iter().zip(outputs) {
+    for oc in output_commitments {
         b.extend_from_slice(&oc.to_bytes());
-        b.extend_from_slice(&op.value.to_le_bytes());
     }
-    b.extend_from_slice(&owner.to_bytes());
-    b.extend_from_slice(&nk.to_bytes());
     b.extend_from_slice(&fee.to_le_bytes());
     // Le signataire d'intention est LIÉ dans le digest → il ne peut pas être échangé
     // sans invalider la preuve (qui lie tx_digest).
@@ -86,9 +86,30 @@ fn tx_digest_bytes(
     dual_hash(TX_DOMAIN, &b)
 }
 
-/// Construit la transaction prouvée. Précondition : notes d'entrée possédées par
-/// `secret` (même `owner`), chemins cohérents avec un même arbre, équilibre respecté,
-/// montants `< 2^60`. Retourne la racine prouvée et la `ProvedTx`.
+/// `Digest` → tableau de `BaseElement` winterfell (publics du monolithe).
+fn digest_to_felts(d: &Digest) -> [BaseElement; DIGEST_FELTS] {
+    core::array::from_fn(|k| d.0[k].to_winter())
+}
+
+/// Tableau de `BaseElement` winterfell → `Digest`. Toujours canonique : ces valeurs
+/// sont extraites de cellules de trace Goldilocks, déjà réduites mod p.
+fn felts_to_digest(f: &[BaseElement; DIGEST_FELTS]) -> Digest {
+    Digest(core::array::from_fn(|k| {
+        Felt::from_winter(f[k]).expect("digest canonique issu du circuit")
+    }))
+}
+
+/// Construit la transaction prouvée. Le témoin (secret + entrées + sorties + fee)
+/// alimente LE monolithe (`prove_monolith`) : une seule trace établit P1–P7 pour la
+/// tx entière. Les publics (racine, nullifiers, commitments de sortie) sont extraits
+/// de la preuve pour former `tx_digest`, signé par la clé d'intention. Retourne la
+/// racine prouvée et la `ProvedTx`.
+///
+/// Précondition : notes d'entrée possédées par `secret` (owner = H_owner(secret)),
+/// chemins de même profondeur cohérents avec un même arbre, équilibre respecté,
+/// montants `< 2^60`. Une entrée qui ne respecte pas ces préconditions ne fait PAS
+/// paniquer la construction : elle produit une preuve que `verify_tx` rejette (la
+/// liaison correspondante mord dans l'AIR du monolithe, cf. `monolith::air`).
 pub fn prove_tx(
     secret: &ShieldedSecret,
     inputs: [ProvedInput; 2],
@@ -96,41 +117,34 @@ pub fn prove_tx(
     fee: u64,
     intent: &SigKeypair,
 ) -> (Digest, ProvedTx) {
-    let (owner, nk, key) = prove_key(secret);
-
-    let (root0, sp0) = prove_spend(&inputs[0].note, &inputs[0].path, inputs[0].index, &nk);
-    let (root1, sp1) = prove_spend(&inputs[1].note, &inputs[1].path, inputs[1].index, &nk);
-    assert_eq!(root0, root1, "les deux entrées doivent appartenir au même arbre");
-
-    let (oc0, op0) = prove_output(&outputs[0]);
-    let (oc1, op1) = prove_output(&outputs[1]);
-
-    let spends = [sp0, sp1];
-    let outputs_p = [op0, op1];
-    let output_commitments = [oc0, oc1];
-    let signer = intent.public.clone();
-    let tx_digest = tx_digest_bytes(
-        &root0,
-        &spends,
-        &output_commitments,
-        &outputs_p,
-        &owner,
-        &nk,
+    let witness = MonolithWitness {
+        secret: secret.clone(),
+        inputs,
+        outputs,
         fee,
-        &signer,
-    );
+    };
+    let (pi, proof) = prove_monolith(&witness);
+
+    let root = felts_to_digest(&pi.root);
+    let nullifiers = [
+        felts_to_digest(&pi.nullifiers[0]),
+        felts_to_digest(&pi.nullifiers[1]),
+    ];
+    let output_commitments = [
+        felts_to_digest(&pi.output_commitments[0]),
+        felts_to_digest(&pi.output_commitments[1]),
+    ];
+    let signer = intent.public.clone();
+    let tx_digest = tx_digest_bytes(&root, &nullifiers, &output_commitments, fee, &signer);
     // Enveloppe d'intention : le porteur de la clé signe CETTE transaction.
     let intent_sig = intent.sign(INTENT_DOMAIN, &tx_digest);
 
     (
-        root0,
+        root,
         ProvedTx {
-            anchor: root0,
-            owner,
-            nk,
-            key,
-            spends,
-            outputs: outputs_p,
+            anchor: root,
+            proof,
+            nullifiers,
             output_commitments,
             fee,
             signer,
@@ -141,50 +155,37 @@ pub fn prove_tx(
 }
 
 /// Vérifie la transaction contre l'arbre public `root` (profondeur `depth`).
-/// Établit P1–P7 pour toute la tx + la liaison `tx_digest`.
+/// Reconstruit les publics du monolithe depuis `root` (argument, PAS `tx.anchor` —
+/// c'est la racine consensus qui fait foi) et les champs publics de `tx`, établit
+/// P1–P7 pour toute la tx via `verify_monolith`, puis recompare `tx_digest`
+/// (non-rejeu, signataire lié). NB : la signature elle-même est vérifiée côté ledger
+/// (`apply_proved_tx`) — `verify_tx` n'établit que la preuve STARK + la cohérence du
+/// digest.
 pub fn verify_tx(root: &Digest, depth: usize, tx: &ProvedTx) -> bool {
-    // P2 ∧ P4 : owner et nk d'un même secret.
-    if !verify_key(&tx.owner, &tx.nk, &tx.key) {
+    let pi = MonolithPublicInputs {
+        root: digest_to_felts(root),
+        nullifiers: [
+            digest_to_felts(&tx.nullifiers[0]),
+            digest_to_felts(&tx.nullifiers[1]),
+        ],
+        output_commitments: [
+            digest_to_felts(&tx.output_commitments[0]),
+            digest_to_felts(&tx.output_commitments[1]),
+        ],
+        fee: tx.fee,
+        depth,
+    };
+    if !verify_monolith(&pi, depth, &tx.proof) {
         return false;
     }
-    // P1+P3+P6+P7ᵢₙ par entrée, owner/nk LIÉS à la clé.
-    for sp in &tx.spends {
-        if !verify_spend(root, &tx.owner, &tx.nk, depth, sp) {
-            return false;
-        }
-    }
-    // P7+P6 par sortie.
-    for (oc, op) in tx.output_commitments.iter().zip(&tx.outputs) {
-        if !verify_output(oc, op.value, op) {
-            return false;
-        }
-    }
-    // P5 (natif) : Σ entrées = Σ sorties + fee (montants publics < 2^60 → pas d'overflow u128).
-    let sum_in = tx.spends[0].value as u128 + tx.spends[1].value as u128;
-    let sum_out = tx.outputs[0].value as u128 + tx.outputs[1].value as u128 + tx.fee as u128;
-    if sum_in != sum_out {
-        return false;
-    }
-    // Non-rejeu : le tx_digest recalculé lie toutes les données publiques (dont le
-    // signataire d'intention). NB : la signature elle-même est vérifiée côté ledger
-    // (`apply_proved_tx`) — verify_tx n'établit que la preuve STARK + la cohérence du digest.
-    let expected = tx_digest_bytes(
-        root,
-        &tx.spends,
-        &tx.output_commitments,
-        &tx.outputs,
-        &tx.owner,
-        &tx.nk,
-        tx.fee,
-        &tx.signer,
-    );
+    let expected = tx_digest_bytes(root, &tx.nullifiers, &tx.output_commitments, tx.fee, &tx.signer);
     expected == tx.tx_digest
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proved_hash::felt::Felt;
+    use proved_hash::domain::Domain;
     use proved_hash::merkle;
     use proved_hash::rescue;
 
@@ -213,14 +214,20 @@ mod tests {
         (root, path0, path1)
     }
 
-    /// Deux notes d'entrée possédées par `secret`, équilibrées avec 2 sorties.
-    fn valid_tx() -> (ShieldedSecret, Digest, ProvedTx) {
+    /// Construit le témoin d'une transaction 2-in/2-out équilibrée (1000/500 →
+    /// 900/580 + fee 20, arbre de profondeur DEPTH). `owner0_faux`, si fourni,
+    /// remplace l'owner de l'entrée 0 (test de liaison owner ≠ clé) — le reste de la
+    /// construction (commitment, arbre) suit fidèlement cet owner, SANS aucun assert
+    /// de cohérence : c'est la contrainte AIR de liaison qui doit mordre, pas un
+    /// panic hors-circuit.
+    fn setup(owner0_faux: Option<Digest>) -> (ShieldedSecret, Digest, [ProvedInput; 2], [SpendNote; 2]) {
         let secret = ShieldedSecret::from_felts(core::array::from_fn(|i| {
             Felt::from_canonical_u64(700 + i as u64).unwrap()
         }));
-        let owner = rescue::hash(proved_hash::domain::Domain::Owner, secret.as_felts());
+        let owner = rescue::hash(Domain::Owner, secret.as_felts());
+        let owner0 = owner0_faux.unwrap_or(owner);
 
-        let n0 = SpendNote { value: 1_000, owner, rho: digest(20), r: digest(30) };
+        let n0 = SpendNote { value: 1_000, owner: owner0, rho: digest(20), r: digest(30) };
         let n1 = SpendNote { value: 500, owner, rho: digest(40), r: digest(50) };
         let cm0 = rescue::note_commitment(n0.value, &n0.owner, &n0.rho, &n0.r);
         let cm1 = rescue::note_commitment(n1.value, &n1.owner, &n1.rho, &n1.r);
@@ -234,38 +241,58 @@ mod tests {
             ProvedInput { note: n0, path: path0, index: 0 },
             ProvedInput { note: n1, path: path1, index: 3 },
         ];
+        (secret, root, inputs, [o0, o1])
+    }
+
+    /// Transaction valide de référence (owner honnête, fee correct).
+    fn valid_tx() -> (ShieldedSecret, Digest, ProvedTx) {
+        let (secret, root, inputs, outputs) = setup(None);
         let intent = SigKeypair::generate();
-        let (proved_root, tx) = prove_tx(&secret, inputs, [o0, o1], 20, &intent);
+        let (proved_root, tx) = prove_tx(&secret, inputs, outputs, 20, &intent);
         assert_eq!(proved_root, root);
         (secret, root, tx)
     }
 
     #[test]
-    #[cfg_attr(debug_assertions, ignore = "sous-preuves gatées : --release")]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
     fn transaction_valide() {
         let (_s, root, tx) = valid_tx();
         assert!(verify_tx(&root, DEPTH, &tx));
     }
 
+    /// Déséquilibre : `fee` passé à `prove_tx` (999) NE correspond PAS à Σentrées −
+    /// Σsorties (réellement 20, cf. `setup`). `fill_balance` (monolith/trace.rs)
+    /// accumule `S` = Σ entrées − Σ sorties INDÉPENDAMMENT du `fee` fourni — c'est
+    /// l'ASSERTION publique `S[dernière ligne] == pi.fee` (monolith/air.rs) qui lie
+    /// les deux, et `pi.fee` est extrait tel quel du témoin (`w.fee`). Comme le
+    /// prouveur ET le vérificateur utilisent donc le MÊME `fee` faux (999) alors que
+    /// la trace réelle atteint `S = 20`, l'assertion est fausse relativement à la
+    /// trace commise : aucun panic (aucune vérification hors-circuit de l'équilibre
+    /// dans `build_monolith_trace`/`prove_monolith`), mais la preuve — bien générée —
+    /// ne peut pas satisfaire une assertion fausse et `verify_monolith` (donc
+    /// `verify_tx`) rejette. Même mécanisme que la falsification de `fee` dans
+    /// `monolith::air::tests::roundtrip_monolithe`, ici appliqué AVANT la preuve
+    /// plutôt qu'après.
     #[test]
-    #[cfg_attr(debug_assertions, ignore = "sous-preuves gatées : --release")]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
     fn desequilibre_rejete() {
-        let (_s, root, mut tx) = valid_tx();
-        // Prétendre une sortie plus grosse : l'équilibre natif casse.
-        tx.outputs[0].value += 1;
+        let (secret, root, inputs, outputs) = setup(None);
+        let intent = SigKeypair::generate();
+        let (proved_root, tx) = prove_tx(&secret, inputs, outputs, 999, &intent);
+        assert_eq!(proved_root, root);
         assert!(!verify_tx(&root, DEPTH, &tx));
     }
 
     #[test]
-    #[cfg_attr(debug_assertions, ignore = "sous-preuves gatées : --release")]
-    fn nk_falsifie_rejete() {
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
+    fn nullifier_falsifie_rejete() {
         let (_s, root, mut tx) = valid_tx();
-        tx.nk = digest(123); // la preuve de clé prouvait le vrai nk.
+        tx.nullifiers[0] = digest(123);
         assert!(!verify_tx(&root, DEPTH, &tx));
     }
 
     #[test]
-    #[cfg_attr(debug_assertions, ignore = "sous-preuves gatées : --release")]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
     fn output_commitment_falsifie_rejete() {
         let (_s, root, mut tx) = valid_tx();
         tx.output_commitments[0] = digest(321);
@@ -273,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(debug_assertions, ignore = "sous-preuves gatées : --release")]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
     fn tx_digest_falsifie_rejete() {
         let (_s, root, mut tx) = valid_tx();
         tx.tx_digest[0] ^= 1;
@@ -281,10 +308,30 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(debug_assertions, ignore = "sous-preuves gatées : --release")]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
     fn racine_erronee_rejetee() {
         let (_s, root, tx) = valid_tx();
         assert!(verify_tx(&root, DEPTH, &tx));
         assert!(!verify_tx(&digest(1), DEPTH, &tx));
+    }
+
+    /// Entrée d'un AUTRE owner : la note 0 porte `owner = digest(9999)` ≠
+    /// `H_owner(secret)`. `build_monolith_trace` ne fait AUCUN assert d'égalité — le
+    /// commitment est construit avec l'owner mensonger tel quel (comme le ferait un
+    /// prouveur malhonnête), et l'arbre/le chemin restent self-consistants avec ce
+    /// commitment (`proved_root == root` tient). SEULE la contrainte AIR de liaison
+    /// owner (« Consommation @0 » de `monolith::air::evaluate_transition`, qui force
+    /// l'owner consommé par le commitment de l'entrée == l'owner produit par la clé
+    /// dérivée du secret) mord — exactement le mécanisme de
+    /// `monolith::air::tests::liaison_owner_mord`, ici exercé via l'API publique
+    /// `prove_tx`/`verify_tx` plutôt que par forge white-box directe de la trace.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
+    fn entree_d_un_autre_owner_rejetee() {
+        let (secret, root, inputs, outputs) = setup(Some(digest(9999)));
+        let intent = SigKeypair::generate();
+        let (proved_root, tx) = prove_tx(&secret, inputs, outputs, 20, &intent);
+        assert_eq!(proved_root, root);
+        assert!(!verify_tx(&root, DEPTH, &tx));
     }
 }

@@ -3,13 +3,9 @@
 //! Tous les offsets sont dérivés par addition des tailles de groupe précédentes,
 //! sans littéraux magiques. Les groupes sont contigus et ne se chevauchent pas.
 
-// Bloc groupé : ces constantes sont désormais LUES par `trace.rs` (T2). L'allow
-// reste nécessaire malgré cela : `build_monolith_trace` n'est consommé que par le
-// test différentiel (`#[cfg(test)]`) tant qu'aucun point d'entrée public ne
-// l'appelle (arrivera avec l'AIR/`prove_monolith_tx` de T3/T5) — donc, en build
-// normal (hors tests), toute la chaîne reste hors du graphe d'atteignabilité de
-// rustc et ces constantes seraient sinon signalées mortes une à une.
-#[allow(dead_code)]
+// Bloc groupé : ces constantes sont LUES par `trace.rs`/`air.rs`, atteignables
+// depuis l'API publique du crate depuis 3z-a5 (`tx::prove_tx` → `prove_monolith` →
+// `build_monolith_trace`) — plus d'`allow(dead_code)` nécessaire.
 mod plan {
     // Offsets de groupes de colonnes (dérivés par addition).
     pub(crate) const KEY_OFF: usize = 0;
@@ -63,7 +59,6 @@ mod plan {
         std::cmp::max(256, 16 * depth)
     }
 }
-#[allow(unused_imports)] // même raison : consommés par les tâches 3z-a2/a3
 pub(crate) use plan::*;
 
 #[cfg(test)]

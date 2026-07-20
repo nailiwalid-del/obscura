@@ -15,12 +15,9 @@
 //!
 //! ⚠️ validity-only : aucune confidentialité ici (cf. avertissement du crate).
 //!
-//! `#[allow(dead_code)]` de module : `build_monolith_trace` n'a pour l'instant
-//! qu'un seul appelant, le test différentiel (`#[cfg(test)]`). En build normal
-//! (hors tests), rien dans le crate n'atteint encore ce module (aucun point
-//! d'entrée public) — l'AIR de T3 puis `prove_monolith_tx` de T5 le rendront
-//! atteignable ; l'allow tombera à ce moment-là.
-#![allow(dead_code)]
+//! `build_monolith_trace` est atteignable depuis l'API publique du crate depuis
+//! 3z-a5 (`prove_monolith` ← `tx::prove_tx`) : plus d'`allow(dead_code)` de module
+//! nécessaire.
 
 use crate::monolith::layout::*;
 use crate::rescue_round::{NUM_ROUNDS, STATE_WIDTH, TRACE_LEN as ROUND_LEN};

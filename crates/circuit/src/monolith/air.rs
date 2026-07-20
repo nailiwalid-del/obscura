@@ -19,14 +19,12 @@
 //! formule `base·(n−1) + Σ (n/cᵢ)·(cᵢ−1)` et la contrainte de blowup
 //! `next_pow2(base + |cycles| − 1) ≤ 16` (cf. calibration en tête de `degrees()`).
 //!
-//! ⚠️ validity-only : intégrité des segments, PAS confidentialité, PAS encore la
-//! cohérence inter-segments (3z-a4).
+//! ⚠️ validity-only : intégrité des segments ET cohérence inter-segments (liaisons
+//! par porteuses, 3z-a4), PAS confidentialité (witness-hiding = Phase 3z ultérieure).
 //!
-//! `#![allow(dead_code)]` de module : `prove_monolith`/`verify_monolith` n'ont pour
-//! l'instant qu'un appelant, les tests (`#[cfg(test)]`). En build normal, aucun point
-//! d'entrée public n'atteint encore ce module (`prove_monolith_tx` de 3z-a5 le fera) ;
-//! l'allow tombera à ce moment-là (comme `layout.rs`/`trace.rs`).
-#![allow(dead_code)]
+//! `prove_monolith`/`verify_monolith` sont atteignables depuis l'API publique du
+//! crate depuis 3z-a5 (`tx::prove_tx`/`tx::verify_tx`) : plus d'`allow(dead_code)`
+//! de module nécessaire.
 
 use crate::merkle_path::enforce_merkle_transition;
 use crate::monolith::layout::{
