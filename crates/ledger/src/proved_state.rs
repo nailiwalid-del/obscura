@@ -14,7 +14,11 @@
 //! ci-dessous (anchor → preuve → signature d'intention → nullifiers → application
 //! atomique) est inchangée.
 //!
-//! Hors périmètre (→ ledger/Phase 3z) : généralisation M-in/N-out, witness-hiding.
+//! Depuis 3z-b1, la preuve monolithique vérifiée ici est witness-hiding (HVZK en
+//! ROM — voir docs/STARK_STATEMENT.md, « Argument HVZK ») ; rien ne change côté
+//! ledger (blinding transparent au vérifieur).
+//!
+//! Hors périmètre (→ ledger/Phase 3z-c) : généralisation M-in/N-out.
 
 use crate::LedgerError;
 use circuit::{verify_tx, ProvedTx, INTENT_DOMAIN};

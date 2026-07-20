@@ -1,9 +1,18 @@
 //! Circuits de validité d'Obscura (AIR winterfell).
 //!
-//! ⚠️ **validity-only** : ces preuves établissent l'INTÉGRITÉ, PAS la
-//! confidentialité. Winterfell n'est pas zero-knowledge : la preuve ne masque pas
-//! le témoin. Ne jamais présenter une preuve d'ici comme `zk`/`private`/`shielded`.
-//! Le witness-hiding est un jalon séparé et gaté (« Phase 3z »).
+//! **Statut de confidentialité (3z-b1)** : la preuve MONOLITHIQUE — le chemin de
+//! consensus `tx::prove_tx`/`tx::verify_tx` (module `monolith`) — est
+//! **witness-hiding (HVZK dans le modèle de l'oracle aléatoire)** via des lignes
+//! de blinding (cf. docs/STARK_STATEMENT.md, « Witness-hiding du monolithe —
+//! argument HVZK »). Caveat obligatoire : honnête-vérifieur (Fiat-Shamir),
+//! prototype non audité, argument non formalisé au niveau publication — ne pas
+//! présenter comme « zero-knowledge » sans ces qualificatifs.
+//!
+//! ⚠️ Les gadgets AUTONOMES de ce crate (`owner_hash`, `sponge`, `merkle_*`,
+//! `membership`, `range_check`, `balance`, `key`, `spend`, `output`,
+//! `rescue_perm`, …) restent **validity-only** : ils établissent l'INTÉGRITÉ,
+//! pas la confidentialité — ne jamais les présenter comme
+//! `zk`/`private`/`shielded`.
 
 pub mod balance;
 pub mod key;
@@ -38,7 +47,10 @@ pub use sponge::{
 
 use winterfell::{Proof, ProofOptions};
 
-/// Preuve de VALIDITÉ (intégrité). **Pas** witness-hiding — voir l'avertissement du crate.
+/// Preuve de VALIDITÉ (intégrité). Witness-hiding (HVZK en ROM) UNIQUEMENT
+/// lorsqu'elle est produite par le monolithe (`tx::prove_tx`, lignes de blinding
+/// 3z-b1) ; produite par un gadget autonome, elle ne masque PAS son témoin —
+/// voir l'avertissement du crate.
 pub struct ValidityProof(pub Proof);
 
 /// Paramètres de preuve partagés (prototype), visant >= 95 bits conjecturés.

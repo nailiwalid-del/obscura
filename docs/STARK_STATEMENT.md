@@ -1,8 +1,15 @@
 # Statement de preuve zk-STARK — v0.2
 
-> **Phase 3 = validity-only.** L'implémentation initiale du circuit prouve
-> l'INTÉGRITÉ (P1–P7), pas la confidentialité : un STARK n'est pas zero-knowledge
-> par défaut. Le witness-hiding est un jalon séparé et gaté (« Phase 3z »). Voir
+> **Phase 3 = validity d'abord ; witness-hiding livré en 3z-b1 (monolithe).**
+> L'implémentation initiale du circuit prouvait l'INTÉGRITÉ (P1–P7) seulement —
+> un STARK n'est pas zero-knowledge par défaut. Depuis **3z-b1**, LA preuve de
+> consensus (le monolithe, `prove_tx`/`verify_tx`) est **witness-hiding (HVZK
+> dans le modèle de l'oracle aléatoire)** par lignes de blinding — voir l'entrée
+> 3z-b1 du journal et la section « Witness-hiding du monolithe — argument HVZK »
+> ci-dessous. Caveat : honnête-vérifieur, prototype non audité, argument non
+> formalisé au niveau publication. Les gadgets AUTONOMES du crate circuit
+> (sponge, balance, spend, … — hors chemin de consensus) restent validity-only.
+> Historique de la décision :
 > `docs/superpowers/specs/2026-07-15-phase3-decision-et-3a0-design.md`.
 >
 > **3a2 (fait) :** premier AIR = la **permutation** Rp64_256 (`crates/circuit`,
@@ -194,16 +201,44 @@
 > colonnes (3z-c), grinding FRI. Tests : différentiels par famille, matrice de
 > sabotage (déséquilibre, nk/owner falsifié, cm@feuille ET cm@47 anti-double-
 > dépense, feuille↔chemin, VIN/VOUT isolés), white-box par porteuse, e2e ledger,
-> roundtrip consensus `#[ignore]`. **⚠️ Toujours validity-only** : ce monolithe
-> réduit drastiquement ce qui est PUBLIÉ, mais ne rend PAS la preuve elle-même
-> witness-hiding (winterfell 0.13.1 confirmé sans support zk) — les requêtes de
-> trace peuvent encore fuiter des cellules témoins. **Ne jamais qualifier cette
-> preuve de `zk`/`private`/`shielded`.** Le witness-hiding reste **3z-b** (fork
-> winterfell ou stack alternative, à trancher au spec 3z-b).
+> roundtrip consensus `#[ignore]`. **⚠️ Validity-only à ce stade (avertissement
+> levé par 3z-b1, voir ci-dessous)** : ce monolithe réduisait drastiquement ce
+> qui est PUBLIÉ, mais ne rendait PAS la preuve elle-même witness-hiding
+> (winterfell 0.13.1 confirmé sans support zk natif) — les requêtes de trace
+> pouvaient encore fuiter des cellules témoins. La voie du witness-hiding a été
+> tranchée par le spike 3z-b0 (Voie A, lignes de blinding — ni fork winterfell ni
+> migration, `2026-07-20-3zb0-spike-rapport.md`) puis livrée en 3z-b1.
 >
-> **Reste hors Phase-3-validity** : **3z-b** (witness-hiding — fork winterfell ou
-> stack alternative, à trancher au spec 3z-b) et **3z-c** (généralisation
-> M-in/N-out, empilement accru des colonnes de trace).
+> **3z-b1 (fait) — WITNESS-HIDING DU MONOLITHE : LIGNES DE BLINDING AU NIVEAU
+> AIR** (`circuit::monolith`, voie du spike 3z-b0) : la preuve monolithique est
+> désormais **witness-hiding (HVZK dans le modèle de l'oracle aléatoire)**.
+> Mécanique : trace étendue à `next_pow2(used_rows(depth) + BLIND_ROWS)`
+> (profondeur 32 : 512 → **1024 lignes**), région de blinding `[used, trace_len)`
+> remplie d'aléa système **frais par preuve** (OsRng) dans TOUTES les colonnes
+> témoins, et **gating global** : chaque contrainte de transition est multipliée
+> par le sélecteur périodique `blind_off` (0 dès qu'une transition touche la
+> région de blinding). `BLIND_ROWS = 40 ≥ q(32) + OOD(2) + marge(6)`, verrouillé
+> par une assertion de construction contre tout changement de `proof_options`.
+> Les porteuses ne sont plus des polynômes constants (elles sautent vers l'aléa
+> à la ligne `used`) → leurs ouvertures ne valent plus le témoin en clair. API
+> inchangée (`prove_tx`/`verify_tx`/`ProvedTx`, blinding transparent au
+> vérifieur). Argument de sécurité : section « Witness-hiding du monolithe —
+> argument HVZK » ci-dessous (comptage `q+2 = 34 < b = 40`, esquisse de
+> simulateur). Tests : complétude (profondeur 2 et 32), masquage exhaustif par
+> colonne témoin + ouvertures DISJOINTES de deux preuves de la même tx,
+> soundness préservée (matrice de sabotage 3z-a + inertie des lignes de blinding
+> forgées), fraîcheur OsRng. **Bench réel (profondeur 32, une machine dev)** :
+> génération ≈ **1477,7 ms** (×2,33), vérification ≈ **3,0 ms** (×1,98), taille
+> ≈ **90,5 Kio** (×1,06) vs 3z-a (634 ms / 1,5 ms / 85,3 Kio, caducs) — coût
+> dominé par le doublement de trace, taille quasi inchangée. **Caveat** : HVZK
+> honnête-vérifieur en ROM, PAS de malicious-verifier ZK ni de « perfect ZK » ;
+> prototype non audité, argument non formalisé au niveau publication. Les
+> gadgets autonomes (`sponge`, `balance`, `spend`, …) et le banc `crates/zk-spike`
+> restent validity-only.
+>
+> **Reste hors Phase-3-validity** : **3z-c** (généralisation M-in/N-out,
+> empilement accru des colonnes de trace — levier additionnel de réduction de
+> taille de preuve). Le witness-hiding (3z-b) est livré.
 
 **Ce statement EST la règle de consensus d'une dépense valide.** Tout le reste du
 protocole s'organise autour de lui. Le mode transparent actuel (`apply_transparent`)
@@ -245,6 +280,104 @@ transaction (non-malléabilité, pas de rejeu de preuve sur une autre tx).
 - Le chemin de Merkle n'est plus révélé → on ne sait plus QUEL commitment est dépensé.
 - Le consensus vérifie enfin ce qu'il ne pouvait pas vérifier : liaison nullifier↔note
   existante, autorité de dépense, équilibre des montants (point 1 de la revue).
+
+## Witness-hiding du monolithe — argument HVZK (3z-b1)
+
+Depuis 3z-b1, la preuve monolithique (`prove_tx`/`verify_tx`) est revendiquée
+**witness-hiding**, au sens précis suivant : **zero-knowledge à vérifieur
+honnête (HVZK) dans le modèle de l'oracle aléatoire (ROM)** — et rien de plus.
+
+### Cadre exact de la revendication
+
+- **Non-interactif via Fiat-Shamir** : winterfell dérive tous les défis du
+  vérifieur — le point hors-domaine `z` et les positions des `q` requêtes FRI —
+  du TRANSCRIPT (hachages des engagements), modélisé comme un oracle aléatoire.
+  Les points d'évaluation révélés sont donc distribués uniformément et ne sont
+  PAS choisis par un adversaire : c'est exactement le cadre « honnête-vérifieur ».
+  Aucune revendication n'est faite contre un vérifieur malveillant qui choisirait
+  ses défis (malicious-verifier ZK), et il ne s'agit PAS de « perfect ZK ».
+- **Argument, pas preuve formelle** : ce qui suit est un argument de comptage
+  plus une esquisse de simulateur (style « randomized AIR », ethSTARK) —
+  suffisant pour un prototype, non formalisé au niveau publication.
+- **Prototype non audité**, comme tout Obscura.
+
+### Ce que la preuve révèle par colonne (verrouillé sur winterfell 0.13.1)
+
+Chaque colonne de trace est un polynôme `f` de degré `< n` (`n = trace_len`)
+interpolant ses `n` cellules sur le domaine de trace `H`. Par lecture du code
+source (spike 3z-b0, E1/E4 ; `winter-verifier` `composer.rs`), la preuve révèle
+par colonne :
+
+- `q = 32` **ouvertures de requête** : `f(xᵢ)` aux positions requêtées du
+  domaine LDE (chaque requête ouvre la ligne entière — toutes les colonnes) ;
+- `2` **évaluations OOD** : `f(z)` et `f(z·g)` (frame courant/suivant).
+
+Soit **`q + 2 = 34` évaluations par colonne**, chacune une combinaison linéaire
+à coefficients PUBLICS (dépendant du seul point d'évaluation) des `n` cellules
+de la colonne — les 34 points sont hors de `H` (points LDE décalés + `z`). Le
+reste de la preuve n'ouvre aucune cellule de trace supplémentaire : les
+ouvertures du polynôme de composition et le DEEP-check se recalculent comme
+fonctions déterministes de ces mêmes évaluations, des coefficients du transcript
+et des entrées publiques (E4, confirmé sur le vérifieur).
+
+### Comptage : 34 équations, 40 inconnues uniformes
+
+Chaque colonne témoin porte `b = BLIND_ROWS = 40` cellules d'aléa uniforme
+**frais par preuve** (région de blinding `[used, trace_len)`, OsRng), avec
+`b = q + 2 + 6 ≥ q + 2` verrouillé par une assertion de construction contre tout
+changement de `proof_options`. Ces cellules sont LIBRES : aucune contrainte de
+transition ne les lie (gating global `blind_off`) et aucune assertion ne vise
+une ligne `≥ used` (inertie testée white-box).
+
+Les 34 évaluations révélées sont des fonctions AFFINES des 40 cellules d'aléa
+(les cellules utiles — le témoin — fixent le terme constant, l'aléa fait le
+reste). Retrouver le témoin exigerait de résoudre 34 équations à 40 inconnues
+uniformes indépendantes : le système est **sous-déterminé** (`34 < 40`). Plus
+précisément, dès que la matrice 34×40 des coefficients (évaluations des
+polynômes de Lagrange des positions de blinding aux 34 points révélés) est de
+rang plein 34, le vecteur des 34 évaluations révélées est **uniforme et
+indépendant des cellules utiles** — pour tout témoin, la distribution des
+valeurs révélées est identique. Les 34 points étant distincts, hors de `H` et
+dérivés de l'oracle aléatoire (donc uniformes, non adverses), un défaut de rang
+est un événement négligeable : c'est ici que le modèle ROM intervient. La
+disjonction observée entre les ouvertures de deux preuves du même témoin (test
+de masquage 3z-b1c) est la manifestation empirique de cette uniformité.
+
+Le comptage vaut colonne par colonne ; l'aléa de blinding étant tiré
+indépendamment pour chaque colonne, l'argument s'étend au vecteur JOINT des
+ouvertures (les lignes entières révélées par requête).
+
+### Esquisse de simulateur
+
+Simulateur `S`, à partir des SEULES entrées publiques (`root`, `nullifiers`,
+`output_commitments`, `fee`, `depth`) :
+
+1. pour chaque colonne, échantillonner **uniformément** les `q + 2` évaluations
+   « révélées » (au lieu de les calculer depuis un témoin) ;
+2. en dériver les évaluations du polynôme de composition et du DEEP aux mêmes
+   points par les formules publiques du vérifieur (fonctions déterministes des
+   évaluations de trace, des coefficients du transcript et des entrées
+   publiques) ;
+3. bâtir les engagements Merkle et chemins d'authentification autour de ces
+   valeurs en **programmant l'oracle aléatoire** pour que les défis (`z`,
+   positions de requête) tombent sur les points choisis — latitude standard du
+   ROM.
+
+La transcription produite est distribuée comme une preuve réelle : dans une
+preuve honnête, les valeurs révélées sont elles-mêmes uniformes et indépendantes
+du témoin (comptage ci-dessus), et tout le reste de la preuve en est une
+fonction déterministe publique. Un distingueur entre transcription simulée et
+preuve réelle contredirait donc l'uniformité établie — la preuve ne révèle rien
+de plus que la validité du statement, ce qui est la définition du HVZK.
+
+Limites assumées de l'esquisse : la programmabilité de l'oracle est utilisée
+sans être formalisée (winterfell enchaîne des engagements réels), et l'argument
+de rang plein est probabiliste (probabilité d'échec négligeable, non bornée
+explicitement). Un passage au niveau publication exigerait de formaliser ces
+deux points. Par ailleurs, les entrées PUBLIQUES restent publiques par
+définition (root, nullifiers, output_commitments, fee) : le witness-hiding porte
+sur le témoin (notes, montants, `shielded_secret`, `nk`, chemins de Merkle),
+pas sur le graphe transactionnel observable au niveau réseau (phase 4).
 
 ## Cohérence commitment ↔ note chiffrée (P8, différé)
 

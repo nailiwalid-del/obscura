@@ -19,8 +19,12 @@
 //! formule `base·(n−1) + Σ (n/cᵢ)·(cᵢ−1)` et la contrainte de blowup
 //! `next_pow2(base + |cycles| − 1) ≤ 16` (cf. calibration en tête de `degrees()`).
 //!
-//! ⚠️ validity-only : intégrité des segments ET cohérence inter-segments (liaisons
-//! par porteuses, 3z-a4), PAS confidentialité (witness-hiding = Phase 3z ultérieure).
+//! **Witness-hiding (HVZK en ROM) depuis 3z-b1** : intégrité des segments,
+//! cohérence inter-segments (liaisons par porteuses, 3z-a4) ET masquage du
+//! témoin par lignes de blinding (gating global `blind_off`, région aléatoire
+//! `[used, trace_len)`). Argument + caveats (honnête-vérifieur, prototype non
+//! audité) : docs/STARK_STATEMENT.md, « Witness-hiding du monolithe — argument
+//! HVZK ».
 //!
 //! `prove_monolith`/`verify_monolith` sont atteignables depuis l'API publique du
 //! crate depuis 3z-a5 (`tx::prove_tx`/`tx::verify_tx`) : plus d'`allow(dead_code)`

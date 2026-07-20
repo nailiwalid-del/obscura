@@ -13,7 +13,10 @@
 //! coïncider avec les fonctions hors-circuit `rescue::note_commitment`,
 //! `merkle::leaf`, `merkle::fold`).
 //!
-//! ⚠️ validity-only : aucune confidentialité ici (cf. avertissement du crate).
+//! Witness-hiding (HVZK en ROM, 3z-b1) : le constructeur remplit aussi la région
+//! de blinding `[used_rows, trace_len)` d'aléa frais dans toutes les colonnes —
+//! c'est ce qui masque les ouvertures FRI/OOD (cf. docs/STARK_STATEMENT.md,
+//! « Witness-hiding du monolithe — argument HVZK »).
 //!
 //! `build_monolith_trace` est atteignable depuis l'API publique du crate depuis
 //! 3z-a5 (`prove_monolith` ← `tx::prove_tx`) : plus d'`allow(dead_code)` de module

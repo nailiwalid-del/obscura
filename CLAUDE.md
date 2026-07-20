@@ -14,25 +14,26 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
 - `crates/crypto` : hash, kem, sig, aead — testés
 - `crates/ledger` : notes engagées, nullifiers, Merkle (BLAKE3, prof. 16), tx, validation — testés
 - `crates/circuit` : circuit STARK **monolithe** (`monolith/`) — P1–P7 d'une tx
-  2-in/2-out en UNE SEULE trace/preuve (201 col × 512 lignes), publics minimaux
-  (root, nullifiers, output_commitments, fee), `ProvedTx` v2 — testé, benché
-  (≈634 ms génération, ≈1,5 ms vérification, ≈85,3 Kio/preuve). Validity-only
-  (pas encore witness-hiding, voir docs/STARK_STATEMENT.md)
+  2-in/2-out en UNE SEULE trace/preuve (201 col × 1024 lignes dont 40 lignes de
+  blinding), publics minimaux (root, nullifiers, output_commitments, fee),
+  `ProvedTx` v2 — **witness-hiding (HVZK en ROM)** depuis 3z-b1 (lignes de
+  blinding, gating global `blind_off`, aléa OsRng frais par preuve) — testé,
+  benché (≈1477,7 ms génération, ≈3,0 ms vérification, ≈90,5 Kio/preuve).
+  Caveat : honnête-vérifieur, prototype non audité (voir docs/STARK_STATEMENT.md,
+  « Argument HVZK »). Les gadgets autonomes du crate restent validity-only
 - `docs/PROTOCOL.md`, `docs/THREAT_MODEL.md` et `docs/STARK_STATEMENT.md` : spécification de référence
 - `cargo test` : suite verte (crypto/ledger/circuit)
 
-## Prochaine étape : PHASE 3z — witness-hiding puis généralisation
+## Prochaine étape : PHASE 3z — reste la généralisation
 
-Phase 3 validity-only est terminée (statement P1–P7, monolithe, intégration
-ledger, bench) — voir le journal de tête de docs/STARK_STATEMENT.md, c'est LA
-référence. Reste :
-1. **3z-b — witness-hiding** : le monolithe actuel prouve l'intégrité mais fuit
-   potentiellement des cellules témoins (winterfell 0.13.1 sans support zk,
-   confirmé). **Spike 3z-b0 fait** (`docs/superpowers/specs/2026-07-20-3zb0-spike-rapport.md`) :
-   voie tranchée = **lignes de blinding au niveau AIR** (ni fork winterfell ni
-   migration), démontrée sur code réel (`crates/zk-spike`). Reste 3z-b1 :
-   implémenter l'extension sur le monolithe + argument de sécurité + re-bench (~2×) ;
-2. **3z-c — généralisation M-in/N-out** : au-delà du 2-in/2-out figé, empilement
+Phase 3 validity (statement P1–P7, monolithe, intégration ledger, bench) ET
+**3z-b witness-hiding sont terminés** — voir le journal de tête de
+docs/STARK_STATEMENT.md, c'est LA référence. **3z-b1 fait** : lignes de blinding
+au niveau AIR (voie du spike 3z-b0, ni fork winterfell ni migration) — trace
+1024, gating global `blind_off`, OsRng frais par preuve, argument HVZK-ROM écrit
+(STARK_STATEMENT.md, « Argument HVZK »), bench ≈2× (1477,7 ms / 3,0 ms /
+90,5 Kio). Reste :
+1. **3z-c — généralisation M-in/N-out** : au-delà du 2-in/2-out figé, empilement
    accru des colonnes (levier de réduction de taille de preuve additionnel).
 Puis phase 4 (P2P PQ + Dandelion++ + test key privacy) et phase 5 (nœud/wallet/testnet).
 

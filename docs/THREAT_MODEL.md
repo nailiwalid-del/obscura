@@ -57,17 +57,24 @@ avant la phase 3.
 - **Anti-sabotage de notes** : nullifier lié au commitment (nf = PRF_nk(rho ‖ cm)) —
   deux notes de même rho ne partagent plus le même nullifier.
 
-## Security Claims — Phase 3 (validity-only)
+## Security Claims — Phase 3 (validité + witness-hiding 3z-b1)
 
-Le circuit de la Phase 3 est **validity-only** : il garantit l'**intégrité**
-(pas de forge, pas de double dépense, équilibre des montants, cohérence
-Merkle/nullifier) mais **PAS la confidentialité**. Tant que la couche
-zero-knowledge (jalon séparé « Phase 3z » : masquage trace + DEEP + permutations,
-audité) n'est pas livrée :
+Le circuit de la Phase 3 garantit l'**intégrité** (pas de forge, pas de double
+dépense, équilibre des montants, cohérence Merkle/nullifier). Depuis **3z-b1**,
+la preuve MONOLITHIQUE — le chemin de consensus `prove_tx`/`verify_tx` — est en
+outre **witness-hiding (HVZK dans le modèle de l'oracle aléatoire)** : lignes de
+blinding au niveau AIR, argument de comptage (`q+2 = 34 < b = 40`) + esquisse de
+simulateur dans `docs/STARK_STATEMENT.md` (« Witness-hiding du monolithe —
+argument HVZK »). Limites précises de cette revendication :
 
-- une preuve ne cache PAS forcément le témoin (montants, owner, secret) ;
-- aucune preuve ne doit être présentée comme `zk` / `private` / `shielded production` ;
-- types nommés `ValidityProof` / `ValidityCircuit` ; `ZkProof` réservé à une preuve
-  witness-hiding auditée.
+- **honnête-vérifieur** (Fiat-Shamir en ROM) — PAS de malicious-verifier ZK ni
+  de « perfect ZK » ; argument non formalisé au niveau publication ;
+- **prototype non audité** : ne pas présenter comme `shielded production` ;
+- les **gadgets autonomes** du crate circuit (sponge, balance, spend, … — hors
+  chemin de consensus) restent **validity-only** : ils ne masquent pas leur
+  témoin ;
+- types nommés `ValidityProof` / `ValidityCircuit` conservés ; `ZkProof` reste
+  réservé à une preuve witness-hiding AUDITÉE.
 
-Voir `docs/superpowers/specs/2026-07-15-phase3-decision-et-3a0-design.md`.
+Voir `docs/superpowers/specs/2026-07-15-phase3-decision-et-3a0-design.md` et
+`docs/superpowers/specs/2026-07-20-3zb1-witness-hiding-design.md`.

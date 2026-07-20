@@ -40,7 +40,9 @@ cargo test        # 26 tests : primitives, Merkle, paiement e2e, double dépense
 4. ⬜ Réseau P2P chiffré PQ + Dandelion++ + test de key privacy
 5. ⬜ Nœud, wallet CLI, testnet local multi-nœuds
 
-> Phase 3 (en cours) : circuit **validity-only** — intégrité prouvée, confidentialité
-> (zero-knowledge) NON encore livrée (jalon gaté « Phase 3z »).
+> Phase 3 : intégrité prouvée (P1–P7, monolithe) ; depuis 3z-b1 la preuve de
+> consensus est **witness-hiding (HVZK dans le modèle de l'oracle aléatoire)** —
+> caveat : honnête-vérifieur, prototype non audité (docs/STARK_STATEMENT.md,
+> « Argument HVZK »). Reste dans 3z : la généralisation M-in/N-out (3z-c).
 
 **Prototype pédagogique — pas d'audit de sécurité, ne pas utiliser en production.**
