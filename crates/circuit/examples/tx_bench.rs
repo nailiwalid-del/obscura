@@ -60,10 +60,16 @@ fn main() {
         ProvedInput { note: n1, path: path1, index: i1 },
     ];
 
-    // Génération.
+    // Génération. Les enc_notes (enveloppes chiffrées de sortie) sont opaques ici —
+    // seule leur présence/liaison dans tx_digest v3 compte pour le bench ; on passe
+    // des bundles factices (le chiffrement réel est côté wallet/ledger).
     let intent = crypto::sig::SigKeypair::generate();
+    let enc_notes = [
+        circuit::EncNote { kem_ct: vec![0u8; 1120], enc_note: vec![0u8; 96] },
+        circuit::EncNote { kem_ct: vec![0u8; 1120], enc_note: vec![0u8; 96] },
+    ];
     let t0 = Instant::now();
-    let (proved_root, tx) = prove_tx(&secret, inputs, [o0, o1], 20, &intent);
+    let (proved_root, tx) = prove_tx(&secret, inputs, [o0, o1], 20, &intent, enc_notes);
     let prove_ms = t0.elapsed().as_secs_f64() * 1e3;
     assert_eq!(proved_root, root);
 
