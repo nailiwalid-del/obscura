@@ -274,13 +274,24 @@ vecteurs de test croisés avec une seconde implémentation, et versioning explic
 La migration du code (merkle.rs, note.rs) se fait AVEC le circuit, jamais avant,
 pour garantir que l'arbre consensus et l'arbre prouvé sont identiques.
 
-**Hypothèse de padding (domaine étendu).** Les cellules de padding `PAD_ZERO*` des
-éponges et les zéros de préambule ne sont PAS assertés par le circuit : le hash prouvé
-établit `H(payload ‖ padding)`, pas `H(payload)` seul. C'est sûr sous la résistance
-aux collisions du sponge Rescue-Prime (un prouveur ne peut pas exhiber deux paddings
-distincts menant au même digest sur un payload donné), hypothèse déjà présente dans
-`SpongeAir`/`merkle_path` v1. Non exploitable sans casser cette résistance ; à
-resserrer (assertions de padding explicites) si le modèle de menace l'exige.
+**Padding assertés — préambule canonique pleinement contraint (monolithe).** Les
+cellules de padding des éponges du monolithe sont **désormais assertées à zéro**
+(`push_preamble`, correction post-revue 3z-a) : toutes les cellules ABSORBÉES
+au-delà de la longueur logique `3 + payload_len + 1` jusqu'à la frontière de bloc
+`⌈m/8⌉·8` — soit les 15 cellules `PAD_ZERO*` de chaque commitment (préambule
+17 → 32, éponges U₀/U₁/O₀/O₁) et les **4 cellules du bloc partiel de chaque merge
+de Merkle** (préambule 12, bloc de 16 cellules — zéro-remplissage de trace, même
+classe de liberté). Sans ces assertions, le hash prouvé établissait
+`H(payload ‖ junk)` au lieu de `H(payload)` : un prouveur pouvait publier un
+`cm' = H(note ‖ junk)` internement cohérent mais HORS du schéma canonique (aucune
+note ne recalcule ce commitment), ou un nœud de Merkle non canonique — violation
+de « hash jamais tronqué ». Forges white-box RED→GREEN
+(`padding_non_zero_rejete`, `padding_merge_non_zero_rejete`) : les traces forgées
+passaient sans les assertions (cellules réellement libres, confirmé), sont
+rejetées avec. Comptage : `num_assertions = 167 + 24·depth` (avant :
+`107 + 16·depth`). Les AIR v1 autonomes (`SpongeAir`, `merkle_path`) conservent
+l'hypothèse à domaine étendu (sûre sous résistance aux collisions de
+Rescue-Prime) — seule la règle de consensus (le monolithe) exigeait le resserrage.
 
 ### Précision d'implémentation (v0.2) — où `dual_hash` s'applique réellement
 

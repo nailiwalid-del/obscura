@@ -34,7 +34,7 @@ use crate::monolith::layout::{
 };
 use crate::monolith::trace::{build_monolith_trace, MonolithWitness};
 use crate::rescue_round::{enforce_round_block, periodic_ark_columns, STATE_WIDTH};
-use crate::sponge::{enforce_sponge_transition, locate, RATE_START};
+use crate::sponge::{enforce_sponge_transition, locate, RATE_START, RATE_WIDTH};
 use crate::ValidityProof;
 use proved_hash::digest::DIGEST_FELTS;
 use proved_hash::domain::{Domain, ENCODING_VERSION};
@@ -128,10 +128,17 @@ pub(crate) struct MonolithAir {
 }
 
 /// Nombre d'assertions (publiques uniquement) en fonction de la profondeur.
-/// KEY(16) + 2·U(28) + 2·M(8·depth+4) + 2·O(12) + BAL(3) = 107 + 16·depth.
+///
+/// `push_preamble` émet 8 assertions fixes (capacité 4 + VERSION/tag/LEN/PAD_ONE)
+/// **+ les PAD_ZERO\*** : les cellules absorbées au-delà de la longueur logique
+/// `3 + payload_len + 1` jusqu'à la frontière de bloc `⌈m/8⌉·8`, soit :
+///   - commitment (m=32, p=13) : cellules 17..32 → **15** ;
+///   - merge Merkle (m=12, p=8) : cellules 12..16 → **4** (bloc partiel) ;
+///   - clé/feuille/nullifier (m ∈ {8, 8, 16}, préambules pleins) → 0.
+/// KEY(16) + 2·U(28+15) + 2·M((8+4)·depth+4) + 2·O(12+15) + BAL(3) = 167 + 24·depth.
 /// BAL(3) = S[0]=0, S[l−1]=fee, VACC[0]=0 (ancrage anti-inflation de l'entrée 0).
 fn num_assertions(depth: usize) -> usize {
-    16 + 2 * 28 + 2 * (8 * depth + 4) + 2 * 12 + 3
+    16 + 2 * (28 + 15) + 2 * (12 * depth + 4) + 2 * (12 + 15) + 3
 }
 
 impl winterfell::Air for MonolithAir {
@@ -563,10 +570,10 @@ impl winterfell::Air for MonolithAir {
     }
 }
 
-/// Assertions de préambule d'une éponge (capacité + VERSION/tag/LEN/PAD_ONE), à la
-/// ligne `seg_start`, aux colonnes `col_off..col_off+20`. Positions issues de
-/// `locate` DÉCALÉES par l'offset de colonne et la ligne de début de segment.
-/// N'asserte AUCUN témoin (payload jamais public ici).
+/// Assertions de préambule d'une éponge (capacité + VERSION/tag/LEN/PAD_ONE +
+/// PAD_ZERO\*), à la ligne `seg_start`, aux colonnes `col_off..col_off+20`.
+/// Positions issues de `locate` DÉCALÉES par l'offset de colonne et la ligne de
+/// début de segment. N'asserte AUCUN témoin (payload jamais public ici).
 fn push_preamble(
     a: &mut Vec<Assertion<BaseElement>>,
     seg_start: usize,
@@ -589,6 +596,21 @@ fn push_preamble(
     ] {
         let (row, col) = locate(i);
         a.push(Assertion::single(col_off + col, seg_start + row, BaseElement::new(val)));
+    }
+    // PAD_ZERO* : toutes les cellules ABSORBÉES au-delà de la longueur LOGIQUE
+    // `3 + payload_len + 1`, jusqu'à la frontière de bloc `⌈m/8⌉·8` (couvre à la
+    // fois le PAD_ZERO* du resize — commitment, 17..32 — ET le zéro-remplissage du
+    // bloc partiel — merge m=12, cellules 12..16). La contrainte d'absorption les
+    // ADDITIONNE au rate : les laisser libres permettrait de prouver
+    // `H(payload ‖ junk)` au lieu du `H(payload)` canonique (« hash jamais
+    // tronqué ») — cm'/node' internement cohérents mais hors du schéma. On les
+    // épingle donc à ZÉRO. No-op quand le préambule remplit exactement ses blocs
+    // (clé, feuille, nullifier).
+    let logical = 3 + payload_len + 1;
+    let cells = (m as usize).div_ceil(RATE_WIDTH) * RATE_WIDTH;
+    for i in logical..cells {
+        let (row, col) = locate(i);
+        a.push(Assertion::single(col_off + col, seg_start + row, BaseElement::ZERO));
     }
 }
 
@@ -951,6 +973,41 @@ mod tests {
     #[cfg_attr(debug_assertions, ignore = "trace forgée : générer en --release")]
     fn liaison_vin_isole_mord() {
         assert!(!verdict_forge(Forge::ValeurBalEntrees(900)), "VIN seul doit mordre");
+    }
+
+    /// PAD_ZERO* du COMMITMENT (préambule canonique) : l'entrée 0 publie
+    /// cm' = H(payload ‖ junk) — une cellule de padding (idx 17) non nulle, digest
+    /// recalculé, cascade feuille/nullifier/arbre/porteuses HONNÊTE sur cm'. La
+    /// trace est entièrement self-consistante (l'absorption absorbe le junk, les
+    /// rondes suivent) : SEULES les assertions PAD_ZERO la distinguent d'une trace
+    /// honnête. Ce qu'elles empêchent : publier un commitment HORS du schéma
+    /// canonique (LEN annonce 13 mais 15 cellules de junk sont absorbées → cm'
+    /// n'est le `note_commitment` d'AUCUNE note) — violation de « hash jamais
+    /// tronqué ». RED vérifié en neutralisant le bloc PAD_ZERO de `push_preamble`
+    /// (compte `num_assertions` réajusté ENSEMBLE, non committé) : la forge passait.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "trace forgée : générer en --release")]
+    fn padding_non_zero_rejete() {
+        assert!(verdict_forge(Forge::Aucune), "trace honnête acceptée");
+        assert!(
+            !verdict_forge(Forge::PaddingCommitment(41)),
+            "PAD_ZERO ≠ 0 (commitment) doit mordre"
+        );
+    }
+
+    /// PAD_ZERO* du MERGE de Merkle (bloc partiel m=12 → 16 cellules de trace, 4
+    /// libres) : node' = H(l0 ‖ l1 ‖ junk), arbre REBÂTI sur node' (root' partagée
+    /// M0/M1, publics relus de la trace) → trace self-consistante, seule l'assertion
+    /// PAD_ZERO du merge la rejette. Même classe d'attaque que le commitment : un
+    /// nœud de Merkle hors du schéma canonique. RED vérifié conjointement avec
+    /// `padding_non_zero_rejete` (même neutralisation, non committée).
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "trace forgée : générer en --release")]
+    fn padding_merge_non_zero_rejete() {
+        assert!(
+            !verdict_forge(Forge::PaddingMerkle(43)),
+            "PAD_ZERO ≠ 0 (merge Merkle) doit mordre"
+        );
     }
 
     /// Roundtrip HONNÊTE à profondeur CONSENSUS (32, trace_len 512) : prouve et

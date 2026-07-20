@@ -23,6 +23,8 @@ use crate::monolith::layout::*;
 use crate::rescue_round::{NUM_ROUNDS, STATE_WIDTH, TRACE_LEN as ROUND_LEN};
 use crate::spend::SpendNote;
 use crate::sponge::{sponge_rows, RATE_START, TRACE_WIDTH};
+#[cfg(test)]
+use crate::sponge::{INJECT_START, RATE_WIDTH};
 use crate::tx::ProvedInput;
 use proved_hash::digest::{Digest, ShieldedSecret, DIGEST_FELTS};
 use proved_hash::domain::{sponge_preamble, Domain, ENCODING_VERSION};
@@ -426,6 +428,22 @@ pub(crate) enum Forge {
     /// diffèrent de leurs porteuses (les gates VOUT restent honnêtes) : isole la
     /// famille VIN de la famille VOUT.
     ValeurBalEntrees(u64),
+    /// PAD_ZERO* non canonique dans le COMMITMENT de l'entrée 0 : la cellule de
+    /// padding idx 17 du préambule (première cellule PAD_ZERO, ligne 15, inject +1)
+    /// vaut `v ≠ 0`. L'absorption ADDITIONNE cette cellule au rate → le digest
+    /// devient cm' = H(payload ‖ v ‖ 0…), INTERNEMENT cohérent (rondes/absorptions
+    /// valides), et l'aval est recalculé en cascade honnête sur cm' (feuille,
+    /// nullifier, arbre, porteuses CM_C/LEAF_C). SEULE l'assertion PAD_ZERO
+    /// distingue la forge : sans elle, un prouveur publie un commitment HORS du
+    /// schéma canonique (LEN annonce 13 mais 15 cellules de junk sont absorbées) —
+    /// violation de « hash jamais tronqué ».
+    PaddingCommitment(u64),
+    /// PAD_ZERO* non canonique dans le premier MERGE du chemin M0 : la cellule 12
+    /// du préambule (bloc partiel m=12 → 16 cellules de trace ; ligne 7, inject +4)
+    /// vaut `v ≠ 0` → node' = H(l0 ‖ l1 ‖ v ‖ 0…). L'arbre est REBÂTI sur node'
+    /// (root' partagée par M0 ET M1, publics relus de la trace) → trace
+    /// self-consistante. SEULE l'assertion PAD_ZERO du merge la rejette.
+    PaddingMerkle(u64),
     /// Inflation par VACC[0] libre : le bloc d'équilibre de l'entrée 0 démarre à
     /// VACC[0] = −k (au lieu de 0) ; ses bits décomposent `valeur₀ + k` de sorte que
     /// VACC@60 = valeur₀ (porteuse VIN honnête, liaison intacte) mais S encaisse
@@ -532,7 +550,23 @@ pub(crate) fn build_monolith_trace_forge(w: &MonolithWitness, forge: Forge) -> T
             _ => note.owner,
         };
         let commit_payload = note_commit_payload(note.value, &owner_commit, &note.rho, &note.r);
-        let cm_rows = sponge_rows_for(Domain::NoteCommitment, &commit_payload);
+        // Padding non canonique (forge PaddingCommitment sur i==0) : même préambule
+        // resized PAD_ZERO*, mais la cellule idx 17 (première PAD_ZERO) vaut v ≠ 0.
+        // La capacité reste 32 et l'éponge est rejouée sur ce préambule forgé → le
+        // digest cm' = H(payload ‖ v ‖ 0…) cascade honnêtement dans tout l'aval.
+        let cm_rows = match forge {
+            Forge::PaddingCommitment(v) if i == 0 => {
+                let mut preamble: Vec<BaseElement> =
+                    sponge_preamble(Domain::NoteCommitment, &commit_payload)
+                        .iter()
+                        .map(|f| f.to_winter())
+                        .collect();
+                preamble.resize(absorbed_len(preamble.len()), BaseElement::ZERO);
+                preamble[17] = BaseElement::new(v); // première cellule PAD_ZERO
+                sponge_rows(&preamble)
+            }
+            _ => sponge_rows_for(Domain::NoteCommitment, &commit_payload),
+        };
         segment(&mut rows, &cm_rows, CM_ROWS_START, u_off);
         let cm = read_digest(&cm_rows, cm_rows.len() - 1, RATE_START); // CM_C producteur
 
@@ -588,11 +622,65 @@ pub(crate) fn build_monolith_trace_forge(w: &MonolithWitness, forge: Forge) -> T
     }
 
     // --- Arbre reconstruit à partir des feuilles injectées → root/chemins cohérents. ---
-    let (_root, path0, path1) = build_tree_from_leaves(&leaves_tree[0], &leaves_tree[1]);
-    let m0 = crate::merkle_path::path_rows(&leaves_tree[0], &path0, 0);
-    segment(&mut rows, &m0, 0, M0_OFF);
-    let m1 = crate::merkle_path::path_rows(&leaves_tree[1], &path1, 3);
-    segment(&mut rows, &m1, 0, M1_OFF);
+    if let Forge::PaddingMerkle(v) = forge {
+        // Merge 0 de M0 forgé : node' = H(l0 ‖ l1 ‖ v ‖ 0…). On rejoue l'éponge
+        // honnête du merge, on écrase la cellule PAD_ZERO idx 12 (ligne 7, inject +4)
+        // PUIS on recalcule le bloc 1 (absorption + 7 rondes) : la trace reste une
+        // éponge VALIDE pour ce junk (capacité 12 inchangée). L'arbre est rebâti sur
+        // node' pour que M0 ET M1 partagent la même root' (publics relus de la trace).
+        use proved_hash::merkle;
+        let l1 = merkle::leaf(&digest(9001));
+        let l2 = merkle::leaf(&digest(9002));
+        let mut payload = Vec::with_capacity(2 * DIGEST_FELTS);
+        payload.extend_from_slice(&leaves_tree[0].0);
+        payload.extend_from_slice(&l1.0);
+        let preamble: Vec<BaseElement> = sponge_preamble(Domain::MerkleNode, &payload)
+            .iter()
+            .map(|f| f.to_winter())
+            .collect();
+        let mut sp = sponge_rows(&preamble); // 16 lignes, capacité 12 (bloc 1 partiel)
+        sp[7][INJECT_START + 4] = BaseElement::new(v); // cellule PAD_ZERO forgée
+        // Rejoue le bloc 1 : état permuté de la ligne 7 + inject (forgé), 7 rondes.
+        let mut st: [BaseElement; STATE_WIDTH] = core::array::from_fn(|c| sp[7][c]);
+        for j in 0..RATE_WIDTH {
+            st[RATE_START + j] += sp[7][INJECT_START + j];
+        }
+        for r in 0..NUM_ROUNDS {
+            sp[8 + r][..STATE_WIDTH].copy_from_slice(&st);
+            Rp64_256::apply_round(&mut st, r);
+        }
+        sp[8 + NUM_ROUNDS][..STATE_WIDTH].copy_from_slice(&st);
+        let node_f = read_digest(&sp, 8 + NUM_ROUNDS, RATE_START);
+
+        // M0 : bloc 0 = éponge forgée + témoins (cur=l0, sib=l1, bit=0 — feuille en
+        // index 0), puis merge HONNÊTE (node', n_right) via path_rows (chaînage : le
+        // cur du bloc 1 == rate de la ligne 15 = node', contrainte `chain` satisfaite).
+        let n_right = merkle::node(&l2, &leaves_tree[1]);
+        let l0_be: [BaseElement; DIGEST_FELTS] =
+            core::array::from_fn(|k| leaves_tree[0].0[k].to_winter());
+        let l1_be: [BaseElement; DIGEST_FELTS] = core::array::from_fn(|k| l1.0[k].to_winter());
+        let mut m0: Vec<[BaseElement; 29]> = Vec::with_capacity(32);
+        for row20 in &sp {
+            let mut row = [BaseElement::ZERO; 29];
+            row[..TRACE_WIDTH].copy_from_slice(row20);
+            row[TRACE_WIDTH..TRACE_WIDTH + DIGEST_FELTS].copy_from_slice(&l0_be);
+            row[TRACE_WIDTH + DIGEST_FELTS..TRACE_WIDTH + 2 * DIGEST_FELTS]
+                .copy_from_slice(&l1_be);
+            // bit = 0 (dernière colonne) : feuille 0 à l'index 0.
+            m0.push(row);
+        }
+        m0.extend(crate::merkle_path::path_rows(&node_f, &[n_right], 0));
+        segment(&mut rows, &m0, 0, M0_OFF);
+        // M1 : chemin honnête de l3 (index 3) dans l'arbre rebâti sur node' → root'.
+        let m1 = crate::merkle_path::path_rows(&leaves_tree[1], &[l2, node_f], 3);
+        segment(&mut rows, &m1, 0, M1_OFF);
+    } else {
+        let (_root, path0, path1) = build_tree_from_leaves(&leaves_tree[0], &leaves_tree[1]);
+        let m0 = crate::merkle_path::path_rows(&leaves_tree[0], &path0, 0);
+        segment(&mut rows, &m0, 0, M0_OFF);
+        let m1 = crate::merkle_path::path_rows(&leaves_tree[1], &path1, 3);
+        segment(&mut rows, &m1, 0, M1_OFF);
+    }
 
     // --- Sorties (honnêtes, SAUF la sortie 0 gonflée de k pour Forge::VaccInitial :
     //     commitment + porteuse VOUT + bloc BAL cohérents à la NOUVELLE valeur). ---
