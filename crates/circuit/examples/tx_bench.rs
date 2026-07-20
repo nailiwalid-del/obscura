@@ -1,7 +1,8 @@
-//! 3d — Bench d'une transaction prouvée complète (2-in/2-out) à profondeur consensus.
+//! Bench d'une transaction prouvée complète (2-in/2-out) à profondeur consensus (32).
 //!
-//! Mesure le temps de génération/vérification et la taille de preuve d'une `ProvedTx`,
-//! pour évaluer la faisabilité et informer la Phase 3z. Lancer en RELEASE :
+//! Mesure le temps de génération/vérification et la taille d'une preuve `ProvedTx`
+//! v2 (circuit P1–P7 monolithique). Preuve unique remplace les ~219 Kio (15 preuves v1).
+//! Lancer en RELEASE :
 //!   cargo run --release --example tx_bench -p circuit
 
 use std::time::Instant;
