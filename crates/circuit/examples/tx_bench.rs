@@ -1,7 +1,9 @@
 //! Bench d'une transaction prouvée complète (2-in/2-out) à profondeur consensus (32).
 //!
 //! Mesure le temps de génération/vérification et la taille d'une preuve `ProvedTx`
-//! v2 (circuit P1–P7 monolithique). Preuve unique remplace les ~219 Kio (15 preuves v1).
+//! v2 (circuit P1–P7 monolithique) WITH WITNESS-HIDING (lignes de blinding en AIR).
+//! Trace étendue à 1024 lignes (vs 512 validity-only), blowup = 16.
+//! Preuve unique remplace les ~219 Kio (15 preuves v1).
 //! Lancer en RELEASE :
 //!   cargo run --release --example tx_bench -p circuit
 
@@ -74,8 +76,17 @@ fn main() {
     let verify_ms = t1.elapsed().as_secs_f64() * 1e3 / V as f64;
 
     let bytes = total_proof_bytes(&tx);
+    println!("=== WITNESS-HIDING (3z-b1, blinding AIR) ===");
     println!("génération  : {prove_ms:8.1} ms");
     println!("vérification: {verify_ms:8.1} ms  (moy. sur {V})");
     println!("taille preuve totale : {bytes} o  ({:.1} Kio)", bytes as f64 / 1024.0);
-    println!("  = 1 SEULE preuve STARK monolithique (P1–P7, v2)");
+    println!("  = 1 SEULE preuve STARK monolithique (P1–P7, trace 1024 lignes avec blinding)");
+    println!();
+    println!("=== BASELINE (3z-a, validity-only) ===");
+    println!("génération  :    634.0 ms");
+    println!("vérification:      1.5 ms");
+    println!("taille preuve totale : 85.3 Kio (trace 512 lignes)");
+    println!();
+    println!("Δ facteur vs baseline: {:.2}× génération, {:.2}× vérification, {:.2}× taille",
+        prove_ms / 634.0, verify_ms / 1.5, bytes as f64 / 1024.0 / 85.3);
 }
