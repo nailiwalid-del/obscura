@@ -879,6 +879,31 @@ mod tests {
         assert!(!verdict_forge(Forge::ValeurBal(0, 900)), "value bloc ≠ value commitment doit mordre");
     }
 
+    /// LIAISON CM@47 (nullifier↔cm, anti-double-dépense) : nullifier calculé sur un
+    /// AUTRE cm que celui produit par le commitment de l'entrée → rejet. La forge ne
+    /// touche QUE les cellules cm@47 (inject cols +15..+19 ligne 47, DISJOINTES de
+    /// rho@47 en +12..+15) : commitment, feuille, arbre et porteuse CM_C honnêtes.
+    /// RED vérifié en désactivant localement la contrainte cm@47 (s47 → zéro dans la
+    /// famille CM uniquement, non committé) : la forge passait alors → le test cible
+    /// bien exactement cette contrainte.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "trace forgée : générer en --release")]
+    fn liaison_cm_nullifier_mord() {
+        assert!(!verdict_forge(Forge::CmNullifier(0, dg(560))), "cm du nullifier ≠ cm produit doit mordre");
+    }
+
+    /// ISOLATION VIN : bloc BAL 0 forgé à 900, compensé sur le bloc BAL 1 (deux blocs
+    /// d'ENTRÉE, même signe) → Σ signée reste fee, les gates VOUT restent honnêtes,
+    /// SEULS VIN[0]/VIN[1] diffèrent de leurs porteuses. Un bug du seul gate VIN ne
+    /// peut plus être masqué par le gate VOUT (contrairement à `liaison_valeurs_mord`
+    /// qui exerce VIN[0] ET VOUT[0]). RED vérifié en désactivant localement les deux
+    /// consommations VACC de VIN (non committé) : la forge passait alors.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "trace forgée : générer en --release")]
+    fn liaison_vin_isole_mord() {
+        assert!(!verdict_forge(Forge::ValeurBalEntrees(900)), "VIN seul doit mordre");
+    }
+
     /// Roundtrip HONNÊTE à profondeur CONSENSUS (32, trace_len 512) : prouve et
     /// vérifie le monolithe complet 2-in/2-out. Valide de bout en bout le fix de
     /// complétude BAL (S constant au-delà de 256) ET l'ensemble des liaisons à la

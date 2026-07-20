@@ -391,13 +391,26 @@ pub(crate) enum Forge {
     /// Cm CONSOMMÉ dans la feuille de l'entrée `i` ≠ cm produit par le commitment.
     /// Aval recalculé : feuille_i et l'arbre (root/chemins).
     CmFeuille(usize, Digest),
+    /// Cm CONSOMMÉ dans le NULLIFIER de l'entrée `i` ≠ cm produit par le commitment
+    /// (cellules cm@47, cols +15..+19 — DISJOINTES de rho@47 en +12..+15). C'est la
+    /// liaison anti-double-dépense : sans elle, un nullifier peut être calculé sur un
+    /// autre cm que celui réellement dépensé. Aval recalculé : nullifier_i (nf change) ;
+    /// commitment/feuille/arbre amont honnêtes.
+    CmNullifier(usize, Digest),
     /// Feuille INJECTÉE dans le chemin de l'entrée `i` ≠ feuille produite par le sponge.
     /// Aval recalculé : l'arbre (root/chemins) pour la feuille forgée.
     LeafChemin(usize, Digest),
     /// Valeur du bloc d'équilibre `i` ≠ value du commitment (porteuse VIN/VOUT).
-    /// Aval recalculé : équilibre, avec compensation sur la sortie 0 pour garder
-    /// `S_final = fee` (sinon l'assertion S rejette AVANT la liaison).
+    /// Aval recalculé : équilibre, avec compensation sur le bloc OPPOSÉ (entrée→
+    /// sortie 0, sortie→entrée 0) pour garder `S_final = fee` (sinon l'assertion S
+    /// rejette AVANT la liaison). NB : exerce donc DEUX gates à la fois (celui du
+    /// bloc forgé + celui du bloc de compensation).
     ValeurBal(usize, u64),
+    /// Valeur du bloc BAL 0 forgée, compensée sur le bloc BAL 1 — deux blocs
+    /// d'ENTRÉE (même signe +) → Σ signée reste fee et SEULS les gates VIN[0]/VIN[1]
+    /// diffèrent de leurs porteuses (les gates VOUT restent honnêtes) : isole la
+    /// famille VIN de la famille VOUT.
+    ValeurBalEntrees(u64),
 }
 
 /// Arbre de profondeur 2 à partir des FEUILLES injectées directement (idx 0 et 3,
@@ -477,10 +490,16 @@ pub(crate) fn build_monolith_trace_forge(w: &MonolithWitness, forge: Forge) -> T
             Forge::RhoNullifier(fi, a) if fi == i => a,
             _ => note.rho,
         };
+        // cm consommé dans le nullifier (forge CmNullifier — cellules cm@47,
+        // DISJOINTES de rho@47) ; commitment/feuille/porteuse CM_C restent honnêtes.
+        let cm_nf = match forge {
+            Forge::CmNullifier(fi, a) if fi == i => a,
+            _ => cm,
+        };
         let mut nf_payload = Vec::with_capacity(3 * DIGEST_FELTS);
         nf_payload.extend_from_slice(&nk_nf.0);
         nf_payload.extend_from_slice(&rho_nf.0);
-        nf_payload.extend_from_slice(&cm.0);
+        nf_payload.extend_from_slice(&cm_nf.0);
         let nf_rows = sponge_rows_for(Domain::Nullifier, &nf_payload);
         segment(&mut rows, &nf_rows, NF_ROWS_START, u_off);
 
@@ -523,13 +542,23 @@ pub(crate) fn build_monolith_trace_forge(w: &MonolithWitness, forge: Forge) -> T
         }
     }
 
-    // --- Équilibre (forge ValeurBal : bloc `i` forgé, compensation sur sortie 0). ---
-    if let Forge::ValeurBal(i, autre) = forge {
-        let delta = autre as i128 - amounts[i] as i128;
-        amounts[i] = autre;
-        // Compense sur le côté opposé pour garder S_final = fee : entrée (+) ↔ sortie (−).
-        let comp = if i < 2 { 2 } else { 0 };
-        amounts[comp] = (amounts[comp] as i128 + delta) as u64;
+    // --- Équilibre (forges de montants — S_final reste = fee dans les deux cas). ---
+    match forge {
+        // Bloc `i` forgé, compensation sur le côté OPPOSÉ (exerce 2 gates VIN+VOUT).
+        Forge::ValeurBal(i, autre) => {
+            let delta = autre as i128 - amounts[i] as i128;
+            amounts[i] = autre;
+            let comp = if i < 2 { 2 } else { 0 };
+            amounts[comp] = (amounts[comp] as i128 + delta) as u64;
+        }
+        // Bloc 0 forgé, compensation sur le bloc 1 (même signe +) : SEULS les gates
+        // VIN diffèrent — isolation de la famille VIN.
+        Forge::ValeurBalEntrees(autre) => {
+            let delta = autre as i128 - amounts[0] as i128;
+            amounts[0] = autre;
+            amounts[1] = (amounts[1] as i128 - delta) as u64;
+        }
+        _ => {}
     }
     fill_balance(&mut rows, amounts);
 
