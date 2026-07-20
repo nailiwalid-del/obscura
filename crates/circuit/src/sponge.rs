@@ -14,18 +14,28 @@
 //!
 //! ⚠️ validity-only : intégrité, PAS confidentialité.
 
-use crate::rescue_round::{
-    apply_matrix, apply_sbox, periodic_ark_columns, NUM_ROUNDS, STATE_WIDTH, TRACE_LEN,
-};
+// CONSENSUS : le monolithe réutilise les helpers `pub(crate)`
+// (`enforce_sponge_transition`, `sponge_rows`, `locate`, les constantes de
+// layout). L'AIR/prouveur standalone (`prove_sponge` & co) est gaté `dev-circuits`.
+use crate::rescue_round::{apply_matrix, apply_sbox, NUM_ROUNDS, STATE_WIDTH, TRACE_LEN};
+#[cfg(feature = "dev-circuits")]
+use crate::rescue_round::periodic_ark_columns;
+#[cfg(feature = "dev-circuits")]
 use crate::ValidityProof;
+#[cfg(feature = "dev-circuits")]
 use proved_hash::digest::{Digest, DIGEST_FELTS};
+#[cfg(feature = "dev-circuits")]
 use proved_hash::domain::{sponge_preamble, Domain, ENCODING_VERSION};
+#[cfg(feature = "dev-circuits")]
 use proved_hash::felt::Felt;
 use winter_crypto::hashers::Rp64_256;
 use winter_math::fields::f64::BaseElement;
 use winter_math::FieldElement;
+#[cfg(feature = "dev-circuits")]
 use winterfell::crypto::{hashers::Blake3_256, DefaultRandomCoin, MerkleTree};
+#[cfg(feature = "dev-circuits")]
 use winterfell::matrix::ColMatrix;
+#[cfg(feature = "dev-circuits")]
 use winterfell::{
     AirContext, Assertion, AuxRandElements, CompositionPoly, CompositionPolyTrace,
     ConstraintCompositionCoefficients, DefaultConstraintCommitment, DefaultConstraintEvaluator,
@@ -33,6 +43,7 @@ use winterfell::{
     TraceInfo, TracePolyTable, TraceTable, TransitionConstraintDegree,
 };
 
+#[cfg(feature = "dev-circuits")]
 type Blake3 = Blake3_256<BaseElement>;
 
 pub(crate) const RATE_START: usize = 4;
@@ -107,6 +118,7 @@ pub(crate) fn sponge_rows(preamble: &[BaseElement]) -> Vec<[BaseElement; TRACE_W
 }
 
 /// Construit la trace du sponge à partir des éléments du préambule.
+#[cfg(feature = "dev-circuits")]
 fn build_sponge_trace(preamble: &[BaseElement]) -> TraceTable<BaseElement> {
     let rows = sponge_rows(preamble);
     let mut trace = TraceTable::new(TRACE_WIDTH, rows.len());
@@ -161,6 +173,7 @@ pub(crate) fn enforce_sponge_transition<E: FieldElement + From<BaseElement>>(
 // AIR
 // ================================================================================================
 
+#[cfg(feature = "dev-circuits")]
 #[derive(Clone)]
 pub struct SpongePublicInputs {
     pub tag: u64,
@@ -171,6 +184,7 @@ pub struct SpongePublicInputs {
     pub public_payload: Vec<(usize, BaseElement)>,
 }
 
+#[cfg(feature = "dev-circuits")]
 impl winterfell::math::ToElements<BaseElement> for SpongePublicInputs {
     fn to_elements(&self) -> Vec<BaseElement> {
         let mut v = Vec::with_capacity(2 + DIGEST_FELTS + 2 * self.public_payload.len());
@@ -185,6 +199,7 @@ impl winterfell::math::ToElements<BaseElement> for SpongePublicInputs {
     }
 }
 
+#[cfg(feature = "dev-circuits")]
 pub struct SpongeAir {
     context: AirContext<BaseElement>,
     pi: SpongePublicInputs,
@@ -192,6 +207,7 @@ pub struct SpongeAir {
     l: usize,
 }
 
+#[cfg(feature = "dev-circuits")]
 impl winterfell::Air for SpongeAir {
     type BaseField = BaseElement;
     type PublicInputs = SpongePublicInputs;
@@ -297,11 +313,13 @@ impl winterfell::Air for SpongeAir {
 // PROVER
 // ================================================================================================
 
+#[cfg(feature = "dev-circuits")]
 struct SpongeProver {
     options: ProofOptions,
     pi: SpongePublicInputs,
 }
 
+#[cfg(feature = "dev-circuits")]
 impl Prover for SpongeProver {
     type BaseField = BaseElement;
     type Air = SpongeAir;
@@ -365,6 +383,7 @@ impl Prover for SpongeProver {
 
 /// Prouve `digest = H_domain(payload)`. `public_idx` = positions du payload rendues
 /// publiques (assertées) ; les autres restent témoin.
+#[cfg(feature = "dev-circuits")]
 pub fn prove_sponge(
     domain: Domain,
     payload: &[Felt],
@@ -408,6 +427,7 @@ pub fn prove_sponge(
 
 /// Vérifie une preuve sponge. `public_payload` = les positions/valeurs publiques
 /// (doivent correspondre à celles fournies à `prove_sponge`).
+#[cfg(feature = "dev-circuits")]
 pub fn verify_sponge(
     domain: Domain,
     payload_len: usize,
@@ -435,14 +455,17 @@ pub fn verify_sponge(
 
 // --- Instances (sucre) ---
 
+#[cfg(feature = "dev-circuits")]
 use proved_hash::digest::ShieldedSecret;
 
 /// P4 en circuit : `nk = H_nk(shielded_secret)` (B=1, payload entièrement témoin).
+#[cfg(feature = "dev-circuits")]
 pub fn prove_nk(secret: &ShieldedSecret) -> (Digest, ValidityProof) {
     prove_sponge(Domain::Nk, secret.as_felts(), &[])
 }
 
 /// Nullifier prouvé : `nf = H_nullifier(nk ‖ rho ‖ cm)` (B=2, payload témoin).
+#[cfg(feature = "dev-circuits")]
 pub fn prove_nullifier(
     nk: &[Felt; DIGEST_FELTS],
     rho: &[Felt; DIGEST_FELTS],
@@ -460,6 +483,7 @@ pub fn prove_nullifier(
 /// Payload 13 Felts → préambule 17 → **3 blocs alignés à 4** par PAD_ZERO* (3b4,
 /// premier usage du padding). Note ENTIÈREMENT témoin (value/owner/rho/r) ; seul le
 /// commitment `cm` (= digest) est public. À générer en `--release`.
+#[cfg(feature = "dev-circuits")]
 pub fn prove_note_commitment(
     value: u64,
     owner: &Digest,
@@ -471,12 +495,13 @@ pub fn prove_note_commitment(
 }
 
 /// Vérifie une preuve de commitment de note contre le `cm` public.
+#[cfg(feature = "dev-circuits")]
 pub fn verify_note_commitment(cm: &Digest, proof: &ValidityProof) -> bool {
     // Payload de 13 Felts (value + 3 digests), aucun champ public.
     verify_sponge(Domain::NoteCommitment, 1 + 3 * DIGEST_FELTS, cm, &[], proof)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "dev-circuits"))]
 mod tests {
     use super::*;
     use proved_hash::rescue;

@@ -17,6 +17,9 @@
 use winter_crypto::hashers::Rp64_256;
 use winter_math::fields::f64::BaseElement;
 use winter_math::FieldElement;
+// EvaluationFrame/TraceTable/TransitionConstraintDegree ne servent qu'aux helpers
+// des AIR standalone (`rescue_perm`, `owner_hash`) — gatés `dev-circuits`.
+#[cfg(feature = "dev-circuits")]
 use winterfell::{EvaluationFrame, TraceTable, TransitionConstraintDegree};
 
 /// Largeur d'état de Rp64_256.
@@ -56,6 +59,7 @@ pub(crate) fn apply_matrix<E: FieldElement + From<BaseElement>>(
 /// additionnées à l'intérieur de la S-box — c'est l'élévation `^ALPHA` qui fixe
 /// le degré. Déclarer un cycle ici provoque « transition constraint degrees
 /// didn't match ».
+#[cfg(feature = "dev-circuits")]
 pub(crate) fn transition_degrees() -> Vec<TransitionConstraintDegree> {
     vec![TransitionConstraintDegree::new(ALPHA as usize); STATE_WIDTH]
 }
@@ -111,6 +115,7 @@ pub(crate) fn enforce_round_block<E: FieldElement + From<BaseElement>>(
 }
 
 /// Impose une ronde Rescue entre l'état courant et le suivant.
+#[cfg(feature = "dev-circuits")]
 pub(crate) fn enforce_round<E: FieldElement + From<BaseElement>>(
     frame: &EvaluationFrame<E>,
     periodic_values: &[E],
@@ -145,6 +150,7 @@ pub(crate) fn enforce_round<E: FieldElement + From<BaseElement>>(
 }
 
 /// Construit la trace de la permutation : ligne 0 = état initial, ligne i+1 = ronde i.
+#[cfg(feature = "dev-circuits")]
 pub(crate) fn build_perm_trace(initial: [BaseElement; STATE_WIDTH]) -> TraceTable<BaseElement> {
     let mut trace = TraceTable::new(STATE_WIDTH, TRACE_LEN);
     trace.fill(

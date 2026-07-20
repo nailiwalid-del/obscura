@@ -15,17 +15,28 @@
 //! Périmètre : D puissance de 2 (trace = 16·D). Feuille en circuit + profondeur 32
 //! = 3b2b complet. validity-only.
 
+// CONSENSUS : le monolithe réutilise `enforce_merkle_transition` et `path_rows`
+// (+ les constantes de layout). L'AIR/prouveur standalone
+// (`prove_merkle_path`/`verify_merkle_path`) est gaté `dev-circuits`.
 use crate::sponge::{
-    enforce_sponge_transition, locate, sponge_rows, INJECT_START, RATE_START, TRACE_WIDTH,
+    enforce_sponge_transition, sponge_rows, INJECT_START, RATE_START, TRACE_WIDTH,
 };
+#[cfg(feature = "dev-circuits")]
+use crate::sponge::locate;
+#[cfg(feature = "dev-circuits")]
 use crate::ValidityProof;
 use proved_hash::digest::{Digest, DIGEST_FELTS};
-use proved_hash::domain::{sponge_preamble, Domain, ENCODING_VERSION};
+use proved_hash::domain::{sponge_preamble, Domain};
+#[cfg(feature = "dev-circuits")]
+use proved_hash::domain::ENCODING_VERSION;
 use proved_hash::felt::Felt;
 use winter_math::fields::f64::BaseElement;
 use winter_math::FieldElement;
+#[cfg(feature = "dev-circuits")]
 use winterfell::crypto::{hashers::Blake3_256, DefaultRandomCoin, MerkleTree};
+#[cfg(feature = "dev-circuits")]
 use winterfell::matrix::ColMatrix;
+#[cfg(feature = "dev-circuits")]
 use winterfell::{
     AirContext, Assertion, AuxRandElements, CompositionPoly, CompositionPolyTrace,
     ConstraintCompositionCoefficients, DefaultConstraintCommitment, DefaultConstraintEvaluator,
@@ -33,6 +44,7 @@ use winterfell::{
     TraceInfo, TracePolyTable, TraceTable, TransitionConstraintDegree,
 };
 
+#[cfg(feature = "dev-circuits")]
 type Blake3 = Blake3_256<BaseElement>;
 
 const BLOCK: usize = 16;
@@ -40,7 +52,9 @@ const WIDTH: usize = TRACE_WIDTH + 2 * DIGEST_FELTS + 1; // 29
 const CUR_START: usize = TRACE_WIDTH; // 20
 const SIB_START: usize = CUR_START + DIGEST_FELTS; // 24
 const BIT_COL: usize = SIB_START + DIGEST_FELTS; // 28
+#[cfg(feature = "dev-circuits")]
 const MERGE_M: usize = 12;
+#[cfg(feature = "dev-circuits")]
 const MERGE_LEN: u64 = (2 * DIGEST_FELTS) as u64;
 
 /// Contraintes de transition d'un merge de Merkle (sponge B=2 gaté `chain` + booléen
@@ -137,6 +151,7 @@ pub(crate) fn path_rows(leaf: &Digest, path: &[Digest], index: u64) -> Vec<[Base
     rows
 }
 
+#[cfg(feature = "dev-circuits")]
 fn build_path_trace(leaf: &Digest, path: &[Digest], index: u64) -> TraceTable<BaseElement> {
     let rows = path_rows(leaf, path, index);
     let mut trace = TraceTable::new(WIDTH, rows.len());
@@ -146,6 +161,7 @@ fn build_path_trace(leaf: &Digest, path: &[Digest], index: u64) -> TraceTable<Ba
     trace
 }
 
+#[cfg(feature = "dev-circuits")]
 #[derive(Clone)]
 pub struct MerklePathPublicInputs {
     pub leaf: [BaseElement; DIGEST_FELTS],
@@ -153,6 +169,7 @@ pub struct MerklePathPublicInputs {
     pub depth: usize,
 }
 
+#[cfg(feature = "dev-circuits")]
 impl winterfell::math::ToElements<BaseElement> for MerklePathPublicInputs {
     fn to_elements(&self) -> Vec<BaseElement> {
         let mut v = Vec::with_capacity(1 + 2 * DIGEST_FELTS);
@@ -163,12 +180,14 @@ impl winterfell::math::ToElements<BaseElement> for MerklePathPublicInputs {
     }
 }
 
+#[cfg(feature = "dev-circuits")]
 pub struct MerklePathAir {
     context: AirContext<BaseElement>,
     pi: MerklePathPublicInputs,
     l: usize,
 }
 
+#[cfg(feature = "dev-circuits")]
 impl winterfell::Air for MerklePathAir {
     type BaseField = BaseElement;
     type PublicInputs = MerklePathPublicInputs;
@@ -282,11 +301,13 @@ impl winterfell::Air for MerklePathAir {
     }
 }
 
+#[cfg(feature = "dev-circuits")]
 struct MerklePathProver {
     options: ProofOptions,
     pi: MerklePathPublicInputs,
 }
 
+#[cfg(feature = "dev-circuits")]
 impl Prover for MerklePathProver {
     type BaseField = BaseElement;
     type Air = MerklePathAir;
@@ -341,6 +362,7 @@ impl Prover for MerklePathProver {
 }
 
 /// Prouve `root = fold(leaf, path, index)`. À GÉNÉRER EN MODE RELEASE (voir en-tête).
+#[cfg(feature = "dev-circuits")]
 pub fn prove_merkle_path(leaf: &Digest, path: &[Digest], index: u64) -> (Digest, ValidityProof) {
     let trace = build_path_trace(leaf, path, index);
     let last = trace.length() - 1;
@@ -361,6 +383,7 @@ pub fn prove_merkle_path(leaf: &Digest, path: &[Digest], index: u64) -> (Digest,
 }
 
 /// Vérifie une preuve de chaînage contre `leaf`/`root` publics.
+#[cfg(feature = "dev-circuits")]
 pub fn verify_merkle_path(leaf: &Digest, root: &Digest, depth: usize, proof: &ValidityProof) -> bool {
     let pi = MerklePathPublicInputs {
         leaf: core::array::from_fn(|i| leaf.0[i].to_winter()),
@@ -376,7 +399,9 @@ pub fn verify_merkle_path(leaf: &Digest, root: &Digest, depth: usize, proof: &Va
     .is_ok()
 }
 
-#[cfg(test)]
+// Tests gatés en bloc : les différentiels appellent `prove_merkle_path`, et la
+// sanité de trace passe par `build_path_trace` (apparatus standalone).
+#[cfg(all(test, feature = "dev-circuits"))]
 mod tests {
     use super::*;
     use proved_hash::merkle;

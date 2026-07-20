@@ -20,11 +20,20 @@
 //! ⚠️ À générer en `--release` (colonnes témoins potentiellement constantes → degrés
 //! input-dépendants ; cf. merkle_path).
 
+// CONSENSUS : seule `RANGE_BITS` est réutilisée par le monolithe/tx. Tout le
+// sous-circuit standalone (AIR, prouveur, `prove_range`/`verify_range`) est gaté
+// derrière `dev-circuits`.
+#[cfg(feature = "dev-circuits")]
 use crate::ValidityProof;
+#[cfg(feature = "dev-circuits")]
 use winter_math::fields::f64::BaseElement;
+#[cfg(feature = "dev-circuits")]
 use winter_math::FieldElement;
+#[cfg(feature = "dev-circuits")]
 use winterfell::crypto::{hashers::Blake3_256, DefaultRandomCoin, MerkleTree};
+#[cfg(feature = "dev-circuits")]
 use winterfell::matrix::ColMatrix;
+#[cfg(feature = "dev-circuits")]
 use winterfell::{
     AirContext, Assertion, AuxRandElements, CompositionPoly, CompositionPolyTrace,
     ConstraintCompositionCoefficients, DefaultConstraintCommitment, DefaultConstraintEvaluator,
@@ -32,16 +41,23 @@ use winterfell::{
     TraceInfo, TracePolyTable, TraceTable, TransitionConstraintDegree,
 };
 
+#[cfg(feature = "dev-circuits")]
 type Blake3 = Blake3_256<BaseElement>;
 
 /// Bits d'un montant valide (borne de soundness de l'équilibre, cf. en-tête).
 pub const RANGE_BITS: usize = 60;
+#[cfg(feature = "dev-circuits")]
 const TRACE_LEN: usize = 64; // puissance de 2 ≥ RANGE_BITS + 1
+#[cfg(feature = "dev-circuits")]
 const ACC: usize = 0;
+#[cfg(feature = "dev-circuits")]
 const BIT: usize = 1;
+#[cfg(feature = "dev-circuits")]
 const IDX: usize = 2;
+#[cfg(feature = "dev-circuits")]
 const WIDTH: usize = 3;
 
+#[cfg(feature = "dev-circuits")]
 fn build_trace(v: u64) -> TraceTable<BaseElement> {
     let mut trace = TraceTable::new(WIDTH, TRACE_LEN);
     let mut acc = 0u128;
@@ -59,22 +75,26 @@ fn build_trace(v: u64) -> TraceTable<BaseElement> {
     trace
 }
 
+#[cfg(feature = "dev-circuits")]
 #[derive(Clone)]
 pub struct RangePublicInputs {
     pub value: BaseElement,
 }
 
+#[cfg(feature = "dev-circuits")]
 impl winterfell::math::ToElements<BaseElement> for RangePublicInputs {
     fn to_elements(&self) -> Vec<BaseElement> {
         vec![self.value]
     }
 }
 
+#[cfg(feature = "dev-circuits")]
 pub struct RangeAir {
     context: AirContext<BaseElement>,
     value: BaseElement,
 }
 
+#[cfg(feature = "dev-circuits")]
 impl winterfell::Air for RangeAir {
     type BaseField = BaseElement;
     type PublicInputs = RangePublicInputs;
@@ -139,10 +159,12 @@ impl winterfell::Air for RangeAir {
     }
 }
 
+#[cfg(feature = "dev-circuits")]
 struct RangeProver {
     options: ProofOptions,
 }
 
+#[cfg(feature = "dev-circuits")]
 impl Prover for RangeProver {
     type BaseField = BaseElement;
     type Air = RangeAir;
@@ -200,6 +222,7 @@ impl Prover for RangeProver {
 }
 
 /// Prouve `0 <= value < 2^RANGE_BITS`. À GÉNÉRER EN `--release`.
+#[cfg(feature = "dev-circuits")]
 pub fn prove_range(value: u64) -> ValidityProof {
     let trace = build_trace(value);
     let prover = RangeProver {
@@ -209,6 +232,7 @@ pub fn prove_range(value: u64) -> ValidityProof {
 }
 
 /// Vérifie une preuve de range contre la `value` publique.
+#[cfg(feature = "dev-circuits")]
 pub fn verify_range(value: u64, proof: &ValidityProof) -> bool {
     let pi = RangePublicInputs {
         value: BaseElement::new(value),
@@ -222,7 +246,7 @@ pub fn verify_range(value: u64, proof: &ValidityProof) -> bool {
     .is_ok()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "dev-circuits"))]
 mod tests {
     use super::*;
 

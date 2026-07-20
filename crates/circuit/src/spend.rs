@@ -18,15 +18,25 @@
 //!
 //! ⚠️ **À générer en `--release`** (membership + range sont gatés).
 
+// CONSENSUS : `SpendNote` (+ `to_bytes`/`from_bytes`) est LE type de note du
+// chemin prouvé (monolithe, ledger). La composition standalone
+// `prove_spend`/`verify_spend`/`SpendProof` est gatée derrière `dev-circuits`.
+#[cfg(feature = "dev-circuits")]
 use crate::{
     prove_membership, prove_range, prove_sponge, verify_membership, verify_range, verify_sponge,
     MembershipProof, ValidityProof,
 };
-use proved_hash::digest::{Digest, DIGEST_FELTS};
+use proved_hash::digest::Digest;
+#[cfg(feature = "dev-circuits")]
+use proved_hash::digest::DIGEST_FELTS;
+#[cfg(feature = "dev-circuits")]
 use proved_hash::domain::Domain;
+#[cfg(feature = "dev-circuits")]
 use proved_hash::felt::Felt;
-use proved_hash::rescue::note_commit_payload;
+#[cfg(feature = "dev-circuits")]
 use proved_hash::merkle;
+#[cfg(feature = "dev-circuits")]
+use proved_hash::rescue::note_commit_payload;
 
 /// Note d'entrée (domaine prouvé). `value < 2^60`.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -76,6 +86,7 @@ impl SpendNote {
 
 /// Preuve composée d'une dépense. `cm_in`/`value`/`rho` sont des liaisons PUBLIQUES ;
 /// `nullifier` est l'entrée publique du statement.
+#[cfg(feature = "dev-circuits")]
 pub struct SpendProof {
     pub cm_in: Digest,
     pub value: u64,
@@ -89,10 +100,12 @@ pub struct SpendProof {
 
 // Payload commitment = [value, owner(4), rho(4), r(4)] ; positions partagées 0..9
 // (value + owner + rho). `r` (9..13) reste témoin.
+#[cfg(feature = "dev-circuits")]
 const COMMIT_PUBLIC: usize = 9;
 
 /// Prouve la dépense de `note` (chemin `path`, position `index`) sous la clé `nk`.
 /// Retourne la racine prouvée (le bundle vérifie `root == tx.root`) et la preuve.
+#[cfg(feature = "dev-circuits")]
 pub fn prove_spend(
     note: &SpendNote,
     path: &[Digest],
@@ -135,6 +148,7 @@ pub fn prove_spend(
 
 /// Vérifie une dépense contre le statement : arbre `root` (profondeur `depth`),
 /// `owner` et `nk` (liés à la preuve de clé, 3b5a).
+#[cfg(feature = "dev-circuits")]
 pub fn verify_spend(
     root: &Digest,
     owner: &Digest,
@@ -196,6 +210,10 @@ pub fn verify_spend(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // `Felt` du parent est gaté (il ne sert qu'à `verify_spend`) : import local
+    // pour les tests de sérialisation, qui tournent AUSSI en build nu.
+    use proved_hash::felt::Felt;
+    #[cfg(feature = "dev-circuits")]
     use proved_hash::rescue;
 
     fn digest(seed: u64) -> Digest {
@@ -227,6 +245,7 @@ mod tests {
         assert_eq!(SpendNote::from_bytes(&b), None);
     }
 
+    #[cfg(feature = "dev-circuits")]
     fn note() -> SpendNote {
         SpendNote {
             value: 4_200,
@@ -237,8 +256,10 @@ mod tests {
     }
 
     // Profondeur modeste pour la vitesse ; membership@32 est validé en 3b2c.
+    #[cfg(feature = "dev-circuits")]
     const DEPTH: usize = 8;
 
+    #[cfg(feature = "dev-circuits")]
     fn setup() -> (SpendNote, Vec<Digest>, u64, Digest, Digest) {
         let n = note();
         let path: Vec<Digest> = (0..DEPTH as u64).map(|i| digest(1000 + i * 7)).collect();
@@ -251,6 +272,7 @@ mod tests {
     /// Différentiel/heureux : la dépense d'une note dans l'arbre est acceptée, et
     /// `cm_in`/`nf` coïncident avec les références hors-circuit.
     #[test]
+    #[cfg(feature = "dev-circuits")]
     #[cfg_attr(debug_assertions, ignore = "membership/range gatés : --release")]
     fn depense_valide() {
         let (n, path, index, nk, owner) = setup();
@@ -269,6 +291,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dev-circuits")]
     #[cfg_attr(debug_assertions, ignore = "membership/range gatés : --release")]
     fn mauvais_owner_rejete() {
         let (n, path, index, nk, _) = setup();
@@ -277,6 +300,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dev-circuits")]
     #[cfg_attr(debug_assertions, ignore = "membership/range gatés : --release")]
     fn mauvais_nk_rejete() {
         let (n, path, index, nk, owner) = setup();
@@ -285,6 +309,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dev-circuits")]
     #[cfg_attr(debug_assertions, ignore = "membership/range gatés : --release")]
     fn mauvaise_racine_rejete() {
         let (n, path, index, nk, owner) = setup();
@@ -294,6 +319,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dev-circuits")]
     #[cfg_attr(debug_assertions, ignore = "membership/range gatés : --release")]
     fn cm_in_ou_nullifier_falsifie_rejete() {
         let (n, path, index, nk, owner) = setup();

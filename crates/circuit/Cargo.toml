@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[features]
+# Sous-circuits autonomes (`prove_*`/`verify_*` standalone) : outillage de
+# dev/pédagogie, PAS le chemin de consensus. OFF par défaut — un build nu
+# n'expose que la surface consensus (monolithe, prove_tx/verify_tx).
+dev-circuits = []
+
 [dependencies]
 winterfell = { workspace = true }
 winter-crypto = { workspace = true }
