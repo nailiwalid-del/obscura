@@ -33,20 +33,30 @@ configurable (3z-c2), segments de largeur uniforme.
 ## 3. Ce qui CHANGE (architecture)
 
 ### 3.1 Séquence de segments (schedule)
-La trace utile devient une **suite ordonnée de segments** de largeur uniforme :
-`[KEY]` → `[IN0]` → `[IN1]` → `[OUT0]` → `[OUT1]` → `[blinding]`. Chaque segment occupe
-un bloc de lignes contigu. Pour 3z-c1 le **schedule est figé** `[KEY, IN, IN, OUT, OUT]`
-mais construit à partir d'une **liste de types de segments** (`SegKind::{Key, Input,
-Output}`) — c'est la **couture** que 3z-c2 fera varier. Longueur =
-`next_pow2(Σ seg_len + BLIND_ROWS)`.
+La trace utile devient une **suite ordonnée de segments** de **largeur uniforme** mais de
+**longueur variable par type** :
+`[KEY]` → `[IN0]` → `[IN1]` → `[OUT0]` → `[OUT1]` → `[blinding]`. Pour 3z-c1 le **schedule
+est figé** `[KEY, IN, IN, OUT, OUT]` mais construit à partir d'une **liste de types de
+segments** (`SegKind::{Key, Input, Output}`) — c'est la **couture** que 3z-c2 fera varier.
 
-Note d'ampleur/taille : l'empilement rend la trace plus **étroite** (~90 col vs 201) mais
-plus **longue** (les 2 chemins de Merkle deviennent séquentiels : ~2×512 vs 512
-partagés). L'effet net sur la taille de preuve est **à mesurer** (§7) — la largeur (qui
-domine la partie « valeurs » de chaque ouverture) chute de plus de moitié, ce qui peut
-compenser, voire battre, le doublement de longueur. Pas d'hypothèse : le bench tranche.
+**Longueur par type** (décision : variable, pour ne pas gaspiller — un KEY de 8 lignes
+n'occupe pas 512) :
+- `KEY_LEN = 8` (2 blocs d'éponge owner/nk) ;
+- `IN_LEN(depth) = max(64, 16·depth)` (le chemin de Merkle `16·depth` domine ; 64 au
+  minimum couvre la pile d'éponge 56 et les 60 bits de range) — 512 au consensus ;
+- `OUT_LEN = 64` (commitment de sortie 32 + 60 bits de range → 64).
 
-### 3.2 Segment uniforme
+`seg_start(i)` = **somme cumulée** des longueurs des segments précédents (frontières
+irrégulières). `used_rows(depth) = Σ seg_len(kind)`. `trace_len(depth) =
+next_pow2(used_rows(depth) + BLIND_ROWS)`.
+
+Note taille : à profondeur 32, `used_rows = 8 + 2·512 + 2·64 = 1160`, `trace_len = 2048`
+(≈ 2× le côte-à-côte de 1024 — les 2 chemins deviennent séquentiels au lieu de partagés),
+avec une largeur **÷2,2** (~92 vs 201). L'effet net sur la taille de preuve reste **à
+mesurer** (§7) : la largeur domine la partie « valeurs » de chaque ouverture, donc
+×0,46 de largeur peut compenser, voire battre, ×2 de longueur. Le bench tranche.
+
+### 3.2 Segment de largeur uniforme
 Largeur = celle d'un segment d'ENTRÉE (le plus large) : colonnes d'éponge
 (commitment→feuille→nullifier) + colonnes de chemin de Merkle + colonnes locales
 d'équilibre (bits + contribution). Un segment KEY n'utilise que les colonnes d'éponge
