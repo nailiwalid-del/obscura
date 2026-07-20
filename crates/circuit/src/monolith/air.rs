@@ -30,8 +30,9 @@
 
 use crate::merkle_path::enforce_merkle_transition;
 use crate::monolith::layout::{
-    BAL_OFF, CARRIER_OFF, CM_ROWS_END, CM_ROWS_START, KEY_OFF, LEAF_ROWS_START, M0_OFF, M1_OFF,
-    NF_ROWS_END, NF_ROWS_START, O0_OFF, O1_OFF, U0_OFF, U1_OFF, WIDTH,
+    BAL_OFF, CARRIER_OFF, CM_C, CM_ROWS_END, CM_ROWS_START, KEY_OFF, LEAF_C, LEAF_ROWS_START,
+    M0_OFF, M1_OFF, NF_ROWS_END, NF_ROWS_START, NK_C, O0_OFF, O1_OFF, OWNER_C, RHO_C, U0_OFF,
+    U1_OFF, VIN_C, VOUT_C, WIDTH,
 };
 use crate::monolith::trace::{build_monolith_trace, MonolithWitness};
 use crate::rescue_round::{enforce_round_block, periodic_ark_columns, STATE_WIDTH};
@@ -58,8 +59,21 @@ const N_SPONGE: usize = STATE_WIDTH; // 12 : une éponge U_i / O_j
 const N_MERKLE: usize = 30; // recopie de `merkle_path` (sponge 12 + booléen + copies + swap)
 const N_BAL: usize = 3; // bit booléen, accumulateur S, accumulateur de bloc VACC
 const N_CARRIER: usize = 36; // porteuses constantes
-const N_CONSTRAINTS: usize =
-    N_KEY + 4 * N_SPONGE + 2 * N_MERKLE + N_BAL + N_CARRIER; // 24+48+60+3+36 = 171
+const N_BASE: usize = N_KEY + 4 * N_SPONGE + 2 * N_MERKLE + N_BAL + N_CARRIER; // 171
+
+// ---- Liaisons par porteuses (3z-a4), une famille à la fois (chacune son test). ----
+// Chaque égalité gatée est déclarée ET écrite ensemble (result/degrees synchronisés :
+// un slot déclaré mais non écrit lirait un résidu de ligne winterfell → JAMAIS de trou).
+const N_OWNER: usize = 3 * DIGEST_FELTS; // 12 : prod @7 (clé) + 2× conso @0 (commitments)
+const N_NK: usize = 3 * DIGEST_FELTS; // 12 : prod @7 (clé) + 2× conso @40 (nullifiers)
+const N_RHO: usize = 2 * (2 * DIGEST_FELTS); // 16 : par entrée @7(4) + @40(1) + @47(3)
+const N_CM: usize = 2 * (3 * DIGEST_FELTS); // 24 : par entrée @31(4) + @32(4) + @47(4)
+const N_LEAF: usize = 2 * (2 * DIGEST_FELTS); // 16 : par entrée @39(4) + @0(4)
+const N_VIN: usize = 4; // 2× (prod @0 + conso VACC fin de bloc)
+const N_VOUT: usize = 4; // 2× (prod @0 + conso VACC fin de bloc)
+const N_LIAISON: usize = N_OWNER + N_NK + N_RHO + N_CM + N_LEAF + N_VIN + N_VOUT; // 88
+
+const N_CONSTRAINTS: usize = N_BASE + N_LIAISON; // 171 + 88 = 259
 
 // ---- Segments d'équilibre (mêmes constantes que `trace::fill_balance`). ----
 const BAL_ROWS: usize = 256; // 4 blocs × 64
@@ -236,6 +250,132 @@ impl winterfell::Air for MonolithAir {
         for c in 0..N_CARRIER {
             result[idx + c] = next[CARRIER_OFF + c] - cur[CARRIER_OFF + c];
         }
+        idx += N_CARRIER; // idx == N_BASE
+
+        // ============================================================================
+        // LIAISONS PAR PORTEUSES (3z-a4) — chaque égalité gatée à sa ligne unique.
+        // Motif : `sel_r · (cur[porteuse] − cur[cellule])`, sel_r allumé à la seule
+        // ligne r. Chaque famille contraint sa PRODUCTION et ses CONSOMMATIONS (une
+        // porteuse ne liant qu'un côté ne lie rien). Positions vérifiées contre
+        // `sponge.rs::locate` et `trace.rs`.
+        // ============================================================================
+        let s0 = pv[37];
+        let s7 = pv[38];
+        let s31 = pv[39];
+        let s32 = pv[40];
+        let s39 = pv[41];
+        let s40 = pv[42];
+        let s47 = pv[43];
+        let vacc_gate = [pv[44], pv[45], pv[46], pv[47]]; // entrées 0/1, sorties 0/1
+        // Colonne rate (RATE_START..) = digest de sortie d'un bloc éponge.
+        let rate = RATE_START;
+
+        // --- OWNER : owner = H_owner(secret) gouverne les commitments d'entrée. ---
+        // Production @7 : porteuse == sortie rate du bloc owner de la clé.
+        for k in 0..DIGEST_FELTS {
+            result[idx + k] = s7 * (cur[OWNER_C + k] - cur[KEY_OFF + rate + k]);
+        }
+        idx += DIGEST_FELTS;
+        // Consommation @0 : owner (préambule commitment idx 4..7 → cols +8..+12) de U0, U1.
+        for u_off in [U0_OFF, U1_OFF] {
+            for k in 0..DIGEST_FELTS {
+                result[idx + k] = s0 * (cur[OWNER_C + k] - cur[u_off + 8 + k]);
+            }
+            idx += DIGEST_FELTS;
+        }
+
+        // --- NK : nk = H_nk(secret) gouverne les nullifiers. ---
+        // Production @7 : porteuse == sortie rate du bloc nk de la clé (KEY_OFF+12+4).
+        for k in 0..DIGEST_FELTS {
+            result[idx + k] = s7 * (cur[NK_C + k] - cur[KEY_OFF + STATE_WIDTH + rate + k]);
+        }
+        idx += DIGEST_FELTS;
+        // Consommation @40 : nk (préambule nullifier idx 3..6 → cols +7..+11) de U0, U1.
+        for u_off in [U0_OFF, U1_OFF] {
+            for k in 0..DIGEST_FELTS {
+                result[idx + k] = s40 * (cur[NK_C + k] - cur[u_off + 7 + k]);
+            }
+            idx += DIGEST_FELTS;
+        }
+
+        // --- RHO : le rho du nullifier == le rho du commitment (v0.2 : nf lié au cm). ---
+        for u_off in [U0_OFF, U1_OFF] {
+            let i = if u_off == U0_OFF { 0 } else { 1 };
+            // Consommation @7 : rho0..3 (préambule commitment inject cols +12..+16).
+            for k in 0..DIGEST_FELTS {
+                result[idx + k] = s7 * (cur[RHO_C[i] + k] - cur[u_off + 12 + k]);
+            }
+            idx += DIGEST_FELTS;
+            // Consommation @40 : rho0 (préambule nullifier idx 7 → col +11).
+            result[idx] = s40 * (cur[RHO_C[i]] - cur[u_off + 11]);
+            idx += 1;
+            // Consommation @47 : rho1..3 (préambule nullifier idx 8..10 → inject cols +12..+15).
+            for j in 0..DIGEST_FELTS - 1 {
+                result[idx + j] = s47 * (cur[RHO_C[i] + 1 + j] - cur[u_off + 12 + j]);
+            }
+            idx += DIGEST_FELTS - 1;
+        }
+
+        // --- CM_IN : le cm produit par l'entrée gouverne feuille ET nullifier (P1). ---
+        for u_off in [U0_OFF, U1_OFF] {
+            let i = if u_off == U0_OFF { 0 } else { 1 };
+            // Production @31 : porteuse == digest du commitment (rate cols +4..+8).
+            for k in 0..DIGEST_FELTS {
+                result[idx + k] = s31 * (cur[CM_C[i] + k] - cur[u_off + rate + k]);
+            }
+            idx += DIGEST_FELTS;
+            // Consommation @32 : cm0..3 (préambule feuille idx 3..6 → cols +7..+11).
+            for k in 0..DIGEST_FELTS {
+                result[idx + k] = s32 * (cur[CM_C[i] + k] - cur[u_off + 7 + k]);
+            }
+            idx += DIGEST_FELTS;
+            // Consommation @47 : cm0..3 (préambule nullifier idx 11..14 → inject cols +15..+19).
+            for k in 0..DIGEST_FELTS {
+                result[idx + k] = s47 * (cur[CM_C[i] + k] - cur[u_off + 15 + k]);
+            }
+            idx += DIGEST_FELTS;
+        }
+
+        // --- FEUILLE↔CHEMIN : la feuille produite == la feuille injectée dans M_i. ---
+        // (Remplace l'assertion publique `leaf` de merkle_path : la feuille est ici un
+        //  TÉMOIN lié au commitment, jamais un public.)
+        for (u_off, m_off) in [(U0_OFF, M0_OFF), (U1_OFF, M1_OFF)] {
+            let i = if u_off == U0_OFF { 0 } else { 1 };
+            // Production @39 : porteuse == digest de la feuille (rate cols +4..+8).
+            for k in 0..DIGEST_FELTS {
+                result[idx + k] = s39 * (cur[LEAF_C[i] + k] - cur[u_off + rate + k]);
+            }
+            idx += DIGEST_FELTS;
+            // Consommation @0 : `cur` du chemin (M_i cols +20..+24, ligne 0).
+            for k in 0..DIGEST_FELTS {
+                result[idx + k] = s0 * (cur[LEAF_C[i] + k] - cur[m_off + 20 + k]);
+            }
+            idx += DIGEST_FELTS;
+        }
+
+        // --- MONTANTS (P5 lié aux commitments) : la value de chaque commitment ==
+        //     la valeur accumulée VACC de son bloc d'équilibre. VACC est gaté à la
+        //     ligne 64·b+60 (valeur PLEINE — bits 60..63 nuls — et < l−1, donc la
+        //     transition est bien enforçée même à profondeur 2 ; cf. table qui donnait
+        //     64·b+63, écart documenté).
+        let vacc = BAL_OFF + BAL_VACC;
+        // VIN : entrées (blocs 0,1) — production @0 (value = préambule commitment idx 3
+        //       → col +7), consommation VACC.
+        for u_off in [U0_OFF, U1_OFF] {
+            let i = if u_off == U0_OFF { 0 } else { 1 };
+            result[idx] = s0 * (cur[VIN_C[i]] - cur[u_off + 7]);
+            result[idx + 1] = vacc_gate[i] * (cur[VIN_C[i]] - cur[vacc]);
+            idx += 2;
+        }
+        // VOUT : sorties (blocs 2,3) — production @0, consommation VACC.
+        for o_off in [O0_OFF, O1_OFF] {
+            let j = if o_off == O0_OFF { 0 } else { 1 };
+            result[idx] = s0 * (cur[VOUT_C[j]] - cur[o_off + 7]);
+            result[idx + 1] = vacc_gate[2 + j] * (cur[VOUT_C[j]] - cur[vacc]);
+            idx += 2;
+        }
+
+        debug_assert_eq!(idx, N_CONSTRAINTS);
     }
 
     fn get_assertions(&self) -> Vec<Assertion<Self::BaseField>> {
@@ -372,6 +512,27 @@ impl winterfell::Air for MonolithAir {
                 .collect(),
         );
 
+        // Sélecteurs mono-ligne pleine longueur (cycle l, un seul 1) pour les liaisons
+        // par porteuses (3z-a4) — motif `init` de key.rs, mais ancré à une ligne r ≠ 0.
+        // Une liaison ne lit que `cur` ; le sélecteur l'ALLUME sur l'unique ligne du
+        // point de production/consommation. La transition de la dernière ligne (l−1)
+        // étant EXCLUE du domaine d'enforcement (diviseur winterfell), aucun ancrage
+        // n'est placé en l−1 (cf. montants : ligne 64i+60, pas 64i+63).
+        let at = |r0: usize| -> Vec<BaseElement> {
+            (0..l).map(|r| if r == r0 { o } else { z }).collect()
+        };
+        cols.push(at(0)); //  [37] s0  : owner/leaf conso, vin/vout prod
+        cols.push(at(7)); //  [38] s7  : owner/nk prod (clé), rho conso (commitment)
+        cols.push(at(31)); // [39] s31 : cm prod (digest commitment)
+        cols.push(at(32)); // [40] s32 : cm conso (préambule feuille)
+        cols.push(at(39)); // [41] s39 : feuille prod (digest feuille)
+        cols.push(at(40)); // [42] s40 : nk/rho0 conso (préambule nullifier)
+        cols.push(at(47)); // [43] s47 : rho1..3/cm conso (nullifier, ligne d'absorption)
+        cols.push(at(60)); //  [44] VACC entrée 0 (ligne 64·0+60)
+        cols.push(at(124)); // [45] VACC entrée 1 (ligne 64·1+60)
+        cols.push(at(188)); // [46] VACC sortie 0 (ligne 64·2+60)
+        cols.push(at(252)); // [47] VACC sortie 1 (ligne 64·3+60)
+
         cols
     }
 
@@ -457,6 +618,11 @@ fn degrees(n: usize) -> Vec<TransitionConstraintDegree> {
     // Porteuses (36).
     for _ in 0..N_CARRIER {
         d.push(TransitionConstraintDegree::new(1));
+    }
+    // Liaisons (88) : chacune `sel(cycle n) · (cur[a] − cur[b])` — degré 1, un cycle
+    // pleine longueur (motif `wc(1, vec![n])` de key.rs). Blowup 16 : très en-dessous.
+    for _ in 0..N_LIAISON {
+        d.push(wc(1, vec![n]));
     }
 
     debug_assert_eq!(d.len(), N_CONSTRAINTS);
@@ -584,12 +750,49 @@ pub(crate) fn verify_monolith(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::monolith::trace::witness_de_test;
+    use crate::monolith::trace::{
+        build_monolith_trace_forge, witness_de_test, witness_de_test_profondeur_consensus, Forge,
+    };
     use proved_hash::digest::Digest;
     use proved_hash::felt::Felt;
 
     fn to_digest(d: [BaseElement; DIGEST_FELTS]) -> Digest {
         Digest(core::array::from_fn(|k| Felt::from_winter(d[k]).expect("digest canonique")))
+    }
+
+    /// Un digest de test arbitraire (pour les valeurs forgées).
+    fn dg(seed: u64) -> Digest {
+        Digest(core::array::from_fn(|i| Felt::from_canonical_u64(seed + i as u64).unwrap()))
+    }
+
+    /// Prouve (en release) la trace `witness_de_test` éventuellement FORGÉE, publics
+    /// relus de la trace (comme `prove_monolith`), et retourne le verdict de `verify`.
+    /// Motif de `key.rs::liaison_secret_partage_mord` : le prouveur n'évalue pas les
+    /// contraintes en release → la preuve est produite puis (dé)validée par `verify`.
+    fn verdict_forge(forge: Forge) -> bool {
+        let (w, _root) = witness_de_test();
+        let depth = 2;
+        let trace = build_monolith_trace_forge(&w, forge);
+        let last_m = 16 * depth - 1;
+        let pi = MonolithPublicInputs {
+            root: read4(&trace, M0_OFF + RATE_START, last_m),
+            nullifiers: [
+                read4(&trace, U0_OFF + RATE_START, NF_ROWS_END - 1),
+                read4(&trace, U1_OFF + RATE_START, NF_ROWS_END - 1),
+            ],
+            output_commitments: [
+                read4(&trace, O0_OFF + RATE_START, CM_ROWS_END - 1),
+                read4(&trace, O1_OFF + RATE_START, CM_ROWS_END - 1),
+            ],
+            fee: w.fee,
+            depth,
+        };
+        let prover = MonolithProver {
+            options: crate::proof_options_hi(),
+            pi: pi.clone(),
+        };
+        let proof = ValidityProof(prover.prove(trace).expect("preuve produite en release"));
+        verify_monolith(&pi, depth, &proof)
     }
 
     /// Roundtrip complet : prouve le monolithe, vérifie, et rejette des publics
@@ -624,6 +827,78 @@ mod tests {
         let mut faux = pi.clone();
         faux.output_commitments[1][0] += BaseElement::ONE;
         assert!(!verify_monolith(&faux, 2, &proof));
+    }
+
+    /// LIAISON OWNER (white-box) : un commitment d'entrée construit avec un owner ≠
+    /// sortie de la clé doit être REJETÉ. La trace forgée reste self-consistante
+    /// (cm/feuille/nf/arbre recalculés) : SEULE la liaison owner @0 la distingue.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "trace forgée : générer en --release")]
+    fn liaison_owner_mord() {
+        assert!(verdict_forge(Forge::Aucune), "trace honnête acceptée");
+        assert!(!verdict_forge(Forge::OwnerConsomme(dg(555))), "owner ≠ clé doit mordre");
+    }
+
+    /// LIAISON NK : nullifier calculé avec un nk ≠ sortie de la clé → rejet.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "trace forgée : générer en --release")]
+    fn liaison_nk_mord() {
+        assert!(!verdict_forge(Forge::NkConsomme(dg(556))), "nk ≠ clé doit mordre");
+    }
+
+    /// LIAISON RHO (propriété v0.2 « nullifier lié au commitment ») : rho du nullifier
+    /// ≠ rho du commitment → rejet.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "trace forgée : générer en --release")]
+    fn liaison_rho_mord() {
+        assert!(!verdict_forge(Forge::RhoNullifier(0, dg(557))), "rho nf ≠ rho cm doit mordre");
+    }
+
+    /// LIAISON CM_IN (P1 non détournable) : feuille bâtie sur un autre commitment que
+    /// celui produit par l'entrée → rejet.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "trace forgée : générer en --release")]
+    fn liaison_cm_mord() {
+        assert!(!verdict_forge(Forge::CmFeuille(0, dg(558))), "cm feuille ≠ cm produit doit mordre");
+    }
+
+    /// LIAISON FEUILLE↔CHEMIN : chemin de Merkle prouvé sur une autre feuille que
+    /// celle produite par l'entrée → rejet.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "trace forgée : générer en --release")]
+    fn liaison_leaf_mord() {
+        assert!(!verdict_forge(Forge::LeafChemin(0, dg(559))), "feuille chemin ≠ feuille produite doit mordre");
+    }
+
+    /// LIAISON MONTANTS (P5 lié aux commitments) : un commitment déclarant 1000 mais
+    /// un bloc d'équilibre à 900 → rejet. Le bloc reste self-consistant (compensation
+    /// sur la sortie 0 → S_final = fee), donc seule la liaison VIN mord.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "trace forgée : générer en --release")]
+    fn liaison_valeurs_mord() {
+        assert!(!verdict_forge(Forge::ValeurBal(0, 900)), "value bloc ≠ value commitment doit mordre");
+    }
+
+    /// Roundtrip HONNÊTE à profondeur CONSENSUS (32, trace_len 512) : prouve et
+    /// vérifie le monolithe complet 2-in/2-out. Valide de bout en bout le fix de
+    /// complétude BAL (S constant au-delà de 256) ET l'ensemble des liaisons à la
+    /// vraie profondeur. LENT (~plusieurs secondes) : lancé explicitement
+    /// (`cargo test -p circuit --release -- --ignored roundtrip_profondeur_consensus`)
+    /// et par le bench T7 ; `#[ignore]` même en release pour ne pas alourdir la CI.
+    #[test]
+    #[ignore = "lent : lancé explicitement et par le bench T7"]
+    fn roundtrip_profondeur_consensus() {
+        if cfg!(debug_assertions) {
+            return; // AIR gaté : la génération de preuve exige --release.
+        }
+        let (w, root) = witness_de_test_profondeur_consensus();
+        let (pi, proof) = prove_monolith(&w);
+        assert_eq!(to_digest(pi.root), root, "racine prouvée == racine consensus");
+        assert!(verify_monolith(&pi, 32, &proof), "preuve honnête profondeur 32 acceptée");
+        // Frais falsifiés → rejet (sanité liaison montants à profondeur réelle).
+        let mut faux = pi.clone();
+        faux.fee += 1;
+        assert!(!verify_monolith(&faux, 32, &proof));
     }
 
     /// Cohérence des publics extraits (indépendant du prouveur, tourne en DEBUG) :

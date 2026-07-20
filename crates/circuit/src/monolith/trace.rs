@@ -159,6 +159,18 @@ fn fill_balance(dst: &mut [[BaseElement; WIDTH]], amounts: [u64; 4]) {
             }
         }
     }
+
+    // Complétude au-delà des 4 blocs (lignes idle 256..len) : la contrainte S est
+    // NON gatée (le signe périodique la porte, cf. air.rs) et exige `S` constant
+    // dès que `signe = 0` ; l'assertion finale `S[len−1] = fee` lit cette même
+    // colonne. On PROPAGE donc `S = Σsigné` (= fee pour un témoin honnête) et on
+    // maintient `VACC = 0`, `bit = 0` sur toute la traîne — sans quoi une trace
+    // honnête à trace_len > 256 (profondeur ≥ 32) serait rejetée (S retomberait à 0).
+    for row in dst.iter_mut().skip(4 * BAL_BLOCK) {
+        row[BAL_OFF + BAL_BIT] = BaseElement::ZERO;
+        row[BAL_OFF + BAL_S] = s;
+        row[BAL_OFF + BAL_VACC] = BaseElement::ZERO;
+    }
 }
 
 // ================================================================================================
@@ -319,6 +331,215 @@ pub(crate) fn witness_de_test() -> (MonolithWitness, Digest) {
     (w, root)
 }
 
+/// Témoin de test à profondeur CONSENSUS (32) : mêmes notes que `witness_de_test`,
+/// mais insérées dans un vrai arbre `ProvedMerkleTree::consensus()` → chemins de
+/// longueur 32, `trace_len = 512`. Sert au fix de complétude BAL et au roundtrip lent.
+#[cfg(test)]
+pub(crate) fn witness_de_test_profondeur_consensus() -> (MonolithWitness, Digest) {
+    use proved_hash::merkle::ProvedMerkleTree;
+    use proved_hash::rescue;
+
+    let secret = ShieldedSecret::from_felts(core::array::from_fn(|i| {
+        Felt::from_canonical_u64(700 + i as u64).unwrap()
+    }));
+    let owner = rescue::hash(Domain::Owner, secret.as_felts());
+
+    let n0 = SpendNote { value: 1_000, owner, rho: digest(20), r: digest(30) };
+    let n1 = SpendNote { value: 500, owner, rho: digest(40), r: digest(50) };
+    let cm0 = rescue::note_commitment(n0.value, &n0.owner, &n0.rho, &n0.r);
+    let cm1 = rescue::note_commitment(n1.value, &n1.owner, &n1.rho, &n1.r);
+
+    let mut tree = ProvedMerkleTree::consensus();
+    let i0 = tree.append(&cm0);
+    let i1 = tree.append(&cm1);
+    let root = tree.root();
+    let path0 = tree.path(i0).unwrap();
+    let path1 = tree.path(i1).unwrap();
+
+    let o0 = SpendNote { value: 900, owner: digest(60), rho: digest(61), r: digest(62) };
+    let o1 = SpendNote { value: 580, owner: digest(70), rho: digest(71), r: digest(72) };
+    let inputs = [
+        ProvedInput { note: n0, path: path0, index: i0 },
+        ProvedInput { note: n1, path: path1, index: i1 },
+    ];
+    let w = MonolithWitness { secret, inputs, outputs: [o0, o1], fee: 20 };
+    (w, root)
+}
+
+// ================================================================================================
+// FORGE (test white-box des liaisons) — #[cfg(test)]
+// ================================================================================================
+
+/// Point de forge d'une trace : réécrit UN côté d'une liaison porteuse↔gadget en
+/// gardant le PRODUCTEUR (porteuse) honnête, pour qu'une trace forgée ne diffère
+/// d'une trace honnête QUE par l'égalité de liaison ciblée. Chaque variante
+/// documente le segment AVAL recalculé en cascade.
+#[cfg(test)]
+#[derive(Clone, Copy)]
+pub(crate) enum Forge {
+    /// Aucune forge : trace honnête (délègue à `build_monolith_trace`).
+    Aucune,
+    /// Owner CONSOMMÉ dans le commitment de l'entrée 0 ≠ owner produit par la clé.
+    /// Aval recalculé : cm0, feuille0, nullifier0 et l'arbre (root/chemins).
+    OwnerConsomme(Digest),
+    /// Nk CONSOMMÉ dans le nullifier de l'entrée 0 ≠ nk produit par la clé.
+    /// Aval recalculé : nullifier0 (nf change).
+    NkConsomme(Digest),
+    /// Rho CONSOMMÉ dans le nullifier de l'entrée `i` ≠ rho du commitment (porteuse).
+    /// Aval recalculé : nullifier_i.
+    RhoNullifier(usize, Digest),
+    /// Cm CONSOMMÉ dans la feuille de l'entrée `i` ≠ cm produit par le commitment.
+    /// Aval recalculé : feuille_i et l'arbre (root/chemins).
+    CmFeuille(usize, Digest),
+    /// Feuille INJECTÉE dans le chemin de l'entrée `i` ≠ feuille produite par le sponge.
+    /// Aval recalculé : l'arbre (root/chemins) pour la feuille forgée.
+    LeafChemin(usize, Digest),
+    /// Valeur du bloc d'équilibre `i` ≠ value du commitment (porteuse VIN/VOUT).
+    /// Aval recalculé : équilibre, avec compensation sur la sortie 0 pour garder
+    /// `S_final = fee` (sinon l'assertion S rejette AVANT la liaison).
+    ValeurBal(usize, u64),
+}
+
+/// Arbre de profondeur 2 à partir des FEUILLES injectées directement (idx 0 et 3,
+/// deux feuilles muettes), miroir de `build_tree` mais sans re-hacher les cm — utilisé
+/// par la forge pour reconstruire un arbre cohérent après réécriture d'une feuille.
+#[cfg(test)]
+fn build_tree_from_leaves(leaf0: &Digest, leaf1: &Digest) -> (Digest, Vec<Digest>, Vec<Digest>) {
+    use proved_hash::merkle;
+    let l0 = *leaf0;
+    let l1 = merkle::leaf(&digest(9001));
+    let l2 = merkle::leaf(&digest(9002));
+    let l3 = *leaf1;
+    let n_left = merkle::node(&l0, &l1);
+    let n_right = merkle::node(&l2, &l3);
+    let root = merkle::node(&n_left, &n_right);
+    (root, vec![l1, n_right], vec![l2, n_left])
+}
+
+/// Construit une trace de monolithe (profondeur 2) avec une forge de liaison. La
+/// trace reste SELF-consistante (segments valides, root partagée, équilibre =fee) :
+/// seule l'égalité de liaison ciblée est violée. Les publics se relisent de la trace
+/// forgée (comme `prove_monolith`) — c'est la CONTRAINTE de liaison, pas une
+/// assertion, qui doit mordre.
+#[cfg(test)]
+pub(crate) fn build_monolith_trace_forge(w: &MonolithWitness, forge: Forge) -> TraceTable<BaseElement> {
+    if let Forge::Aucune = forge {
+        return build_monolith_trace(w);
+    }
+    let len = trace_len(2);
+    let mut rows = vec![[BaseElement::ZERO; WIDTH]; len];
+
+    // --- Clé (honnête) : owner/nk PRODUCTEURS dérivés du secret. ---
+    let kr = key_rows(w.secret.as_felts());
+    segment(&mut rows, &kr, 0, KEY_OFF);
+    let owner = read_digest(&kr, kr.len() - 1, RATE_START);
+    let nk = read_digest(&kr, kr.len() - 1, KEY_NK_LOCAL_OFF + RATE_START);
+    let owner_be: [BaseElement; DIGEST_FELTS] = core::array::from_fn(|k| owner.0[k].to_winter());
+    let nk_be: [BaseElement; DIGEST_FELTS] = core::array::from_fn(|k| nk.0[k].to_winter());
+    for row in rows.iter_mut() {
+        row[OWNER_C..OWNER_C + DIGEST_FELTS].copy_from_slice(&owner_be);
+        row[NK_C..NK_C + DIGEST_FELTS].copy_from_slice(&nk_be);
+    }
+
+    // --- Entrées : segments avec hooks de forge ; collecte des feuilles pour l'arbre. ---
+    let mut amounts = [0u64; 4];
+    let mut leaves_tree = [digest(0); 2];
+    for (i, u_off) in [U0_OFF, U1_OFF].into_iter().enumerate() {
+        let note = &w.inputs[i].note;
+        amounts[i] = note.value;
+
+        // owner consommé dans le commitment (forge OwnerConsomme sur i==0).
+        let owner_commit = match forge {
+            Forge::OwnerConsomme(a) if i == 0 => a,
+            _ => note.owner,
+        };
+        let commit_payload = note_commit_payload(note.value, &owner_commit, &note.rho, &note.r);
+        let cm_rows = sponge_rows_for(Domain::NoteCommitment, &commit_payload);
+        segment(&mut rows, &cm_rows, CM_ROWS_START, u_off);
+        let cm = read_digest(&cm_rows, cm_rows.len() - 1, RATE_START); // CM_C producteur
+
+        // cm consommé dans la feuille (forge CmFeuille).
+        let cm_leaf = match forge {
+            Forge::CmFeuille(fi, a) if fi == i => a,
+            _ => cm,
+        };
+        let leaf_rows = sponge_rows_for(Domain::MerkleLeaf, &cm_leaf.0);
+        segment(&mut rows, &leaf_rows, LEAF_ROWS_START, u_off);
+        let leaf_d = read_digest(&leaf_rows, leaf_rows.len() - 1, RATE_START); // LEAF_C producteur
+
+        // nk / rho consommés dans le nullifier (forges NkConsomme, RhoNullifier) ;
+        // le cm consommé @47 reste honnête (pas de variante dédiée).
+        let nk_nf = match forge {
+            Forge::NkConsomme(a) if i == 0 => a,
+            _ => nk,
+        };
+        let rho_nf = match forge {
+            Forge::RhoNullifier(fi, a) if fi == i => a,
+            _ => note.rho,
+        };
+        let mut nf_payload = Vec::with_capacity(3 * DIGEST_FELTS);
+        nf_payload.extend_from_slice(&nk_nf.0);
+        nf_payload.extend_from_slice(&rho_nf.0);
+        nf_payload.extend_from_slice(&cm.0);
+        let nf_rows = sponge_rows_for(Domain::Nullifier, &nf_payload);
+        segment(&mut rows, &nf_rows, NF_ROWS_START, u_off);
+
+        // feuille injectée dans le chemin (forge LeafChemin).
+        leaves_tree[i] = match forge {
+            Forge::LeafChemin(fi, a) if fi == i => a,
+            _ => leaf_d,
+        };
+
+        // Porteuses (producteurs HONNÊTES : rho/cm/leaf/value de la note).
+        let rho_be: [BaseElement; DIGEST_FELTS] = core::array::from_fn(|k| note.rho.0[k].to_winter());
+        let cm_be: [BaseElement; DIGEST_FELTS] = core::array::from_fn(|k| cm.0[k].to_winter());
+        let leaf_be: [BaseElement; DIGEST_FELTS] = core::array::from_fn(|k| leaf_d.0[k].to_winter());
+        let vin = BaseElement::new(note.value);
+        for row in rows.iter_mut() {
+            row[RHO_C[i]..RHO_C[i] + DIGEST_FELTS].copy_from_slice(&rho_be);
+            row[CM_C[i]..CM_C[i] + DIGEST_FELTS].copy_from_slice(&cm_be);
+            row[LEAF_C[i]..LEAF_C[i] + DIGEST_FELTS].copy_from_slice(&leaf_be);
+            row[VIN_C[i]] = vin;
+        }
+    }
+
+    // --- Arbre reconstruit à partir des feuilles injectées → root/chemins cohérents. ---
+    let (_root, path0, path1) = build_tree_from_leaves(&leaves_tree[0], &leaves_tree[1]);
+    let m0 = crate::merkle_path::path_rows(&leaves_tree[0], &path0, 0);
+    segment(&mut rows, &m0, 0, M0_OFF);
+    let m1 = crate::merkle_path::path_rows(&leaves_tree[1], &path1, 3);
+    segment(&mut rows, &m1, 0, M1_OFF);
+
+    // --- Sorties (honnêtes). ---
+    for (j, o_off) in [O0_OFF, O1_OFF].into_iter().enumerate() {
+        let out = &w.outputs[j];
+        amounts[2 + j] = out.value;
+        let commit_payload = note_commit_payload(out.value, &out.owner, &out.rho, &out.r);
+        let out_rows = sponge_rows_for(Domain::NoteCommitment, &commit_payload);
+        segment(&mut rows, &out_rows, 0, o_off);
+        let vout = BaseElement::new(out.value);
+        for row in rows.iter_mut() {
+            row[VOUT_C[j]] = vout;
+        }
+    }
+
+    // --- Équilibre (forge ValeurBal : bloc `i` forgé, compensation sur sortie 0). ---
+    if let Forge::ValeurBal(i, autre) = forge {
+        let delta = autre as i128 - amounts[i] as i128;
+        amounts[i] = autre;
+        // Compense sur le côté opposé pour garder S_final = fee : entrée (+) ↔ sortie (−).
+        let comp = if i < 2 { 2 } else { 0 };
+        amounts[comp] = (amounts[comp] as i128 + delta) as u64;
+    }
+    fill_balance(&mut rows, amounts);
+
+    let mut trace = TraceTable::new(WIDTH, len);
+    for (i, row) in rows.iter().enumerate() {
+        trace.update_row(i, row);
+    }
+    trace
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -371,5 +592,24 @@ mod tests {
             d(BAL_OFF + 1, last),
             Felt::from_canonical_u64(w.fee).unwrap()
         );
+    }
+
+    /// Fix de complétude BAL (revue T3) : à profondeur consensus (trace_len 512), la
+    /// colonne `S` doit rester CONSTANTE (= fee) sur toute la traîne idle 256..512,
+    /// et `VACC`/`bit` restent nuls — sinon la contrainte S non gatée rejette une
+    /// trace honnête. Test NON-prouveur (lit les cellules ; tourne en DEBUG).
+    #[test]
+    fn bal_s_constant_sur_les_lignes_idle_profondeur_32() {
+        let (w, _root) = witness_de_test_profondeur_consensus();
+        let t = build_monolith_trace(&w);
+        assert_eq!(t.length(), 512, "profondeur 32 → trace_len 512");
+        let fee = Felt::from_canonical_u64(w.fee).unwrap();
+        for row in 256..t.length() {
+            assert_eq!(Felt::from_winter(t.get(BAL_OFF + BAL_S, row)).unwrap(), fee, "S@{row}");
+            assert_eq!(t.get(BAL_OFF + BAL_BIT, row), BaseElement::ZERO, "bit@{row}");
+            assert_eq!(t.get(BAL_OFF + BAL_VACC, row), BaseElement::ZERO, "VACC@{row}");
+        }
+        // Continuité à la frontière 255→256 : S[255] == S[256] == fee.
+        assert_eq!(Felt::from_winter(t.get(BAL_OFF + BAL_S, 255)).unwrap(), fee);
     }
 }
