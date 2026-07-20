@@ -137,7 +137,9 @@ pub(crate) struct MonolithAir {
 ///   - clé/feuille/nullifier (m ∈ {8, 8, 16}, préambules pleins) → 0.
 ///
 /// KEY(16) + 2·U(28+15) + 2·M((8+4)·depth+4) + 2·O(12+15) + BAL(3) = 167 + 24·depth.
-/// BAL(3) = S[0]=0, S[l−1]=fee, VACC[0]=0 (ancrage anti-inflation de l'entrée 0).
+/// BAL(3) = S[0]=0, S[used−1]=fee, VACC[0]=0 (ancrage anti-inflation de l'entrée 0).
+/// Toutes les assertions visent des lignes < used_rows(depth) : AUCUNE ne touche la
+/// région de blinding (witness-hiding 3z-b1b).
 fn num_assertions(depth: usize) -> usize {
     16 + 2 * (28 + 15) + 2 * (12 * depth + 4) + 2 * (12 + 15) + 3
 }
@@ -188,6 +190,9 @@ impl winterfell::Air for MonolithAir {
         let signe = pv[34];
         let pow = pv[35];
         let endblk = pv[36];
+        // Gating global witness-hiding (3z-b1b) : appliqué à TOUTES les contraintes
+        // en fin de fonction (cf. le recensement avant la boucle de gating).
+        let blind_off = pv[48];
 
         let mut idx = 0;
 
@@ -255,8 +260,10 @@ impl winterfell::Air for MonolithAir {
             let vacc_next = next[BAL_OFF + BAL_VACC];
             // bit ∈ {0,1} (gaté sel_bal).
             result[idx] = sel_bal * bit * (bit - one);
-            // S_next − S − signe·bit·pow : le signe périodique PORTE le gating
-            // (signe = 0 au-delà de la zone d'équilibre → S reste constant = fee).
+            // S_next − S − signe·bit·pow : le signe périodique porte le gating de
+            // ZONE (signe = 0 au-delà de 256 → S reste constant = fee sur la traîne
+            // idle 256..used) ; le gating GLOBAL blind_off (fin de fonction) libère
+            // ensuite S sur la région de blinding (assertion finale en S[used−1]).
             result[idx + 1] = s_next - s - signe * bit * pow;
             // VACC_next = (1 − endblk)·(VACC + bit·pow) : accumulation intra-bloc,
             // remise à zéro à la fin de chaque bloc (gaté sel_bal).
@@ -264,13 +271,13 @@ impl winterfell::Air for MonolithAir {
             idx += N_BAL;
         }
 
-        // --- Porteuses : constantes (next − cur = 0) sur la RÉGION UTILE, gatées
-        //     par blind_off (witness-hiding 3z-b1) : la transition used−1 → used et
-        //     la région de blinding sont LIBRES (les porteuses y sautent vers
+        // --- Porteuses : constantes (next − cur = 0) sur la RÉGION UTILE. Le gating
+        //     blind_off est appliqué par la boucle GLOBALE en fin de fonction (un
+        //     seul facteur, degré wc(1, [n]) inchangé) : la transition used−1 → used
+        //     et la région de blinding sont LIBRES (les porteuses y sautent vers
         //     l'aléa de `build_monolith_trace_seeded`). ---
-        let blind_off = pv[48];
         for c in 0..N_CARRIER {
-            result[idx + c] = blind_off * (next[CARRIER_OFF + c] - cur[CARRIER_OFF + c]);
+            result[idx + c] = next[CARRIER_OFF + c] - cur[CARRIER_OFF + c];
         }
         idx += N_CARRIER; // idx == N_BASE
 
@@ -411,6 +418,32 @@ impl winterfell::Air for MonolithAir {
         }
 
         debug_assert_eq!(idx, N_CONSTRAINTS);
+
+        // ============================================================================
+        // GATING GLOBAL blind_off (witness-hiding 3z-b1b).
+        //
+        // Recensement préalable (audit de chaque famille sur la région de blinding
+        // `[used_rows(depth), trace_len)`) — les sélecteurs de région bâtis sur
+        // `self.l` s'annulent DÉJÀ pour r ≥ used : sel_key (r < 7), sel_u (r < 56),
+        // sel_o (r < 31), sel_m (r < 16·depth−1 ≤ used−1), sel_bal (r < 256 ≤ used),
+        // les one-hot de liaison s0/s7/s31/s32/s39/s40/s47 et les vacc_gate (lignes
+        // ≤ 252 < used). NE s'annulaient PAS :
+        //   1. l'équilibre S (`s_next − s − signe·bit·pow`, non gaté) : porté par
+        //      `signe` (nul au-delà de 256), il exigeait S CONSTANT sur tout le
+        //      blinding (l'assertion S[l−1] = fee est déplacée en S[used−1]) ;
+        //   2. le reset VACC à la frontière 255→256 (endblk @255, gaté sel_bal
+        //      encore actif à r = 255) : quand used == 256 (profondeur ≤ 16), il
+        //      forçait next[VACC] = 0 sur la PREMIÈRE ligne de blinding.
+        // Choix robuste (spec 3z-b1) : multiplier CHAQUE contrainte par blind_off —
+        // aucune colonne ne peut être oubliée, les lignes de blinding sont libres
+        // pour TOUTES les familles (S et VACC y sont randomisées comme le reste par
+        // `build_monolith_trace_seeded`). Coût : +1 cycle pleine longueur par
+        // famille dans `degrees()` (les porteuses, écrites NON gatées ci-dessus,
+        // reçoivent ici leur unique facteur) — le blowup reste 16 (M-sponge :
+        // next_pow2(8 + 4 − 1) = 16, cf. calibration de `degrees()`).
+        for r in result.iter_mut() {
+            *r *= blind_off;
+        }
     }
 
     fn get_assertions(&self) -> Vec<Assertion<Self::BaseField>> {
@@ -466,9 +499,16 @@ impl winterfell::Air for MonolithAir {
             }
         }
 
-        // Équilibre : S[0] = 0, S[dernière ligne] = fee (= Σin − Σout).
+        // Équilibre : S[0] = 0, S[used−1] = fee (= Σin − Σout). L'assertion finale
+        // vise la DERNIÈRE ligne UTILE (pas l−1 : depuis le gating global blind_off,
+        // S est libre — et randomisé — sur la région de blinding ; la contrainte S,
+        // active jusqu'à la transition used−2 → used−1, propage fee jusque-là).
         a.push(Assertion::single(BAL_OFF + BAL_S, 0, BaseElement::ZERO));
-        a.push(Assertion::single(BAL_OFF + BAL_S, self.l - 1, BaseElement::new(self.pi.fee)));
+        a.push(Assertion::single(
+            BAL_OFF + BAL_S,
+            used_rows(self.depth) - 1,
+            BaseElement::new(self.pi.fee),
+        ));
         // VACC[0] = 0 : la cellule d'accumulation de bloc de l'entrée 0 est SINON un
         // témoin libre (aucun reset ne la précède, contrairement aux blocs 1..3 dont
         // le VACC de départ est forcé à 0 par le reset endblk de la ligne 63/127/191).
@@ -639,56 +679,64 @@ fn push_preamble(
 ///
 /// Calibration (formule winterfell `base·(n−1) + Σ (n/cᵢ)·(cᵢ−1)`, contrainte de
 /// blowup `next_pow2(base + |cycles| − 1) ≤ 16`) — `n = trace_len`, tout sélecteur
-/// pleine longueur ajoute un cycle `n` (contribution `n−1`, coût de blowup +1) :
-///  - KEY : ronde deg 7 × sel_key(n)               → base 7, cycles [n]      (blowup 8)
-///  - U/O : ronde deg 7 × round_flag(8) × sel(n)    → base 7, cycles [8,n]    (blowup 8)
-///  - M sponge : deg 8 × round_flag(16) × chain × sel_m(n) → base 8, [8,16,n] (blowup 16)
-///  - M booléen/copies : deg 2 × sel_m(n)           → base 2, cycles [n]      (blowup 4)
-///  - M swap : deg 3 × sel_m(n)                      → base 3, cycles [n]      (blowup 4)
-///  - BAL bit : deg 2 × sel_bal(n)                   → base 2, cycles [n]      (blowup 4)
-///  - BAL S : bit × signe(n) × pow(n)                → base 2, cycles [n,n]    (blowup 4)
-///  - BAL VACC : bit × pow(n) × endblk(n) × sel_bal(n)→ base 2, cycles [n,n,n] (blowup 8)
-///  - porteuses : (next − cur) × blind_off(n)        → base 1, cycles [n]      (blowup 2)
+/// pleine longueur ajoute un cycle `n` (contribution `n−1`, coût de blowup +1).
+/// Depuis le gating GLOBAL blind_off (3z-b1b), CHAQUE famille gagne un cycle `n`
+/// supplémentaire (le facteur blind_off), SAUF les porteuses dont blind_off est
+/// l'UNIQUE facteur (écrites non gatées, multipliées une seule fois par la boucle
+/// globale) :
+///  - KEY : deg 7 × sel_key(n) × blind_off(n)           → base 7, [n,n]     (blowup 8)
+///  - U/O : deg 7 × round_flag(8) × sel(n) × blind_off(n)→ base 7, [8,n,n]  (blowup 16)
+///  - M sponge : deg 8 × rf(16) × chain × sel_m(n) × blind_off(n)
+///    → base 8, [8,16,n,n] (blowup 16)
+///  - M booléen/copies : deg 2 × sel_m(n) × blind_off(n) → base 2, [n,n]    (blowup 4)
+///  - M swap : deg 3 × sel_m(n) × blind_off(n)           → base 3, [n,n]    (blowup 4)
+///  - BAL bit : deg 2 × sel_bal(n) × blind_off(n)        → base 2, [n,n]    (blowup 4)
+///  - BAL S : bit × signe(n) × pow(n) × blind_off(n)     → base 2, [n,n,n]  (blowup 4)
+///  - BAL VACC : bit × pow(n) × endblk(n) × sel_bal(n) × blind_off(n)
+///    → base 2, [n,n,n,n] (blowup 8)
+///  - porteuses : (next − cur) × blind_off(n)            → base 1, [n]      (blowup 2)
+///  - liaisons : sel(n) × blind_off(n) × (cur[a] − cur[b])→ base 1, [n,n]   (blowup 2)
 ///
-/// La borne M-sponge (base 8, 3 cycles) sature EXACTEMENT le blowup 16 ; toutes les
-/// autres sont en-dessous. Bornes supérieures ⇒ soundness préservée.
+/// Les bornes M-sponge (8 + 4 − 1 = 11) et U/O (7 + 3 − 1 = 9) saturent le
+/// blowup 16 ; toutes les autres sont en-dessous. Bornes supérieures ⇒ soundness
+/// préservée.
 fn degrees(n: usize) -> Vec<TransitionConstraintDegree> {
     let wc = TransitionConstraintDegree::with_cycles;
     let mut d = Vec::with_capacity(N_CONSTRAINTS);
 
     // KEY (24).
     for _ in 0..N_KEY {
-        d.push(wc(7, vec![n]));
+        d.push(wc(7, vec![n, n]));
     }
     // U0, U1, O0, O1 (4 × 12).
     for _ in 0..4 * N_SPONGE {
-        d.push(wc(7, vec![8, n]));
+        d.push(wc(7, vec![8, n, n]));
     }
     // M0, M1 (2 × 30) : 12 sponge, 10 booléen/copies (deg 2), 8 swap (deg 3).
     for _ in 0..2 {
         for _ in 0..12 {
-            d.push(wc(8, vec![8, 16, n]));
+            d.push(wc(8, vec![8, 16, n, n]));
         }
         for _ in 0..10 {
-            d.push(wc(2, vec![n]));
+            d.push(wc(2, vec![n, n]));
         }
         for _ in 0..8 {
-            d.push(wc(3, vec![n]));
+            d.push(wc(3, vec![n, n]));
         }
     }
     // BAL (3).
-    d.push(wc(2, vec![n])); // bit booléen
-    d.push(wc(2, vec![n, n])); // accumulateur S
-    d.push(wc(2, vec![n, n, n])); // accumulateur VACC
-    // Porteuses (36) : gatées blind_off (cycle pleine longueur, 3z-b1).
+    d.push(wc(2, vec![n, n])); // bit booléen
+    d.push(wc(2, vec![n, n, n])); // accumulateur S
+    d.push(wc(2, vec![n, n, n, n])); // accumulateur VACC
+    // Porteuses (36) : blind_off (cycle pleine longueur) est leur UNIQUE facteur.
     for _ in 0..N_CARRIER {
         d.push(wc(1, vec![n]));
     }
     // Liaisons (92, dont la liaison secret owner↔nk) : chacune `sel(cycle n) ·
-    // (cur[a] − cur[b])` — degré 1, un cycle pleine longueur (motif `wc(1, vec![n])`
-    // de key.rs). Blowup 16 : très en-dessous.
+    // blind_off(cycle n) · (cur[a] − cur[b])` — degré 1, deux cycles pleine
+    // longueur. Blowup 16 : très en-dessous.
     for _ in 0..N_LIAISON {
-        d.push(wc(1, vec![n]));
+        d.push(wc(1, vec![n, n]));
     }
 
     debug_assert_eq!(d.len(), N_CONSTRAINTS);
@@ -859,6 +907,98 @@ mod tests {
         };
         let proof = ValidityProof(prover.prove(trace).expect("preuve produite en release"));
         verify_monolith(&pi, depth, &proof)
+    }
+
+    /// Prouve le monolithe (profondeur 2) sur une trace à graine de blinding FIXÉE
+    /// (couture déterministe), publics relus de la trace (comme `prove_monolith`).
+    /// Sert au test de masquage : deux graines → deux blindings distincts.
+    fn preuve_seedee(w: &MonolithWitness, seed: u64) -> (MonolithPublicInputs, ValidityProof) {
+        use crate::monolith::trace::build_monolith_trace_seeded;
+        use rand::rngs::StdRng;
+        use rand::SeedableRng;
+
+        let depth = 2;
+        let trace = build_monolith_trace_seeded(w, &mut StdRng::seed_from_u64(seed));
+        let last_m = 16 * depth - 1;
+        let pi = MonolithPublicInputs {
+            root: read4(&trace, M0_OFF + RATE_START, last_m),
+            nullifiers: [
+                read4(&trace, U0_OFF + RATE_START, NF_ROWS_END - 1),
+                read4(&trace, U1_OFF + RATE_START, NF_ROWS_END - 1),
+            ],
+            output_commitments: [
+                read4(&trace, O0_OFF + RATE_START, CM_ROWS_END - 1),
+                read4(&trace, O1_OFF + RATE_START, CM_ROWS_END - 1),
+            ],
+            fee: w.fee,
+            depth,
+        };
+        let prover = MonolithProver {
+            options: crate::proof_options_hi(),
+            pi: pi.clone(),
+        };
+        let proof = ValidityProof(prover.prove(trace).expect("preuve produite en release"));
+        (pi, proof)
+    }
+
+    /// Extrait les évaluations OUVERTES de la colonne `col` aux positions de requête
+    /// FRI, via `Queries::parse` — motif du spike E1 (`zk-spike::secret_openings`) :
+    /// exactement ce qu'un observateur du réseau peut faire sur une preuve sérialisée.
+    fn ouvertures_colonne(proof: &ValidityProof, col: usize) -> Vec<BaseElement> {
+        let queries = proof.0.trace_queries[0].clone(); // segment principal
+        let (_opening_proof, table) = queries
+            .parse::<BaseElement, Blake3, MerkleTree<Blake3>>(
+                proof.0.lde_domain_size(),
+                proof.0.num_unique_queries as usize,
+                WIDTH,
+            )
+            .expect("parse des trace queries");
+        table.rows().map(|row| row[col]).collect()
+    }
+
+    /// MASQUAGE (witness-hiding 3z-b1b, white-box) : la porteuse OWNER_C est
+    /// CONSTANTE (= owner témoin) sur toute la région utile `[0, used)` — sans
+    /// blinding, son polynôme serait constant et CHAQUE ouverture FRI vaudrait
+    /// owner en clair (zk-spike, expérience A). Avec les lignes de blinding et le
+    /// gating global blind_off : (1) AUCUNE ouverture ne vaut le témoin owner ;
+    /// (2) deux preuves de la MÊME tx (graines distinctes) ouvrent des valeurs
+    /// DISJOINTES sur cette colonne (masquage randomisé, pas déterministe).
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "AIR gaté : générer en --release")]
+    fn masquage_owner_ouvertures_aleatoires() {
+        use proved_hash::rescue;
+
+        let (w, _root) = witness_de_test();
+        let (pi1, p1) = preuve_seedee(&w, 41);
+        let (pi2, p2) = preuve_seedee(&w, 42);
+        assert!(verify_monolith(&pi1, 2, &p1), "preuve blindée 1 acceptée");
+        assert!(verify_monolith(&pi2, 2, &p2), "preuve blindée 2 acceptée");
+
+        let owner = rescue::hash(Domain::Owner, w.secret.as_felts());
+        for k in 0..DIGEST_FELTS {
+            let temoin = owner.0[k].to_winter();
+            let o1 = ouvertures_colonne(&p1, OWNER_C + k);
+            let o2 = ouvertures_colonne(&p2, OWNER_C + k);
+            assert!(!o1.is_empty(), "au moins une ouverture");
+            assert_eq!(
+                o1.iter().filter(|&&v| v == temoin).count(),
+                0,
+                "aucune ouverture de p1 ne doit valoir owner[{k}]"
+            );
+            assert_eq!(
+                o2.iter().filter(|&&v| v == temoin).count(),
+                0,
+                "aucune ouverture de p2 ne doit valoir owner[{k}]"
+            );
+        }
+        // Disjointes sur OWNER_C : aucune valeur commune entre les deux preuves
+        // (les combinaisons linéaires mêlent l'aléa de blinding, distinct par graine).
+        let o1 = ouvertures_colonne(&p1, OWNER_C);
+        let o2 = ouvertures_colonne(&p2, OWNER_C);
+        assert!(
+            o1.iter().all(|v| !o2.contains(v)),
+            "les ouvertures OWNER_C des deux preuves doivent être disjointes"
+        );
     }
 
     /// Roundtrip complet : prouve le monolithe, vérifie, et rejette des publics

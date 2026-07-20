@@ -170,12 +170,14 @@ fn fill_balance(dst: &mut [[BaseElement; WIDTH]], amounts: [u64; 4]) {
         }
     }
 
-    // Complétude au-delà des 4 blocs (lignes idle 256..len) : la contrainte S est
-    // NON gatée (le signe périodique la porte, cf. air.rs) et exige `S` constant
-    // dès que `signe = 0` ; l'assertion finale `S[len−1] = fee` lit cette même
+    // Complétude au-delà des 4 blocs (lignes idle 256..used) : la contrainte S
+    // (portée par `signe = 0`, active jusqu'au gating blind_off) exige `S` constant
+    // sur la traîne idle ; l'assertion finale `S[used−1] = fee` lit cette même
     // colonne. On PROPAGE donc `S = Σsigné` (= fee pour un témoin honnête) et on
     // maintient `VACC = 0`, `bit = 0` sur toute la traîne — sans quoi une trace
-    // honnête à trace_len > 256 (profondeur ≥ 32) serait rejetée (S retomberait à 0).
+    // honnête à used_rows > 256 (profondeur 32) serait rejetée (S retomberait à 0).
+    // La partie [used, len) de cette traîne est ensuite ÉCRASÉE par l'aléa de
+    // blinding dans `build_monolith_trace_seeded` (région libre pour l'AIR).
     for row in dst.iter_mut().skip(4 * BAL_BLOCK) {
         row[BAL_OFF + BAL_BIT] = BaseElement::ZERO;
         row[BAL_OFF + BAL_S] = s;
@@ -296,25 +298,15 @@ pub(crate) fn build_monolith_trace_seeded(
     // --- Équilibre : Σ entrées = Σ sorties + fee. ---
     fill_balance(&mut rows, amounts);
 
-    // --- Blinding (3z-b1a, witness-hiding) : lignes [used, len) remplies d'un
-    //     aléa frais sur TOUTES les colonnes, SAUF deux cellules encore lues par
-    //     des contraintes/assertions NON gatées par blind_off (leur gating est la
-    //     tâche B1-T2 ; les deux valeurs maintenues sont des CONSTANTES publiques,
-    //     aucune fuite de témoin) :
-    //       - S : la contrainte S (air.rs) est portée par `signe` (nul au-delà de
-    //         256 → S doit rester CONSTANT jusqu'à la dernière ligne) et
-    //         l'assertion publique S[len−1] = fee tombe DANS le blinding ;
-    //         `fill_balance` a déjà propagé S = fee sur toute la traîne ;
-    //       - VACC : quand used == 256 (profondeur ≤ 16), la remise à zéro de fin
-    //         de bloc (endblk, transition 255→256, gatée sel_bal ENCORE actif à
-    //         r = 255) lit next[VACC] = première ligne de blinding et exige 0 ;
-    //         `fill_balance` a déjà mis VACC = 0 sur toute la traîne. ---
+    // --- Blinding (3z-b1, witness-hiding) : lignes [used, len) remplies d'un
+    //     aléa frais sur TOUTES les colonnes, S et VACC comprises (le gating
+    //     GLOBAL blind_off de l'AIR — 3z-b1b — libère la région de blinding pour
+    //     chaque famille de contraintes, et l'assertion finale d'équilibre vise
+    //     désormais S[used−1], jamais une ligne de blinding). ---
     let used = used_rows(depth);
     for row in rows.iter_mut().skip(used) {
-        for (c, cell) in row.iter_mut().enumerate() {
-            if c != BAL_OFF + BAL_S && c != BAL_OFF + BAL_VACC {
-                *cell = felt_alea(rng);
-            }
+        for cell in row.iter_mut() {
+            *cell = felt_alea(rng);
         }
     }
 
@@ -840,7 +832,6 @@ mod tests {
         }
 
         // racine au bout du chemin M0 == root de l'arbre.
-        let last = t.length() - 1;
         for k in 0..4 {
             assert_eq!(
                 d(M0_OFF + 4 + k, 16 * w.inputs[0].path.len() - 1),
@@ -855,20 +846,19 @@ mod tests {
             assert_eq!(t.get(c, 0), t.get(c, used - 1));
         }
 
-        // équilibre : S final == fee (S est maintenu = fee jusqu'à la DERNIÈRE
-        // ligne, blinding compris — assertion publique de l'AIR).
+        // équilibre : S == fee sur la dernière ligne UTILE (assertion publique
+        // S[used−1] de l'AIR ; au-delà : blinding aléatoire, S comprise).
         assert_eq!(
-            d(BAL_OFF + 1, last),
+            d(BAL_OFF + 1, used - 1),
             Felt::from_canonical_u64(w.fee).unwrap()
         );
     }
 
-    /// Blinding (3z-b1a) : à graine IDENTIQUE la trace est entièrement déterministe ;
+    /// Blinding (3z-b1) : à graine IDENTIQUE la trace est entièrement déterministe ;
     /// à graines DISTINCTES la région utile `[0, used)` est IDENTIQUE (non-régression
     /// du monolithe utile) mais les régions de blinding `[used, len)` diffèrent et
-    /// sont non nulles — SAUF les colonnes S (= fee) et VACC (= 0), maintenues à
-    /// des constantes publiques (cf. le commentaire du remplissage). Test
-    /// NON-prouveur (tourne en DEBUG).
+    /// sont non nulles — TOUTES colonnes comprises, S et VACC incluses depuis le
+    /// gating global blind_off (3z-b1b). Test NON-prouveur (tourne en DEBUG).
     #[test]
     fn blinding_aleatoire_et_region_utile_stable() {
         use rand::rngs::StdRng;
@@ -909,22 +899,23 @@ mod tests {
         }
         assert!(differe, "deux graines doivent donner des blindings distincts");
         assert!(non_nulles > (len - used) * WIDTH / 2, "blinding majoritairement non nul");
-        // Les colonnes S et VACC restent déterministes sur le blinding (contraintes
-        // S/reset VACC non gatées par blind_off + assertion S[len−1] = fee ; fee et
-        // 0 sont PUBLICS → aucune fuite de témoin ; gating global en B1-T2).
-        let fee = BaseElement::new(w.fee);
-        for r in used..len {
-            assert_eq!(t1.get(BAL_OFF + BAL_S, r), fee, "S@{r}");
-            assert_eq!(t1.get(BAL_OFF + BAL_VACC, r), BaseElement::ZERO, "VACC@{r}");
-        }
+        // S et VACC sont elles AUSSI randomisées sur le blinding (l'exception de
+        // 3z-b1a est levée : le gating global blind_off libère ces colonnes et
+        // l'assertion d'équilibre vise S[used−1], dans la région utile).
+        let s_differe = (used..len).any(|r| t1.get(BAL_OFF + BAL_S, r) != t3.get(BAL_OFF + BAL_S, r));
+        let vacc_differe =
+            (used..len).any(|r| t1.get(BAL_OFF + BAL_VACC, r) != t3.get(BAL_OFF + BAL_VACC, r));
+        assert!(s_differe, "S doit être randomisée sur le blinding");
+        assert!(vacc_differe, "VACC doit être randomisée sur le blinding");
     }
 
     /// Fix de complétude BAL (revue T3) : à profondeur consensus (used_rows 512), la
-    /// colonne `S` doit rester CONSTANTE (= fee) sur la traîne idle 256..512 ET sur
-    /// toute la région de blinding (jusqu'à la dernière ligne, où l'AIR l'asserte) —
-    /// sinon la contrainte S non gatée rejette une trace honnête. `VACC`/`bit`
-    /// restent nuls sur la traîne UTILE seulement (aléatoires sur le blinding).
-    /// Test NON-prouveur (lit les cellules ; tourne en DEBUG).
+    /// colonne `S` doit rester CONSTANTE (= fee) sur la traîne idle 256..512 —
+    /// jusqu'à `S[used−1]`, où l'AIR l'asserte — sinon la contrainte S (active sur
+    /// la région utile) rejette une trace honnête. `VACC`/`bit` restent nuls sur la
+    /// traîne UTILE seulement (toutes les colonnes, S comprise, sont aléatoires sur
+    /// le blinding depuis le gating global 3z-b1b). Test NON-prouveur (lit les
+    /// cellules ; tourne en DEBUG).
     #[test]
     fn bal_s_constant_sur_les_lignes_idle_profondeur_32() {
         let (w, _root) = witness_de_test_profondeur_consensus();
@@ -937,11 +928,9 @@ mod tests {
             assert_eq!(t.get(BAL_OFF + BAL_BIT, row), BaseElement::ZERO, "bit@{row}");
             assert_eq!(t.get(BAL_OFF + BAL_VACC, row), BaseElement::ZERO, "VACC@{row}");
         }
-        // S = fee jusqu'au bout du blinding (l'assertion S[len−1] = fee de l'AIR).
-        for row in used..t.length() {
-            assert_eq!(Felt::from_winter(t.get(BAL_OFF + BAL_S, row)).unwrap(), fee, "S@{row}");
-        }
-        // Continuité à la frontière 255→256 : S[255] == S[256] == fee.
+        // Continuité à la frontière 255→256 : S[255] == S[256] == fee, et l'assertion
+        // publique de l'AIR lit S[used−1] (dernière ligne UTILE, jamais le blinding).
         assert_eq!(Felt::from_winter(t.get(BAL_OFF + BAL_S, 255)).unwrap(), fee);
+        assert_eq!(Felt::from_winter(t.get(BAL_OFF + BAL_S, used - 1)).unwrap(), fee);
     }
 }
