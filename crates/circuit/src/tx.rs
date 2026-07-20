@@ -397,4 +397,43 @@ mod tests {
         assert_eq!(proved_root, root);
         assert!(!verify_tx(&root, DEPTH, &tx));
     }
+
+    /// 3z-b1e — fraîcheur de l'aléa de blinding en PRODUCTION : `prove_tx` (donc
+    /// `prove_monolith` → `build_monolith_trace`, le wrapper `OsRng` — pas la
+    /// couture seedée `build_monolith_trace_seeded`, réservée aux tests) tiré DEUX
+    /// fois sur la MÊME entrée (même secret/entrées/sorties/fee/intent) doit
+    /// produire deux preuves STARK dont les OCTETS diffèrent : sans aléa frais, un
+    /// observateur verrait deux preuves identiques et pourrait détecter la
+    /// réémission d'une même dépense (fuite d'équivalence). `tx_digest`/`intent_sig`
+    /// /`signer` sont, eux, IDENTIQUEMENT reconstruits (fonction déterministe des
+    /// publics extraits de la trace) — on n'affirme PAS leur égalité/inégalité ici,
+    /// seule `tx.proof` (bytes) est comparée. Les deux preuves doivent rester
+    /// valides.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
+    fn deux_preuves_meme_tx_disjointes() {
+        let (secret, root, inputs, outputs) = setup(None);
+        let intent = SigKeypair::generate();
+
+        // Même témoin dupliqué (les ProvedInput/SpendNote ne sont pas Copy) : la
+        // fonction `setup` reconstruit une entrée strictement équivalente (mêmes
+        // valeurs, owner, rho, r, arbre) — le seul aléa en jeu est celui de
+        // `prove_tx`.
+        let (_secret2, _root2, inputs2, outputs2) = setup(None);
+
+        let (root1, tx1) = prove_tx(&secret, inputs, outputs, 20, &intent);
+        let (root2, tx2) = prove_tx(&secret, inputs2, outputs2, 20, &intent);
+        assert_eq!(root1, root);
+        assert_eq!(root2, root);
+
+        let bytes1 = tx1.proof.0.to_bytes();
+        let bytes2 = tx2.proof.0.to_bytes();
+        assert_ne!(
+            bytes1, bytes2,
+            "deux preuves de la même tx doivent être DISJOINTES (aléa frais par appel)"
+        );
+
+        assert!(verify_tx(&root, DEPTH, &tx1));
+        assert!(verify_tx(&root, DEPTH, &tx2));
+    }
 }
