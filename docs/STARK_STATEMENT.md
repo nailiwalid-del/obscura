@@ -252,7 +252,7 @@ Entrées PUBLIQUES :
   root                  racine de l'arbre des commitments (récente)
   nullifiers[]          un par note dépensée
   output_commitments[]  un par note créée
-  fee                   frais (u64, en clair)
+  fee                   frais (u64, en clair ; borné < 2^60, vérifié par verify_tx)
   tx_digest             digest canonique de la transaction (lie preuve ↔ tx)
 
 Témoins PRIVÉS :
@@ -268,7 +268,9 @@ La preuve établit :
   P3. chaque nullifier est correctement dérivé : nf = PRF_nk(rho ‖ commitment)
   P4. nk = H_nk(shielded_secret)   (nk contrainte par le même secret racine)
   P5. Σ valeurs d'entrée = Σ valeurs de sortie + fee
-  P6. toutes les valeurs sont range-checkées dans [0, 2^64)   (pas d'overflow/underflow)
+  P6. toutes les valeurs sont range-checkées dans [0, 2^60)   (RANGE_BITS = 60 : sur
+      Goldilocks p ≈ 2^64, borner à 2^60 garde chaque côté de l'équilibre < p,
+      cf. 3b3a ci-dessus — pas d'overflow/underflow ni de wrap en corps)
   P7. chaque output_commitment est l'engagement correct de sa note de sortie
 ```
 
