@@ -223,8 +223,9 @@
 > à la ligne `used`) → leurs ouvertures ne valent plus le témoin en clair. API
 > inchangée (`prove_tx`/`verify_tx`/`ProvedTx`, blinding transparent au
 > vérifieur). Argument de sécurité : section « Witness-hiding du monolithe —
-> argument HVZK » ci-dessous (comptage `q+2 = 34 < b = 40`, esquisse de
-> simulateur). Tests : complétude (profondeur 2 et 32), masquage exhaustif par
+> argument HVZK » ci-dessous (comptage par colonne de trace `q+2 = 34 < b = 40`
+> + argument de taille de la région de blinding pour composition/FRI, esquisse
+> de simulateur). Tests : complétude (profondeur 2 et 32), masquage exhaustif par
 > colonne témoin + ouvertures DISJOINTES de deux preuves de la même tx,
 > soundness préservée (matrice de sabotage 3z-a + inertie des lignes de blinding
 > forgées), fraîcheur OsRng. **Bench réel (profondeur 32, une machine dev)** :
@@ -296,88 +297,126 @@ honnête (HVZK) dans le modèle de l'oracle aléatoire (ROM)** — et rien de pl
   PAS choisis par un adversaire : c'est exactement le cadre « honnête-vérifieur ».
   Aucune revendication n'est faite contre un vérifieur malveillant qui choisirait
   ses défis (malicious-verifier ZK), et il ne s'agit PAS de « perfect ZK ».
-- **Argument, pas preuve formelle** : ce qui suit est un argument de comptage
-  plus une esquisse de simulateur (style « randomized AIR », ethSTARK) —
-  suffisant pour un prototype, non formalisé au niveau publication.
+- **Argument, pas preuve formelle** : ce qui suit est un argument en deux
+  étages (comptage exact par colonne de trace + heuristique de taille de la
+  région de blinding) plus une esquisse de simulateur (style « randomized
+  AIR », ethSTARK) — suffisant pour un prototype, non formalisé au niveau
+  publication.
 - **Prototype non audité**, comme tout Obscura.
 
-### Ce que la preuve révèle par colonne (verrouillé sur winterfell 0.13.1)
+### Ce que la preuve révèle (périmètre exact, winter-verifier 0.13.1)
 
-Chaque colonne de trace est un polynôme `f` de degré `< n` (`n = trace_len`)
-interpolant ses `n` cellules sur le domaine de trace `H`. Par lecture du code
-source (spike 3z-b0, E1/E4 ; `winter-verifier` `composer.rs`), la preuve révèle
-par colonne :
+La preuve révèle trois familles de valeurs — TOUTES fonctions déterministes de
+la trace COMMITTÉE COMPLÈTE, laquelle inclut la région de blinding :
 
-- `q = 32` **ouvertures de requête** : `f(xᵢ)` aux positions requêtées du
-  domaine LDE (chaque requête ouvre la ligne entière — toutes les colonnes) ;
-- `2` **évaluations OOD** : `f(z)` et `f(z·g)` (frame courant/suivant).
+- **Colonnes de trace** : chaque colonne est un polynôme `f` de degré `< n`
+  (`n = trace_len`) interpolant ses `n` cellules sur le domaine de trace `H`.
+  Par colonne : `q = 32` **ouvertures de requête** `f(xᵢ)` aux positions
+  requêtées du domaine LDE (chaque requête ouvre UNE ligne entière — toutes les
+  colonnes) et `2` **évaluations OOD** `f(z)`, `f(z·g)` — soit `q + 2 = 34`
+  évaluations, combinaisons linéaires à coefficients PUBLICS (dépendant du seul
+  point d'évaluation) des `n` cellules, aux points hors de `H`. Précision
+  base-field : `z` vit dans l'extension quadratique, chaque évaluation OOD
+  compte donc pour 2 équations sur le corps de base — `32 + 4 = 36` équations
+  base-field par colonne.
+- **Colonnes de composition/quotient** : le vérifieur LIT dans la preuve les
+  ouvertures des colonnes du polynôme de composition aux mêmes positions de
+  requête, contre un commitment de contraintes SÉPARÉ
+  (`winter-verifier/src/lib.rs`, `read_constraint_evaluations`), plus leur
+  frame OOD en `z`. Ce sont des valeurs révélées EN PLUS — fonctions
+  déterministes NON LINÉAIRES de la trace complète (via les contraintes), PAS
+  recalculables depuis les 34 évaluations de trace (c'est précisément pourquoi
+  ce commitment séparé existe).
+- **FRI** : chaque couche de repli ouvre des cosets aux positions dérivées, et
+  le polynôme de RESTE (degré ≤ 127) est révélé EN ENTIER — autant de valeurs
+  dérivées du polynôme DEEP, donc de la trace committée. (C'est la surface qui
+  motive le salage de FRI dans ethSTARK ; winterfell ne sale pas FRI.)
 
-Soit **`q + 2 = 34` évaluations par colonne**, chacune une combinaison linéaire
-à coefficients PUBLICS (dépendant du seul point d'évaluation) des `n` cellules
-de la colonne — les 34 points sont hors de `H` (points LDE décalés + `z`). Le
-reste de la preuve n'ouvre aucune cellule de trace supplémentaire : les
-ouvertures du polynôme de composition et le DEEP-check se recalculent comme
-fonctions déterministes de ces mêmes évaluations, des coefficients du transcript
-et des entrées publiques (E4, confirmé sur le vérifieur).
+### L'argument, en deux étages
 
-### Comptage : 34 équations, 40 inconnues uniformes
+**Étage 1 — comptage exact, par colonne de trace.** Chaque colonne témoin porte
+`b = BLIND_ROWS = 40` cellules d'aléa uniforme **frais par preuve** (région de
+blinding `[used, trace_len)`, OsRng), avec `b = q + 2 + 6 ≥ q + 2` verrouillé
+par une assertion de construction contre tout changement de `proof_options`.
+Ces cellules sont LIBRES : aucune contrainte de transition ne les lie (gating
+global `blind_off`) et aucune assertion ne vise une ligne `≥ used` (inertie
+testée white-box).
 
-Chaque colonne témoin porte `b = BLIND_ROWS = 40` cellules d'aléa uniforme
-**frais par preuve** (région de blinding `[used, trace_len)`, OsRng), avec
-`b = q + 2 + 6 ≥ q + 2` verrouillé par une assertion de construction contre tout
-changement de `proof_options`. Ces cellules sont LIBRES : aucune contrainte de
-transition ne les lie (gating global `blind_off`) et aucune assertion ne vise
-une ligne `≥ used` (inertie testée white-box).
+Les 34 évaluations révélées d'une colonne sont des fonctions AFFINES de ses 40
+cellules d'aléa (les cellules utiles — le témoin — fixent le terme constant,
+l'aléa fait le reste). Retrouver le témoin exigerait de résoudre 34 équations
+(36 sur le corps de base) à 40 inconnues uniformes indépendantes : le système
+est **sous-déterminé** (`34 < 40`). Plus précisément, dès que la matrice 34×40
+des coefficients (évaluations des polynômes de Lagrange des positions de
+blinding aux 34 points révélés) est de rang plein 34, le vecteur des 34
+évaluations révélées est **uniforme et indépendant des cellules utiles** — pour
+tout témoin, la distribution des valeurs révélées est identique. Les 34 points
+étant distincts, hors de `H` et dérivés de l'oracle aléatoire (donc uniformes,
+non adverses), un défaut de rang est un événement négligeable : c'est ici que
+le modèle ROM intervient. La disjonction observée entre les ouvertures de deux
+preuves du même témoin (test de masquage 3z-b1c) est la manifestation empirique
+de cette uniformité. Le comptage vaut colonne par colonne ; l'aléa étant tiré
+indépendamment par colonne, il s'étend au vecteur joint des ouvertures de
+TRACE.
 
-Les 34 évaluations révélées sont des fonctions AFFINES des 40 cellules d'aléa
-(les cellules utiles — le témoin — fixent le terme constant, l'aléa fait le
-reste). Retrouver le témoin exigerait de résoudre 34 équations à 40 inconnues
-uniformes indépendantes : le système est **sous-déterminé** (`34 < 40`). Plus
-précisément, dès que la matrice 34×40 des coefficients (évaluations des
-polynômes de Lagrange des positions de blinding aux 34 points révélés) est de
-rang plein 34, le vecteur des 34 évaluations révélées est **uniforme et
-indépendant des cellules utiles** — pour tout témoin, la distribution des
-valeurs révélées est identique. Les 34 points étant distincts, hors de `H` et
-dérivés de l'oracle aléatoire (donc uniformes, non adverses), un défaut de rang
-est un événement négligeable : c'est ici que le modèle ROM intervient. La
-disjonction observée entre les ouvertures de deux preuves du même témoin (test
-de masquage 3z-b1c) est la manifestation empirique de cette uniformité.
-
-Le comptage vaut colonne par colonne ; l'aléa de blinding étant tiré
-indépendamment pour chaque colonne, l'argument s'étend au vecteur JOINT des
-ouvertures (les lignes entières révélées par requête).
+**Étage 2 — taille de la région de blinding (composition + FRI).** Le comptage
+ci-dessus ne couvre QUE les évaluations de trace ; les ouvertures de
+composition/quotient et les valeurs FRI dépendent elles aussi du témoin. Pour
+elles, la garantie repose sur la TAILLE de la région de blinding :
+`trace_len − used = next_pow2(used + 40) − used` lignes ENTIÈRES — 512 lignes à
+profondeur 32 (1024 − 512), 256 en dev (512 − 256) — sur les 201 colonnes, soit
+**≈ 51 000 à 103 000 cellules aléatoires fraîches** injectées dans la trace
+committée, contre un total révélé de l'ordre de 10⁴ éléments du corps de base
+au plus (ouvertures de trace ≈ 6 400, composition, frames OOD, couches FRI et
+reste compris). Toute valeur révélée étant une fonction de cette trace
+massivement randomisée, sa distribution JOINTE est — **heuristiquement** —
+indépendante du témoin. `34 < 40` reste le comptage exact par colonne de
+trace ; il n'est PAS, à lui seul, le périmètre complet de l'argument.
 
 ### Esquisse de simulateur
 
 Simulateur `S`, à partir des SEULES entrées publiques (`root`, `nullifiers`,
 `output_commitments`, `fee`, `depth`) :
 
-1. pour chaque colonne, échantillonner **uniformément** les `q + 2` évaluations
-   « révélées » (au lieu de les calculer depuis un témoin) ;
-2. en dériver les évaluations du polynôme de composition et du DEEP aux mêmes
-   points par les formules publiques du vérifieur (fonctions déterministes des
-   évaluations de trace, des coefficients du transcript et des entrées
-   publiques) ;
+1. pour chaque colonne de trace, échantillonner **uniformément** les `q + 2`
+   évaluations « révélées » (au lieu de les calculer depuis un témoin) ;
+2. échantillonner de même les ouvertures des colonnes de composition/quotient,
+   sous les SEULES cohérences que le vérifieur teste effectivement — l'équation
+   OOD (la valeur de composition en `z` doit égaler l'évaluation des
+   contraintes sur le frame de trace OOD) et la consistance DEEP/FRI aux
+   positions de requête — à la ethSTARK ; le simulateur ne peut PAS « dériver »
+   ces ouvertures depuis les évaluations de trace (le vérifieur ne le peut pas
+   non plus : c'est la raison d'être du commitment de contraintes séparé) ;
 3. bâtir les engagements Merkle et chemins d'authentification autour de ces
    valeurs en **programmant l'oracle aléatoire** pour que les défis (`z`,
    positions de requête) tombent sur les points choisis — latitude standard du
    ROM.
 
-La transcription produite est distribuée comme une preuve réelle : dans une
-preuve honnête, les valeurs révélées sont elles-mêmes uniformes et indépendantes
-du témoin (comptage ci-dessus), et tout le reste de la preuve en est une
-fonction déterministe publique. Un distingueur entre transcription simulée et
-preuve réelle contredirait donc l'uniformité établie — la preuve ne révèle rien
-de plus que la validité du statement, ce qui est la définition du HVZK.
+La transcription produite VISE la même distribution qu'une preuve réelle : les
+évaluations de trace y sont uniformes (étage 1, exact) ; les valeurs de
+composition et FRI y sont cohérentes avec les seuls tests du vérifieur et,
+dans une preuve honnête, sont des fonctions d'une trace committée massivement
+randomisée (étage 2, heuristique). C'est une esquisse : elle rend plausible
+qu'aucun distingueur n'existe, elle ne le démontre pas.
 
-Limites assumées de l'esquisse : la programmabilité de l'oracle est utilisée
-sans être formalisée (winterfell enchaîne des engagements réels), et l'argument
-de rang plein est probabiliste (probabilité d'échec négligeable, non bornée
-explicitement). Un passage au niveau publication exigerait de formaliser ces
-deux points. Par ailleurs, les entrées PUBLIQUES restent publiques par
-définition (root, nullifiers, output_commitments, fee) : le witness-hiding porte
-sur le témoin (notes, montants, `shielded_secret`, `nk`, chemins de Merkle),
-pas sur le graphe transactionnel observable au niveau réseau (phase 4).
+Limites assumées de l'esquisse — surfaces résiduelles NON formellement
+traitées par cet argument :
+
+- les **ouvertures de composition/quotient** : leur indépendance du témoin ne
+  repose que sur l'heuristique de taille (étage 2), pas sur un comptage exact ;
+- le **polynôme de reste FRI** (révélé en entier) et les couches repliées :
+  winterfell ne sale PAS FRI (contrairement à ethSTARK) — même statut
+  heuristique ;
+- la **programmabilité de l'oracle** est utilisée sans être formalisée
+  (winterfell enchaîne des engagements réels) ;
+- l'argument de **rang plein** (étage 1) est probabiliste (probabilité d'échec
+  négligeable, non bornée explicitement).
+
+Un passage au niveau publication exigerait de traiter ces quatre points. Par
+ailleurs, les entrées PUBLIQUES restent publiques par définition (root,
+nullifiers, output_commitments, fee) : le witness-hiding porte sur le témoin
+(notes, montants, `shielded_secret`, `nk`, chemins de Merkle), pas sur le
+graphe transactionnel observable au niveau réseau (phase 4).
 
 ## Cohérence commitment ↔ note chiffrée (P8, différé)
 

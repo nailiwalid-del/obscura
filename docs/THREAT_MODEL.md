@@ -63,9 +63,11 @@ Le circuit de la Phase 3 garantit l'**intégrité** (pas de forge, pas de double
 dépense, équilibre des montants, cohérence Merkle/nullifier). Depuis **3z-b1**,
 la preuve MONOLITHIQUE — le chemin de consensus `prove_tx`/`verify_tx` — est en
 outre **witness-hiding (HVZK dans le modèle de l'oracle aléatoire)** : lignes de
-blinding au niveau AIR, argument de comptage (`q+2 = 34 < b = 40`) + esquisse de
-simulateur dans `docs/STARK_STATEMENT.md` (« Witness-hiding du monolithe —
-argument HVZK »). Limites précises de cette revendication :
+blinding au niveau AIR, argument en deux étages (comptage par colonne de trace
+`q+2 = 34 < b = 40` + taille de la région de blinding pour les ouvertures de
+composition/quotient et FRI, heuristique) + esquisse de simulateur dans
+`docs/STARK_STATEMENT.md` (« Witness-hiding du monolithe — argument HVZK »).
+Limites précises de cette revendication :
 
 - **honnête-vérifieur** (Fiat-Shamir en ROM) — PAS de malicious-verifier ZK ni
   de « perfect ZK » ; argument non formalisé au niveau publication ;

@@ -153,9 +153,12 @@ impl winterfell::Air for MonolithAir {
     type PublicInputs = MonolithPublicInputs;
 
     fn new(trace_info: TraceInfo, pi: MonolithPublicInputs, options: ProofOptions) -> Self {
-        // Witness-hiding (3z-b1) : chaque requête FRI révèle jusqu'à 2 lignes
-        // (cur/next) de la trace ; il faut au moins q + 2 lignes de blinding pour
-        // que les q requêtes + l'évaluation OOD ne déterminent pas le témoin.
+        // Witness-hiding (3z-b1) : chaque requête FRI ouvre UNE ligne de la
+        // trace LDE ; le frame cur/next n'existe qu'au point OOD (évaluations
+        // en z et z·g). Il faut au moins q + 2 lignes de blinding pour que les
+        // q ouvertures de requête + les 2 évaluations OOD ne déterminent pas le
+        // témoin (comptage par colonne de trace — cf. STARK_STATEMENT.md,
+        // « argument HVZK », qui couvre aussi composition/FRI).
         assert!(
             BLIND_ROWS >= options.num_queries() + 2,
             "BLIND_ROWS ({}) doit couvrir num_queries + 2 ({})",
@@ -438,6 +441,10 @@ impl winterfell::Air for MonolithAir {
         //   2. le reset VACC à la frontière 255→256 (endblk @255, gaté sel_bal
         //      encore actif à r = 255) : quand used == 256 (profondeur ≤ 16), il
         //      forçait next[VACC] = 0 sur la PREMIÈRE ligne de blinding.
+        // Noté (inerte) : le gating global éteint aussi la booléanité cur-only
+        // `bit[255]` à la transition used−1 → used (profondeur ≤ 16) — statu quo,
+        // car avant blinding l'exemption de dernière ligne winterfell la sautait
+        // déjà ; à retenir si un futur refactor donne un consommateur à bit[255].
         // Choix robuste (spec 3z-b1) : multiplier CHAQUE contrainte par blind_off —
         // aucune colonne ne peut être oubliée, les lignes de blinding sont libres
         // pour TOUTES les familles (S et VACC y sont randomisées comme le reste par
