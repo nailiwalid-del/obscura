@@ -4,8 +4,14 @@
 //! applique la RÈGLE DE CONSENSUS CIBLE : il vérifie la preuve `ProvedTx`
 //! (`circuit::verify_tx`, qui établit P1–P7 + non-rejeu) contre une racine récente,
 //! puis dépense les nullifiers et insère les commitments de sortie dans l'arbre Rescue.
-//! L'arbre est le MÊME que celui contre lequel le circuit prouve l'appartenance
-//! (`proved_hash::merkle::ProvedMerkleTree`).
+//!
+//! L'arbre du nœud est une `proved_hash::merkle::MerkleFrontier` (durcissement #7) :
+//! append-only, ne conserve que le bord droit (O(depth), mémoire bornée), et rend
+//! `TreeFull` plutôt que paniquer sur un arbre plein. Il produit les MÊMES racines
+//! que la `ProvedMerkleTree` de référence (test différentiel), donc les preuves
+//! d'appartenance `circuit::membership` restent valides. Le nœud n'a pas besoin des
+//! CHEMINS (produits côté wallet par `ProvedMerkleTree`) : il n'appelle qu'`append` +
+//! `root`.
 //!
 //! Depuis 3z-a6, `ProvedTx` est monolithique (v3 depuis enc-notes) : `proof` est LA
 //! preuve unique (P1–P7 pour toute la tx, une seule trace) et les nullifiers/commitments

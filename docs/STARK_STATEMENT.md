@@ -253,9 +253,21 @@
 > valide par tx). Pas de `serde` (il ne garantit pas l'injectivité/canonicité).
 > Tests : roundtrip réel (`--release`) + matrice de rejet (tronqué, résiduel,
 > digest non canonique, enc_note hors bornes, preuve corrompue). Spec :
-> `docs/superpowers/specs/2026-07-20-provedtx-serialisation-design.md`. Pièces
-> suivantes de #7 : `zeroize` des secrets (spec écrite,
-> `2026-07-20-zeroize-secrets-design.md`), Merkle frontier persistant,
+> `docs/superpowers/specs/2026-07-20-provedtx-serialisation-design.md`.
+>
+> **Durcissement pré-testnet #7 — zeroize + audit panic + Merkle frontier (faits)** :
+> `zeroize` des secrets au drop (`ShieldedSecret` écriture volatile non élidable,
+> `WalletKeys`, clés AEAD dérivées ; moitiés dalek OK, trou pqcrypto Kyber/Dilithium
+> documenté à fermer en FIPS 0x02). Audit `panic→Result` de la surface réseau :
+> `from_bytes`/`verify_tx`/`scan_proved_output`/`apply_proved_tx` sans panique sur
+> entrée attaquant. **Merkle frontier** (`proved_hash::MerkleFrontier`) : l'arbre du
+> nœud est append-only et ne garde que le bord droit — `append`/`root` en O(depth),
+> mémoire bornée, `TreeFull` en `Result` (plus de panique « arbre plein »). Racine
+> IDENTIQUE à `ProvedMerkleTree` (test différentiel à chaque étape, depth 16 ET 32)
+> → preuves `circuit::membership` inchangées ; les CHEMINS restent produits côté
+> wallet (`ProvedMerkleTree`). Specs :
+> `2026-07-20-zeroize-secrets-design.md`, `2026-07-20-merkle-frontier-design.md`.
+> Restent en #7 : persistance disque (frontier + nullifiers + racines) et
 > key-privacy IK-CCA (phase 4).
 >
 > **Reste hors Phase-3-validity** : **3z-c** (généralisation M-in/N-out,
