@@ -10,3 +10,4 @@ winter-crypto = { workspace = true }
 winter-math = { workspace = true }
 proved-hash = { path = "../proved-hash" }
 crypto = { path = "../crypto" }
+rand = "0.8"

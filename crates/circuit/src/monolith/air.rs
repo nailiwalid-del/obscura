@@ -28,9 +28,9 @@
 
 use crate::merkle_path::enforce_merkle_transition;
 use crate::monolith::layout::{
-    BAL_OFF, CARRIER_OFF, CM_C, CM_ROWS_END, CM_ROWS_START, KEY_OFF, LEAF_C, LEAF_ROWS_START,
-    M0_OFF, M1_OFF, NF_ROWS_END, NF_ROWS_START, NK_C, O0_OFF, O1_OFF, OWNER_C, RHO_C, U0_OFF,
-    U1_OFF, VIN_C, VOUT_C, WIDTH,
+    used_rows, BAL_OFF, BLIND_ROWS, CARRIER_OFF, CM_C, CM_ROWS_END, CM_ROWS_START, KEY_OFF,
+    LEAF_C, LEAF_ROWS_START, M0_OFF, M1_OFF, NF_ROWS_END, NF_ROWS_START, NK_C, O0_OFF, O1_OFF,
+    OWNER_C, RHO_C, U0_OFF, U1_OFF, VIN_C, VOUT_C, WIDTH,
 };
 use crate::monolith::trace::{build_monolith_trace, MonolithWitness};
 use crate::rescue_round::{enforce_round_block, periodic_ark_columns, STATE_WIDTH};
@@ -147,6 +147,15 @@ impl winterfell::Air for MonolithAir {
     type PublicInputs = MonolithPublicInputs;
 
     fn new(trace_info: TraceInfo, pi: MonolithPublicInputs, options: ProofOptions) -> Self {
+        // Witness-hiding (3z-b1) : chaque requête FRI révèle jusqu'à 2 lignes
+        // (cur/next) de la trace ; il faut au moins q + 2 lignes de blinding pour
+        // que les q requêtes + l'évaluation OOD ne déterminent pas le témoin.
+        assert!(
+            BLIND_ROWS >= options.num_queries() + 2,
+            "BLIND_ROWS ({}) doit couvrir num_queries + 2 ({})",
+            BLIND_ROWS,
+            options.num_queries() + 2
+        );
         let l = trace_info.length();
         let depth = pi.depth;
         let context = AirContext::new(trace_info, degrees(l), num_assertions(depth), options);
@@ -255,9 +264,13 @@ impl winterfell::Air for MonolithAir {
             idx += N_BAL;
         }
 
-        // --- Porteuses : constantes (next − cur = 0), NON gatées. ---
+        // --- Porteuses : constantes (next − cur = 0) sur la RÉGION UTILE, gatées
+        //     par blind_off (witness-hiding 3z-b1) : la transition used−1 → used et
+        //     la région de blinding sont LIBRES (les porteuses y sautent vers
+        //     l'aléa de `build_monolith_trace_seeded`). ---
+        let blind_off = pv[48];
         for c in 0..N_CARRIER {
-            result[idx + c] = next[CARRIER_OFF + c] - cur[CARRIER_OFF + c];
+            result[idx + c] = blind_off * (next[CARRIER_OFF + c] - cur[CARRIER_OFF + c]);
         }
         idx += N_CARRIER; // idx == N_BASE
 
@@ -472,7 +485,7 @@ impl winterfell::Air for MonolithAir {
         let l = self.l;
         let z = BaseElement::ZERO;
         let o = BaseElement::ONE;
-        let mut cols: Vec<Vec<BaseElement>> = Vec::with_capacity(37);
+        let mut cols: Vec<Vec<BaseElement>> = Vec::with_capacity(49);
 
         // [0] round_flag éponge (cycle 8) : ronde sauf à la frontière de bloc.
         let mut rf_s = vec![o; 8];
@@ -563,6 +576,13 @@ impl winterfell::Air for MonolithAir {
         cols.push(at(188)); // [46] VACC sortie 0 (ligne 64·2+60)
         cols.push(at(252)); // [47] VACC sortie 1 (ligne 64·3+60)
 
+        // [48] blind_off (witness-hiding 3z-b1) : 1 ssi la transition r → r+1 reste
+        // DANS la région utile `[0, used_rows(depth))`, i.e. r + 1 < used ; 0 sinon.
+        // Éteint les contraintes gatées sur la transition used−1 → used (le saut
+        // vers l'aléa) et sur toute la région de blinding.
+        let used = used_rows(self.depth);
+        cols.push((0..l).map(|r| if r + 1 < used { o } else { z }).collect());
+
         cols
     }
 
@@ -628,7 +648,7 @@ fn push_preamble(
 ///  - BAL bit : deg 2 × sel_bal(n)                   → base 2, cycles [n]      (blowup 4)
 ///  - BAL S : bit × signe(n) × pow(n)                → base 2, cycles [n,n]    (blowup 4)
 ///  - BAL VACC : bit × pow(n) × endblk(n) × sel_bal(n)→ base 2, cycles [n,n,n] (blowup 8)
-///  - porteuses : next − cur                         → base 1                  (blowup 2)
+///  - porteuses : (next − cur) × blind_off(n)        → base 1, cycles [n]      (blowup 2)
 ///
 /// La borne M-sponge (base 8, 3 cycles) sature EXACTEMENT le blowup 16 ; toutes les
 /// autres sont en-dessous. Bornes supérieures ⇒ soundness préservée.
@@ -660,9 +680,9 @@ fn degrees(n: usize) -> Vec<TransitionConstraintDegree> {
     d.push(wc(2, vec![n])); // bit booléen
     d.push(wc(2, vec![n, n])); // accumulateur S
     d.push(wc(2, vec![n, n, n])); // accumulateur VACC
-    // Porteuses (36).
+    // Porteuses (36) : gatées blind_off (cycle pleine longueur, 3z-b1).
     for _ in 0..N_CARRIER {
-        d.push(TransitionConstraintDegree::new(1));
+        d.push(wc(1, vec![n]));
     }
     // Liaisons (92, dont la liaison secret owner↔nk) : chacune `sel(cycle n) ·
     // (cur[a] − cur[b])` — degré 1, un cycle pleine longueur (motif `wc(1, vec![n])`

@@ -187,11 +187,27 @@ fn fill_balance(dst: &mut [[BaseElement; WIDTH]], amounts: [u64; 4]) {
 // TRACE DU MONOLITHE
 // ================================================================================================
 
+/// Un élément de corps uniformément aléatoire (réduit mod p par winterfell).
+fn felt_alea(rng: &mut impl rand::Rng) -> BaseElement {
+    BaseElement::new(rng.next_u64())
+}
+
+/// Construit la trace complète du monolithe (2-in/2-out) avec un aléa de blinding
+/// tiré d'`OsRng` (production). Voir `build_monolith_trace_seeded` pour la couture.
+pub(crate) fn build_monolith_trace(w: &MonolithWitness) -> TraceTable<BaseElement> {
+    build_monolith_trace_seeded(w, &mut rand::rngs::OsRng)
+}
+
 /// Construit la trace complète du monolithe (2-in/2-out) à partir du témoin `w`.
 /// Longueur `trace_len(depth)` où `depth` est la profondeur des chemins de Merkle
-/// des deux entrées (doivent coïncider). Lignes idle (au-delà des segments actifs)
-/// laissées à zéro.
-pub(crate) fn build_monolith_trace(w: &MonolithWitness) -> TraceTable<BaseElement> {
+/// des deux entrées (doivent coïncider). Lignes idle (au-delà des segments actifs,
+/// avant `used_rows`) laissées à zéro ; lignes de BLINDING `[used_rows, trace_len)`
+/// remplies d'aléa tiré de `rng` (witness-hiding 3z-b1 — la couture par graine sert
+/// aux tests de déterminisme/non-régression, la production passe par `OsRng`).
+pub(crate) fn build_monolith_trace_seeded(
+    w: &MonolithWitness,
+    rng: &mut impl rand::Rng,
+) -> TraceTable<BaseElement> {
     let depth = w.inputs[0].path.len();
     assert_eq!(
         depth,
@@ -279,6 +295,28 @@ pub(crate) fn build_monolith_trace(w: &MonolithWitness) -> TraceTable<BaseElemen
 
     // --- Équilibre : Σ entrées = Σ sorties + fee. ---
     fill_balance(&mut rows, amounts);
+
+    // --- Blinding (3z-b1a, witness-hiding) : lignes [used, len) remplies d'un
+    //     aléa frais sur TOUTES les colonnes, SAUF deux cellules encore lues par
+    //     des contraintes/assertions NON gatées par blind_off (leur gating est la
+    //     tâche B1-T2 ; les deux valeurs maintenues sont des CONSTANTES publiques,
+    //     aucune fuite de témoin) :
+    //       - S : la contrainte S (air.rs) est portée par `signe` (nul au-delà de
+    //         256 → S doit rester CONSTANT jusqu'à la dernière ligne) et
+    //         l'assertion publique S[len−1] = fee tombe DANS le blinding ;
+    //         `fill_balance` a déjà propagé S = fee sur toute la traîne ;
+    //       - VACC : quand used == 256 (profondeur ≤ 16), la remise à zéro de fin
+    //         de bloc (endblk, transition 255→256, gatée sel_bal ENCORE actif à
+    //         r = 255) lit next[VACC] = première ligne de blinding et exige 0 ;
+    //         `fill_balance` a déjà mis VACC = 0 sur toute la traîne. ---
+    let used = used_rows(depth);
+    for row in rows.iter_mut().skip(used) {
+        for (c, cell) in row.iter_mut().enumerate() {
+            if c != BAL_OFF + BAL_S && c != BAL_OFF + BAL_VACC {
+                *cell = felt_alea(rng);
+            }
+        }
+    }
 
     // --- Assemblage. ---
     let mut trace = TraceTable::new(WIDTH, len);
@@ -810,32 +848,98 @@ mod tests {
             );
         }
 
-        // porteuses constantes : mêmes valeurs ligne 0 et dernière ligne.
+        // porteuses constantes sur la RÉGION UTILE (au-delà : blinding aléatoire,
+        // la contrainte porteuse est gatée par blind_off dans l'AIR).
+        let used = used_rows(w.inputs[0].path.len());
         for c in CARRIER_OFF..WIDTH {
-            assert_eq!(t.get(c, 0), t.get(c, last));
+            assert_eq!(t.get(c, 0), t.get(c, used - 1));
         }
 
-        // équilibre : S final == fee.
+        // équilibre : S final == fee (S est maintenu = fee jusqu'à la DERNIÈRE
+        // ligne, blinding compris — assertion publique de l'AIR).
         assert_eq!(
             d(BAL_OFF + 1, last),
             Felt::from_canonical_u64(w.fee).unwrap()
         );
     }
 
-    /// Fix de complétude BAL (revue T3) : à profondeur consensus (trace_len 512), la
-    /// colonne `S` doit rester CONSTANTE (= fee) sur toute la traîne idle 256..512,
-    /// et `VACC`/`bit` restent nuls — sinon la contrainte S non gatée rejette une
-    /// trace honnête. Test NON-prouveur (lit les cellules ; tourne en DEBUG).
+    /// Blinding (3z-b1a) : à graine IDENTIQUE la trace est entièrement déterministe ;
+    /// à graines DISTINCTES la région utile `[0, used)` est IDENTIQUE (non-régression
+    /// du monolithe utile) mais les régions de blinding `[used, len)` diffèrent et
+    /// sont non nulles — SAUF les colonnes S (= fee) et VACC (= 0), maintenues à
+    /// des constantes publiques (cf. le commentaire du remplissage). Test
+    /// NON-prouveur (tourne en DEBUG).
+    #[test]
+    fn blinding_aleatoire_et_region_utile_stable() {
+        use rand::rngs::StdRng;
+        use rand::SeedableRng;
+
+        let (w, _root) = witness_de_test();
+        let depth = w.inputs[0].path.len();
+        let used = used_rows(depth);
+        let len = trace_len(depth);
+        let t1 = build_monolith_trace_seeded(&w, &mut StdRng::seed_from_u64(42));
+        let t2 = build_monolith_trace_seeded(&w, &mut StdRng::seed_from_u64(42));
+        let t3 = build_monolith_trace_seeded(&w, &mut StdRng::seed_from_u64(43));
+
+        // Même graine → trace ENTIÈREMENT identique (déterminisme de la couture).
+        for c in 0..WIDTH {
+            for r in 0..len {
+                assert_eq!(t1.get(c, r), t2.get(c, r), "graine identique @({c},{r})");
+            }
+        }
+        // Région utile identique quelle que soit la graine (non-régression).
+        for c in 0..WIDTH {
+            for r in 0..used {
+                assert_eq!(t1.get(c, r), t3.get(c, r), "région utile @({c},{r})");
+            }
+        }
+        // Régions de blinding DISTINCTES entre graines, quasi toutes non nulles.
+        let mut differe = false;
+        let mut non_nulles = 0usize;
+        for c in 0..WIDTH {
+            for r in used..len {
+                if t1.get(c, r) != t3.get(c, r) {
+                    differe = true;
+                }
+                if t1.get(c, r) != BaseElement::ZERO {
+                    non_nulles += 1;
+                }
+            }
+        }
+        assert!(differe, "deux graines doivent donner des blindings distincts");
+        assert!(non_nulles > (len - used) * WIDTH / 2, "blinding majoritairement non nul");
+        // Les colonnes S et VACC restent déterministes sur le blinding (contraintes
+        // S/reset VACC non gatées par blind_off + assertion S[len−1] = fee ; fee et
+        // 0 sont PUBLICS → aucune fuite de témoin ; gating global en B1-T2).
+        let fee = BaseElement::new(w.fee);
+        for r in used..len {
+            assert_eq!(t1.get(BAL_OFF + BAL_S, r), fee, "S@{r}");
+            assert_eq!(t1.get(BAL_OFF + BAL_VACC, r), BaseElement::ZERO, "VACC@{r}");
+        }
+    }
+
+    /// Fix de complétude BAL (revue T3) : à profondeur consensus (used_rows 512), la
+    /// colonne `S` doit rester CONSTANTE (= fee) sur la traîne idle 256..512 ET sur
+    /// toute la région de blinding (jusqu'à la dernière ligne, où l'AIR l'asserte) —
+    /// sinon la contrainte S non gatée rejette une trace honnête. `VACC`/`bit`
+    /// restent nuls sur la traîne UTILE seulement (aléatoires sur le blinding).
+    /// Test NON-prouveur (lit les cellules ; tourne en DEBUG).
     #[test]
     fn bal_s_constant_sur_les_lignes_idle_profondeur_32() {
         let (w, _root) = witness_de_test_profondeur_consensus();
         let t = build_monolith_trace(&w);
-        assert_eq!(t.length(), 512, "profondeur 32 → trace_len 512");
+        assert_eq!(t.length(), 1024, "profondeur 32 → trace_len next_pow2(512+40)");
+        let used = used_rows(32);
         let fee = Felt::from_canonical_u64(w.fee).unwrap();
-        for row in 256..t.length() {
+        for row in 256..used {
             assert_eq!(Felt::from_winter(t.get(BAL_OFF + BAL_S, row)).unwrap(), fee, "S@{row}");
             assert_eq!(t.get(BAL_OFF + BAL_BIT, row), BaseElement::ZERO, "bit@{row}");
             assert_eq!(t.get(BAL_OFF + BAL_VACC, row), BaseElement::ZERO, "VACC@{row}");
+        }
+        // S = fee jusqu'au bout du blinding (l'assertion S[len−1] = fee de l'AIR).
+        for row in used..t.length() {
+            assert_eq!(Felt::from_winter(t.get(BAL_OFF + BAL_S, row)).unwrap(), fee, "S@{row}");
         }
         // Continuité à la frontière 255→256 : S[255] == S[256] == fee.
         assert_eq!(Felt::from_winter(t.get(BAL_OFF + BAL_S, 255)).unwrap(), fee);

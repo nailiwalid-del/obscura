@@ -164,6 +164,7 @@ version = "0.1.0"
 dependencies = [
  "crypto",
  "proved-hash",
+ "rand 0.8.7",
  "winter-crypto",
  "winter-math",
  "winterfell",

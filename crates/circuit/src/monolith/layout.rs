@@ -51,12 +51,22 @@ mod plan {
     pub(crate) const NF_ROWS_START: usize = 40;
     pub(crate) const NF_ROWS_END: usize = 56;
 
-    /// Longueur de trace pour une profondeur d'arbre donnée.
+    /// Lignes de blinding (witness-hiding, 3z-b1). Dérivé : ≥ q(32) + OOD(2) + marge(6).
+    /// `q` = nombre de requêtes de `proof_options_hi`. Assertion de cohérence dans air.rs.
+    pub(crate) const BLIND_ROWS: usize = 40;
+
+    /// Lignes utiles (contraintes + assertions) : l'ancienne longueur de trace.
     ///
-    /// Retourne `max(256, 16*depth)`, où 256 est le minimum absolu et
-    /// 16*depth est le minimum basé sur la taille du chemin Merkle.
+    /// Retourne `max(256, 16*depth)`, où 256 est le minimum absolu (équilibre :
+    /// 4 blocs × 64) et 16*depth le minimum basé sur la taille du chemin Merkle.
+    pub(crate) fn used_rows(depth: usize) -> usize {
+        core::cmp::max(256, 16 * depth)
+    }
+
+    /// Longueur de trace pour une profondeur d'arbre donnée : lignes utiles +
+    /// lignes de blinding, arrondies à la puissance de 2 supérieure (winterfell).
     pub(crate) fn trace_len(depth: usize) -> usize {
-        std::cmp::max(256, 16 * depth)
+        (used_rows(depth) + BLIND_ROWS).next_power_of_two()
     }
 }
 pub(crate) use plan::*;
@@ -70,6 +80,11 @@ mod tests {
     // le lint `assertions_on_constants` tout en PRÉSERVANT la vérification : si
     // WIDTH dépasse le budget winterfell, la compilation échoue.
     const _: () = assert!(WIDTH <= winterfell::TraceInfo::MAX_TRACE_WIDTH);
+
+    // Marge de blinding : garde-fou COMPILE-TIME (même motif). 32 = nombre de
+    // requêtes de `proof_options_hi`, +2 = évaluations OOD ; la liaison RUNTIME
+    // aux options réelles est assertée dans `MonolithAir::new`.
+    const _: () = assert!(BLIND_ROWS >= 32 + 2);
 
     #[test]
     fn budget_colonnes_respecte() {
@@ -104,8 +119,10 @@ mod tests {
     }
 
     #[test]
-    fn longueur_de_trace() {
-        assert_eq!(trace_len(32), 512); // consensus : le chemin domine
-        assert_eq!(trace_len(4), 256); // dev : l'équilibre (4 blocs × 64) domine
+    fn trace_len_avec_blinding() {
+        assert_eq!(used_rows(32), 512); // consensus : le chemin domine
+        assert_eq!(trace_len(32), 1024); // next_pow2(512+40)
+        assert_eq!(used_rows(4), 256); // dev : l'équilibre (4 blocs × 64) domine
+        assert_eq!(trace_len(4), 512); // next_pow2(256+40)
     }
 }
