@@ -30,6 +30,7 @@ use crate::monolith::trace::MonolithWitness;
 use crate::range_check::RANGE_BITS;
 use crate::spend::SpendNote;
 use crate::ValidityProof;
+use winterfell::Proof;
 use crypto::hash::dual_hash;
 use crypto::sig::{HybridSignature, SigKeypair, SigPublicKey};
 use proved_hash::digest::{Digest, ShieldedSecret, DIGEST_FELTS};
@@ -271,6 +272,129 @@ pub fn verify_tx(root: &Digest, depth: usize, tx: &ProvedTx) -> bool {
 pub fn verify_proved_tx_full(root: &Digest, depth: usize, tx: &ProvedTx) -> bool {
     verify_tx(root, depth, tx)
         && crypto::sig::verify(&tx.signer, INTENT_DOMAIN, &tx.tx_digest, &tx.intent_sig)
+}
+
+/// Erreur de désérialisation d'une `ProvedTx` (`from_bytes`). Aucune n'implique de
+/// panique : `from_bytes` est le point d'entrée réseau, il ne fait jamais confiance à
+/// l'entrée (durcissement #7).
+#[derive(Debug, PartialEq, Eq)]
+pub enum TxDecodeError {
+    /// Moins d'octets que nécessaire (champ tronqué).
+    TooShort,
+    /// Octets résiduels après la fin — encodage non canonique.
+    TrailingBytes,
+    /// Digest non canonique (`Digest::from_bytes` échoue).
+    BadDigest,
+    /// `EncNote` hors bornes (anti-DoS : `kem_ct`/`enc_note` trop grand).
+    EncNoteOutOfBounds,
+    /// `signer` ou `intent_sig` invalides.
+    BadSigner,
+    /// Octets de preuve STARK invalides.
+    BadProof,
+}
+
+/// Curseur à lecture BORNÉE : chaque prise vérifie qu'il reste assez d'octets (jamais
+/// d'indexation directe qui pourrait paniquer sur une entrée malveillante).
+struct Cursor<'a> {
+    b: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> Cursor<'a> {
+    fn take(&mut self, n: usize) -> Result<&'a [u8], TxDecodeError> {
+        let end = self.pos.checked_add(n).ok_or(TxDecodeError::TooShort)?;
+        if end > self.b.len() {
+            return Err(TxDecodeError::TooShort);
+        }
+        let s = &self.b[self.pos..end];
+        self.pos = end;
+        Ok(s)
+    }
+    fn digest(&mut self) -> Result<Digest, TxDecodeError> {
+        let s: [u8; 32] = self.take(32)?.try_into().unwrap(); // take(32) rend exactement 32 o
+        Digest::from_bytes(&s).map_err(|_| TxDecodeError::BadDigest)
+    }
+    fn u32_le(&mut self) -> Result<usize, TxDecodeError> {
+        Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()) as usize)
+    }
+    /// Champ préfixé par sa longueur (`u32` LE).
+    fn lenpref(&mut self) -> Result<&'a [u8], TxDecodeError> {
+        let l = self.u32_le()?;
+        self.take(l)
+    }
+}
+
+impl ProvedTx {
+    /// Encodage canonique injectif de la transaction prouvée (cf.
+    /// `docs/superpowers/specs/2026-07-20-provedtx-serialisation-design.md`). La preuve
+    /// STARK (~85 Kio) domine la taille.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&self.anchor.to_bytes());
+        for nf in &self.nullifiers {
+            b.extend_from_slice(&nf.to_bytes());
+        }
+        for oc in &self.output_commitments {
+            b.extend_from_slice(&oc.to_bytes());
+        }
+        b.extend_from_slice(&self.fee.to_le_bytes());
+        b.extend_from_slice(&self.tx_digest);
+        let put = |b: &mut Vec<u8>, s: &[u8]| {
+            b.extend_from_slice(&(s.len() as u32).to_le_bytes());
+            b.extend_from_slice(s);
+        };
+        put(&mut b, &self.signer.to_bytes());
+        put(&mut b, &self.intent_sig.to_bytes());
+        for e in &self.enc_notes {
+            put(&mut b, &e.kem_ct);
+            put(&mut b, &e.enc_note);
+        }
+        put(&mut b, &self.proof.0.to_bytes());
+        b
+    }
+
+    /// Désérialise et VALIDE une `ProvedTx` depuis des octets réseau. Rejette
+    /// (jamais de panique) : troncature, octets résiduels (non-canonique), digests
+    /// non canoniques, `EncNote` hors bornes (anti-DoS), signataire/preuve invalides.
+    /// NB : la validité CRYPTOGRAPHIQUE (preuve STARK, signature) reste vérifiée à part
+    /// par `verify_tx`/`verify_proved_tx_full`/`apply_proved_tx` — ici on garantit
+    /// seulement un objet bien formé et borné.
+    pub fn from_bytes(b: &[u8]) -> Result<Self, TxDecodeError> {
+        let mut cur = Cursor { b, pos: 0 };
+        let anchor = cur.digest()?;
+        let nullifiers = [cur.digest()?, cur.digest()?];
+        let output_commitments = [cur.digest()?, cur.digest()?];
+        let fee = u64::from_le_bytes(cur.take(8)?.try_into().unwrap());
+        let tx_digest: [u8; 64] = cur.take(64)?.try_into().unwrap();
+        let signer =
+            SigPublicKey::from_bytes(cur.lenpref()?).map_err(|_| TxDecodeError::BadSigner)?;
+        let intent_sig =
+            HybridSignature::from_bytes(cur.lenpref()?).map_err(|_| TxDecodeError::BadSigner)?;
+        let en = |cur: &mut Cursor| -> Result<EncNote, TxDecodeError> {
+            let kem_ct = cur.lenpref()?.to_vec();
+            let enc_note = cur.lenpref()?.to_vec();
+            Ok(EncNote { kem_ct, enc_note })
+        };
+        let enc_notes = [en(&mut cur)?, en(&mut cur)?];
+        if !enc_notes.iter().all(EncNote::within_bounds) {
+            return Err(TxDecodeError::EncNoteOutOfBounds);
+        }
+        let proof = Proof::from_bytes(cur.lenpref()?).map_err(|_| TxDecodeError::BadProof)?;
+        if cur.pos != b.len() {
+            return Err(TxDecodeError::TrailingBytes);
+        }
+        Ok(ProvedTx {
+            anchor,
+            proof: ValidityProof(proof),
+            nullifiers,
+            output_commitments,
+            fee,
+            signer,
+            tx_digest,
+            intent_sig,
+            enc_notes,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -549,6 +673,62 @@ mod tests {
         let mut tx_k = valid_tx().2;
         tx_k.enc_notes[1].kem_ct = vec![42u8; KEM_CT_LEN];
         assert!(!verify_tx(&root, DEPTH, &tx_k), "kem_ct substitué doit casser le digest");
+    }
+
+    /// Sérialisation canonique : `from_bytes(to_bytes) == tx` (roundtrip) sur une
+    /// ProvedTx réelle. Comparaison par ré-encodage (Proof/sig ne sont pas PartialEq) +
+    /// champs publics clés.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
+    fn serialisation_roundtrip() {
+        let (_s, _root, tx) = valid_tx();
+        let bytes = tx.to_bytes();
+        let tx2 = ProvedTx::from_bytes(&bytes).expect("roundtrip");
+        assert_eq!(tx2.to_bytes(), bytes, "ré-encodage identique (canonique)");
+        assert_eq!(tx2.anchor, tx.anchor);
+        assert_eq!(tx2.nullifiers, tx.nullifiers);
+        assert_eq!(tx2.output_commitments, tx.output_commitments);
+        assert_eq!(tx2.fee, tx.fee);
+        assert_eq!(tx2.tx_digest, tx.tx_digest);
+        assert_eq!(tx2.enc_notes[0].kem_ct, tx.enc_notes[0].kem_ct);
+        assert_eq!(tx2.enc_notes[1].enc_note, tx.enc_notes[1].enc_note);
+        // La tx désérialisée vérifie toujours.
+        assert!(verify_tx(&tx.anchor, DEPTH, &tx2));
+    }
+
+    /// Matrice de rejet de `from_bytes` : chaque corruption rend l'erreur attendue,
+    /// jamais de panique.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
+    fn serialisation_rejette_les_malformes() {
+        let (_s, _root, tx) = valid_tx();
+        let bytes = tx.to_bytes();
+        // `matches!` plutôt que `assert_eq!` : `ProvedTx` n'est pas `Debug` (Proof/sig).
+        // Tronqué.
+        assert!(matches!(ProvedTx::from_bytes(&bytes[..bytes.len() - 1]), Err(TxDecodeError::TooShort)));
+        // Octets résiduels.
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(matches!(ProvedTx::from_bytes(&trailing), Err(TxDecodeError::TrailingBytes)));
+        // Digest non canonique : anchor (32 premiers octets) mis à 0xFF (≥ p sur chaque felt).
+        let mut bad_digest = bytes.clone();
+        for byte in bad_digest.iter_mut().take(32) {
+            *byte = 0xFF;
+        }
+        assert!(matches!(ProvedTx::from_bytes(&bad_digest), Err(TxDecodeError::BadDigest)));
+        // Vide.
+        assert!(matches!(ProvedTx::from_bytes(&[]), Err(TxDecodeError::TooShort)));
+    }
+
+    /// `from_bytes` rejette un `enc_note` hors bornes (anti-DoS au parse). On reconstruit
+    /// des octets avec un `enc_note` géant en repartant d'une tx valide.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
+    fn serialisation_rejette_enc_note_hors_bornes() {
+        let (_s, _root, mut tx) = valid_tx();
+        tx.enc_notes[0].enc_note = vec![0u8; MAX_ENC_NOTE_LEN + 1];
+        let bytes = tx.to_bytes(); // to_bytes n'impose pas les bornes ; from_bytes oui.
+        assert!(matches!(ProvedTx::from_bytes(&bytes), Err(TxDecodeError::EncNoteOutOfBounds)));
     }
 
     /// Anti-DoS (#2) : un `enc_note` hors-bornes (kem_ct de mauvaise taille, ou enc_note
