@@ -7,7 +7,10 @@
 //! KEM hybride et l'AEAD en cascade du crate `crypto`, comme le mode transparent.
 //!
 //! Les `EncNote` produits ici sont liés dans `tx_digest` v3 (cf. `circuit::tx`) :
-//! une substitution par un relais casse le digest → la signature d'intention échoue.
+//! un relais PASSIF ne peut pas les substituer sans casser le digest → la signature
+//! d'intention (sur le digest) échoue. ⚠️ La preuve STARK ne lie pas `tx_digest`/
+//! `signer` : un relais ACTIF peut re-signer un substitut (déni de scan du
+//! destinataire, PAS de vol — voir `circuit::tx`).
 //!
 //! Prend des arguments EXPLICITES (clé KEM du destinataire, owner prouvé attendu) plutôt
 //! qu'un `WalletKeys` complet — le modèle d'identité prouvé (owner Rescue) diffère du

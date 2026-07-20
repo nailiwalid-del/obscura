@@ -7,8 +7,8 @@
 //! L'arbre est le MÊME que celui contre lequel le circuit prouve l'appartenance
 //! (`proved_hash::merkle::ProvedMerkleTree`).
 //!
-//! Depuis 3z-a6, `ProvedTx` est la v2 (3z-a5) : `proof` est LA preuve monolithique
-//! unique (P1–P7 pour toute la tx, une seule trace) et les nullifiers/commitments
+//! Depuis 3z-a6, `ProvedTx` est monolithique (v3 depuis enc-notes) : `proof` est LA
+//! preuve unique (P1–P7 pour toute la tx, une seule trace) et les nullifiers/commitments
 //! de sortie sont des champs publics top-level (`tx.nullifiers`, plus de
 //! `tx.spends[i].nullifier`) — la provenance change, la logique de consensus
 //! ci-dessous (anchor → preuve → signature d'intention → nullifiers → application
@@ -257,6 +257,22 @@ mod tests {
             crate::proved_wallet::scan_proved_output(&alice, &owner_a, &tx.output_commitments[1], &tx.enc_notes[1]),
             None
         );
+    }
+
+    /// Anti-substitution au NIVEAU LEDGER (relais passif) : substituer un enc_note sans
+    /// re-signer casse le digest → `verify_tx` échoue → `apply_proved_tx` rejette
+    /// (`InvalidProof`, avant même la vérification de signature). NB : un relais ACTIF
+    /// qui re-signe avec sa propre clé produirait un substitut accepté (déni de scan) —
+    /// limitation documentée (le signataire d'intention n'est pas lié au secret).
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "sous-preuves gatées : --release")]
+    fn enc_note_substitue_rejete_au_ledger() {
+        let (mut state, mut tx) = setup();
+        tx.enc_notes[0].enc_note = vec![0xBA, 0xD0];
+        assert!(matches!(
+            state.apply_proved_tx(&tx),
+            Err(LedgerError::InvalidProof)
+        ));
     }
 
     #[test]

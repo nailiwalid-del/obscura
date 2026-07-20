@@ -13,8 +13,12 @@
 //! sur `tx`) et ne fait tourner qu'UN SEUL `winterfell::verify`.
 //!
 //! `tx_digest` (v3, domaine `obscura/proved-tx/v3`) lie `root ‖ nf ‖ oc ‖ fee ‖
-//! signer ‖ enc_notes` — non-rejeu, anti-échange du signataire d'intention (comme en
-//! v1) ET anti-substitution des enveloppes chiffrées de sortie (`enc_notes`, v3).
+//! signer ‖ enc_notes` — non-rejeu et liaison des `enc_notes` (v3). ⚠️ Portée exacte :
+//! le digest empêche un relais PASSIF d'échanger les enc_notes en gardant la signature
+//! d'intention ; mais la preuve STARK ne lie pas `tx_digest`/`signer`, donc un relais
+//! ACTIF peut re-signer un substitut (déni de scan du destinataire, PAS de vol ni
+//! d'inflation — P5/P7 tiennent). Le signataire d'intention n'est pas une autorité
+//! d'ownership : celle-ci vient de la liaison `owner = H_owner(secret)` DANS le monolithe.
 //! La signature hybride d'intention reste une enveloppe anti-malléabilité, PAS une
 //! autorisation d'ownership : l'autorité vient de la liaison `owner = H_owner(secret)`
 //! DANS le monolithe (contrainte AIR, cf. `monolith::air` « liaisons par porteuses »).
@@ -101,7 +105,10 @@ fn tx_digest_bytes(
     }
     b.extend_from_slice(&fee.to_le_bytes());
     // Le signataire d'intention est LIÉ dans le digest → il ne peut pas être échangé
-    // sans invalider la preuve (qui lie tx_digest).
+    // en gardant la MÊME signature d'intention. ⚠️ La preuve STARK ne lie PAS
+    // `tx_digest`/`signer` (le digest est calculé APRÈS `prove_monolith`) : un relais
+    // ACTIF peut re-signer avec sa propre clé (le signataire n'est pas une autorité
+    // d'ownership). Portée résiduelle : déni de scan (voir `verify_tx`), pas de vol.
     b.extend_from_slice(&signer.to_bytes());
     // v3 : enc_notes liées après le bloc v2, dans l'ordre des sorties.
     for enc in enc_notes {
@@ -492,9 +499,15 @@ mod tests {
     #[test]
     #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
     fn enc_note_substitue_rejete() {
-        let (_s, root, mut tx) = valid_tx(); // valid_tx fournit désormais des enc_notes
+        let (_s, root, tx) = valid_tx(); // valid_tx fournit désormais des enc_notes
         assert!(verify_tx(&root, DEPTH, &tx));
-        tx.enc_notes[0].enc_note = vec![9, 9, 9];
-        assert!(!verify_tx(&root, DEPTH, &tx), "un enc_note substitué doit casser le digest");
+        // Substitution du chiffré AEAD.
+        let mut tx_a = valid_tx().2;
+        tx_a.enc_notes[0].enc_note = vec![9, 9, 9];
+        assert!(!verify_tx(&root, DEPTH, &tx_a), "enc_note substitué doit casser le digest");
+        // Substitution du ciphertext KEM (les deux champs de EncNote sont liés).
+        let mut tx_k = valid_tx().2;
+        tx_k.enc_notes[1].kem_ct = vec![42];
+        assert!(!verify_tx(&root, DEPTH, &tx_k), "kem_ct substitué doit casser le digest");
     }
 }

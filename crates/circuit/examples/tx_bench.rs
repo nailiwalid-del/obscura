@@ -64,9 +64,11 @@ fn main() {
     // seule leur présence/liaison dans tx_digest v3 compte pour le bench ; on passe
     // des bundles factices (le chiffrement réel est côté wallet/ledger).
     let intent = crypto::sig::SigKeypair::generate();
+    // Tailles réalistes : kem_ct = 1 + 32 (X25519) + 1088 (Kyber768 ct) = 1121 o ;
+    // enc_note ≈ 24 (nonce) + 16 (tag) + 12 + 16 + note 104 ≈ 172 o.
     let enc_notes = [
-        circuit::EncNote { kem_ct: vec![0u8; 1120], enc_note: vec![0u8; 96] },
-        circuit::EncNote { kem_ct: vec![0u8; 1120], enc_note: vec![0u8; 96] },
+        circuit::EncNote { kem_ct: vec![0u8; 1121], enc_note: vec![0u8; 172] },
+        circuit::EncNote { kem_ct: vec![0u8; 1121], enc_note: vec![0u8; 172] },
     ];
     let t0 = Instant::now();
     let (proved_root, tx) = prove_tx(&secret, inputs, [o0, o1], 20, &intent, enc_notes);
