@@ -1345,6 +1345,34 @@ mod tests {
         );
     }
 
+    /// INERTIE DES LIGNES DE BLINDING (soundness 3z-b1d, white-box) : la région de
+    /// blinding `[used, len)` est remplie de valeurs CHOISIES par l'attaquant
+    /// (recopies de lignes utiles + junk violant grossièrement les invariants
+    /// utiles : bit d'équilibre non booléen, accumulateur S sautant, porteuse
+    /// discontinue, cellule secret incohérente — cf. `Forge::LigneBlindingArbitraire`)
+    /// au lieu de l'aléa honnête. Test d'ACCEPTATION, pas de rejet : c'est
+    /// l'affirmation d'INERTIE — aucune contrainte de transition (toutes gatées par
+    /// blind_off, nul dès la transition used−1 → used) ni aucune assertion (toutes
+    /// à des lignes < used) ne lit la région de blinding, donc quoi que le prouveur
+    /// y mette, le statement vérifié (P1–P7) est INCHANGÉ. L'attaquant ne gagne
+    /// rien (il ne peut qu'y perdre son propre witness-hiding en y mettant du
+    /// non-aléa). Complète la matrice de rejet : les 13 forges `*_mord`/`*_rejete`
+    /// (qui tournent désormais elles-mêmes SOUS blinding seedé, cf.
+    /// `build_monolith_trace_forge`) prouvent que les violations UTILES mordent
+    /// toujours ; ce test prouve que la région NON contrainte, elle, ne peut RIEN
+    /// forger. Si ce test se met à REJETER, une contrainte ou une assertion s'est
+    /// mise à lire `≥ used` : à traiter comme un bug (trou de complétude ET
+    /// dépendance interdite à la région de blinding), ne pas le « corriger » en
+    /// inversant l'assert.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "trace forgée : générer en --release")]
+    fn lignes_blinding_ne_forgent_rien() {
+        assert!(
+            verdict_forge(Forge::LigneBlindingArbitraire),
+            "les lignes de blinding adverses doivent être INERTES (tx acceptée)"
+        );
+    }
+
     /// Roundtrip HONNÊTE à profondeur CONSENSUS (32, trace_len 512) : prouve et
     /// vérifie le monolithe complet 2-in/2-out. Valide de bout en bout le fix de
     /// complétude BAL (S constant au-delà de 256) ET l'ensemble des liaisons à la

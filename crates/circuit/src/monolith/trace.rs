@@ -496,6 +496,16 @@ pub(crate) enum Forge {
     /// honnêtes à la nouvelle valeur) → S_final = fee tient. SEUL l'ancrage VACC[0] = 0
     /// distingue la forge : sans lui, k unités sont créées ex nihilo.
     VaccInitial(u64),
+    /// BLINDING ADVERSARIAL (3z-b1d, test d'INERTIE — la tx doit rester ACCEPTÉE) :
+    /// les segments utiles `[0, used)` sont HONNÊTES, mais la région de blinding
+    /// `[used, len)` est remplie de valeurs CHOISIES par l'attaquant au lieu de
+    /// l'aléa frais : recopies de lignes utiles (tentative de dupliquer des cellules
+    /// témoins pour « nourrir » une liaison) plus du junk qui VIOLERAIT chaque
+    /// famille de contraintes s'il était lu (bit d'équilibre non booléen, S sautant,
+    /// porteuse discontinue, cellule secret incohérente). Aucune contrainte (toutes
+    /// gatées par blind_off) ni assertion (toutes < used) ne lisant `≥ used`, le
+    /// statement vérifié (P1–P7) est INCHANGÉ : l'attaquant n'y gagne rien.
+    LigneBlindingArbitraire,
 }
 
 /// Arbre de profondeur 2 à partir des FEUILLES injectées directement (idx 0 et 3,
@@ -556,6 +566,13 @@ fn fill_balance_vacc0_forge(dst: &mut [[BaseElement; WIDTH]], decompose: [u64; 4
 /// seule l'égalité de liaison ciblée est violée. Les publics se relisent de la trace
 /// forgée (comme `prove_monolith`) — c'est la CONTRAINTE de liaison, pas une
 /// assertion, qui doit mordre.
+///
+/// Depuis 3z-b1d, toute trace forgée porte une région de blinding `[used, len)`
+/// SEEDÉE (miroir de `build_monolith_trace_seeded`) : la matrice de soundness 3z-a
+/// exerce ainsi l'AIR gatée par blind_off SOUS blinding réel — une forge à région
+/// de blinding nulle (revue T1/T2) n'exerçait pas ce gating. Exception :
+/// `Forge::LigneBlindingArbitraire` remplit cette région de valeurs ADVERSES
+/// (cf. la variante) pour le test d'inertie.
 #[cfg(test)]
 pub(crate) fn build_monolith_trace_forge(w: &MonolithWitness, forge: Forge) -> TraceTable<BaseElement> {
     if let Forge::Aucune = forge {
@@ -789,6 +806,43 @@ pub(crate) fn build_monolith_trace_forge(w: &MonolithWitness, forge: Forge) -> T
         fill_balance_vacc0_forge(&mut rows, decomp, k);
     } else {
         fill_balance(&mut rows, amounts);
+    }
+
+    // --- Région de blinding [used, len) (3z-b1d) — deux régimes :
+    //     * LigneBlindingArbitraire : valeurs CHOISIES par l'attaquant — recopies
+    //       de lignes utiles + junk violant chaque invariant utile. Test d'INERTIE :
+    //       aucune contrainte/assertion ne lisant ≥ used, la tx reste ACCEPTÉE ;
+    //     * toutes les autres forges : aléa seedé (miroir de
+    //       build_monolith_trace_seeded, graine fixe → tests déterministes) — la
+    //       matrice de soundness s'exerce ainsi contre l'AIR gatée SOUS blinding
+    //       réel, pas contre une région de blinding restée nulle (revue T1/T2). ---
+    let used = used_rows(2);
+    match forge {
+        Forge::LigneBlindingArbitraire => {
+            for r in used..len {
+                // Recopie d'une ligne UTILE (tentative de dupliquer des cellules
+                // témoins — porteuses, éponges — pour « nourrir » une liaison)...
+                let recopie = rows[r % used];
+                rows[r] = recopie;
+                // ...plus du junk qui VIOLERAIT les contraintes utiles s'il était
+                // lu : bit d'équilibre non booléen, accumulateur S sautant,
+                // porteuse OWNER discontinue, cellule secret de KEY incohérente.
+                rows[r][BAL_OFF + BAL_BIT] = BaseElement::new(7);
+                rows[r][BAL_OFF + BAL_S] = BaseElement::new(r as u64);
+                rows[r][OWNER_C] += BaseElement::ONE;
+                rows[r][KEY_OFF + KEY_SECRET_START] += BaseElement::ONE;
+            }
+        }
+        _ => {
+            use rand::rngs::StdRng;
+            use rand::SeedableRng;
+            let mut rng = StdRng::seed_from_u64(0x0B11_D0FF);
+            for row in rows.iter_mut().skip(used) {
+                for cell in row.iter_mut() {
+                    *cell = felt_alea(&mut rng);
+                }
+            }
+        }
     }
 
     let mut trace = TraceTable::new(WIDTH, len);
