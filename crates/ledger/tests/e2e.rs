@@ -1,5 +1,8 @@
 //! Test de bout en bout : Alice reçoit une émission, paie Bob, Bob scanne et retrouve
 //! sa note ; la double dépense et les altérations sont rejetées.
+//!
+//! MODE TRANSPARENT (dev uniquement) : ne compile que sous `dev-transparent`.
+#![cfg(feature = "dev-transparent")]
 
 use ledger::keys::WalletKeys;
 use ledger::note::Note;

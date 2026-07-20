@@ -1,11 +1,20 @@
 //! Ledger privé d'Obscura : notes engagées, nullifiers, arbre de Merkle, validation.
 
 pub mod keys;
-pub mod merkle;
-pub mod note;
 pub mod proved_state;
 pub mod proved_wallet;
+
+// Mode transparent de développement (feature `dev-transparent`, OFF par défaut) :
+// non-consensus. `merkle` (BLAKE3) et `note` (owner BLAKE3) ne sont utilisés QUE
+// par ce mode — le chemin prouvé passe par `proved_hash::ProvedMerkleTree` et
+// `circuit::SpendNote`.
+#[cfg(feature = "dev-transparent")]
+pub mod merkle;
+#[cfg(feature = "dev-transparent")]
+pub mod note;
+#[cfg(feature = "dev-transparent")]
 pub mod state;
+#[cfg(feature = "dev-transparent")]
 pub mod tx;
 
 use serde::{Deserialize, Serialize};

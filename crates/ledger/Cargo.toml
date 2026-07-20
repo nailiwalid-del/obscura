@@ -12,3 +12,9 @@ serde.workspace = true
 rand_core.workspace = true
 thiserror.workspace = true
 hex.workspace = true
+
+[features]
+# Mode transparent de développement (LedgerState/apply_transparent, tx en clair,
+# Merkle BLAKE3, Note owner-BLAKE3) : NON-consensus, OFF par défaut. Le build nu
+# n'expose que la surface consensus (proved_state/proved_wallet/keys).
+dev-transparent = []
