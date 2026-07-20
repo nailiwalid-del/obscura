@@ -213,8 +213,10 @@ mod tests {
 
     // En v2, les montants ne sont plus des champs publics visibles (`tx.outputs` a
     // disparu) : on ne peut plus saboter l'équilibre en mutant une valeur en clair
-    // après-coup. On falsifie donc un autre public — le commitment de sortie —, ce
-    // qui casse à la fois l'assertion du monolithe (cellule liée) et `tx_digest`.
+    // après-coup. On falsifie donc un autre public — le commitment de sortie. Cela
+    // casserait AUSSI `tx_digest`, mais `verify_tx` court-circuite sur `verify_monolith`
+    // AVANT la comparaison du digest : c'est donc l'assertion du monolithe (cellule
+    // liée) qui rejette ici — la défense `tx_digest` n'est pas exercée par ce test.
     #[test]
     #[cfg_attr(debug_assertions, ignore = "sous-preuves gatées : --release")]
     fn preuve_falsifiee_rejetee() {
@@ -229,9 +231,11 @@ mod tests {
 
     /// Un nullifier ne peut pas être substitué après coup : il est asserté DANS la
     /// preuve du monolithe (cellule liée au commitment consommé) ET lié dans
-    /// `tx_digest`. Le remplacer par un digest arbitraire casse les deux — rejet
-    /// `InvalidProof`, distinct de `preuve_falsifiee_rejetee` qui falsifie le
-    /// commitment de sortie plutôt que le nullifier.
+    /// `tx_digest`. Le remplacer par un digest arbitraire violerait les deux, mais
+    /// `verify_tx` court-circuite sur `verify_monolith` AVANT de comparer `tx_digest` :
+    /// c'est donc l'assertion du monolithe qui rejette (`InvalidProof`), la défense
+    /// `tx_digest` restant non exercée. Distinct de `preuve_falsifiee_rejetee` qui
+    /// falsifie le commitment de sortie plutôt que le nullifier.
     #[test]
     #[cfg_attr(debug_assertions, ignore = "sous-preuves gatées : --release")]
     fn nullifier_ne_peut_etre_substitue() {

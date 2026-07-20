@@ -62,6 +62,7 @@ const N_BASE: usize = N_KEY + 4 * N_SPONGE + 2 * N_MERKLE + N_BAL + N_CARRIER; /
 // ---- Liaisons par porteuses (3z-a4), une famille à la fois (chacune son test). ----
 // Chaque égalité gatée est déclarée ET écrite ensemble (result/degrees synchronisés :
 // un slot déclaré mais non écrit lirait un résidu de ligne winterfell → JAMAIS de trou).
+const N_SECRET: usize = DIGEST_FELTS; // 4 : liaison secret owner↔nk, gatée ligne 0 (s0)
 const N_OWNER: usize = 3 * DIGEST_FELTS; // 12 : prod @7 (clé) + 2× conso @0 (commitments)
 const N_NK: usize = 3 * DIGEST_FELTS; // 12 : prod @7 (clé) + 2× conso @40 (nullifiers)
 const N_RHO: usize = 2 * (2 * DIGEST_FELTS); // 16 : par entrée @7(4) + @40(1) + @47(3)
@@ -69,9 +70,10 @@ const N_CM: usize = 2 * (3 * DIGEST_FELTS); // 24 : par entrée @31(4) + @32(4) 
 const N_LEAF: usize = 2 * (2 * DIGEST_FELTS); // 16 : par entrée @39(4) + @0(4)
 const N_VIN: usize = 4; // 2× (prod @0 + conso VACC fin de bloc)
 const N_VOUT: usize = 4; // 2× (prod @0 + conso VACC fin de bloc)
-const N_LIAISON: usize = N_OWNER + N_NK + N_RHO + N_CM + N_LEAF + N_VIN + N_VOUT; // 88
+const N_LIAISON: usize =
+    N_SECRET + N_OWNER + N_NK + N_RHO + N_CM + N_LEAF + N_VIN + N_VOUT; // 92
 
-const N_CONSTRAINTS: usize = N_BASE + N_LIAISON; // 171 + 88 = 259
+const N_CONSTRAINTS: usize = N_BASE + N_LIAISON; // 171 + 92 = 263
 
 // ---- Segments d'équilibre (mêmes constantes que `trace::fill_balance`). ----
 const BAL_ROWS: usize = 256; // 4 blocs × 64
@@ -126,9 +128,10 @@ pub(crate) struct MonolithAir {
 }
 
 /// Nombre d'assertions (publiques uniquement) en fonction de la profondeur.
-/// KEY(16) + 2·U(28) + 2·M(8·depth+4) + 2·O(12) + BAL(2) = 106 + 16·depth.
+/// KEY(16) + 2·U(28) + 2·M(8·depth+4) + 2·O(12) + BAL(3) = 107 + 16·depth.
+/// BAL(3) = S[0]=0, S[l−1]=fee, VACC[0]=0 (ancrage anti-inflation de l'entrée 0).
 fn num_assertions(depth: usize) -> usize {
-    16 + 2 * 28 + 2 * (8 * depth + 4) + 2 * 12 + 2
+    16 + 2 * 28 + 2 * (8 * depth + 4) + 2 * 12 + 3
 }
 
 impl winterfell::Air for MonolithAir {
@@ -267,6 +270,19 @@ impl winterfell::Air for MonolithAir {
         let vacc_gate = [pv[44], pv[45], pv[46], pv[47]]; // entrées 0/1, sorties 0/1
         // Colonne rate (RATE_START..) = digest de sortie d'un bloc éponge.
         let rate = RATE_START;
+
+        // --- SECRET : le secret du bloc owner == le secret du bloc nk (liaison
+        //     owner↔nk, anti-double-dépense). Le bloc KEY prouve owner = H_owner(s_o)
+        //     ET nk = H_nk(s_n) pour DEUX témoins ; sans cette égalité un prouveur
+        //     dériverait owner et nk de secrets DISTINCTS (owner d'une note qu'il
+        //     possède, nk d'une autre → nullifier arbitraire → double-dépense). Le
+        //     secret est aux colonnes 7..11 de chaque bloc (KEY_SECRET_START =
+        //     RATE_START + 3 = 7 ; cf. key.rs::SECRET_START). Gaté ligne 0 (s0),
+        //     miroir exact de key.rs::N_BIND / `liaison_secret_partage_mord`. ---
+        for k in 0..DIGEST_FELTS {
+            result[idx + k] = s0 * (cur[KEY_OFF + 7 + k] - cur[KEY_OFF + STATE_WIDTH + 7 + k]);
+        }
+        idx += DIGEST_FELTS;
 
         // --- OWNER : owner = H_owner(secret) gouverne les commitments d'entrée. ---
         // Production @7 : porteuse == sortie rate du bloc owner de la clé.
@@ -432,6 +448,14 @@ impl winterfell::Air for MonolithAir {
         // Équilibre : S[0] = 0, S[dernière ligne] = fee (= Σin − Σout).
         a.push(Assertion::single(BAL_OFF + BAL_S, 0, BaseElement::ZERO));
         a.push(Assertion::single(BAL_OFF + BAL_S, self.l - 1, BaseElement::new(self.pi.fee)));
+        // VACC[0] = 0 : la cellule d'accumulation de bloc de l'entrée 0 est SINON un
+        // témoin libre (aucun reset ne la précède, contrairement aux blocs 1..3 dont
+        // le VACC de départ est forcé à 0 par le reset endblk de la ligne 63/127/191).
+        // Sans cet ancrage, un prouveur y met VACC[0] = −k, décompose l'entrée 0 en
+        // (valeur + k) tout en gardant VACC@60 = valeur (porteuse VIN honnête) → S
+        // encaisse k de trop → inflation depuis l'entrée 0. L'égalité VACC[0] = 0 force
+        // Σbits(bloc 0) = VACC@60 = VIN₀, fermant le trou.
+        a.push(Assertion::single(BAL_OFF + BAL_VACC, 0, BaseElement::ZERO));
 
         a
     }
@@ -617,8 +641,9 @@ fn degrees(n: usize) -> Vec<TransitionConstraintDegree> {
     for _ in 0..N_CARRIER {
         d.push(TransitionConstraintDegree::new(1));
     }
-    // Liaisons (88) : chacune `sel(cycle n) · (cur[a] − cur[b])` — degré 1, un cycle
-    // pleine longueur (motif `wc(1, vec![n])` de key.rs). Blowup 16 : très en-dessous.
+    // Liaisons (92, dont la liaison secret owner↔nk) : chacune `sel(cycle n) ·
+    // (cur[a] − cur[b])` — degré 1, un cycle pleine longueur (motif `wc(1, vec![n])`
+    // de key.rs). Blowup 16 : très en-dessous.
     for _ in 0..N_LIAISON {
         d.push(wc(1, vec![n]));
     }
@@ -842,6 +867,32 @@ mod tests {
     #[cfg_attr(debug_assertions, ignore = "trace forgée : générer en --release")]
     fn liaison_nk_mord() {
         assert!(!verdict_forge(Forge::NkConsomme(dg(556))), "nk ≠ clé doit mordre");
+    }
+
+    /// LIAISON SECRET owner↔nk (anti-double-dépense) : le bloc KEY dérive owner de `s`
+    /// mais nk d'un `s' ≠ s`. owner et nk sont chacun corrects pour LEUR secret, la
+    /// porteuse NK_C et le nullifier consomment nk = H_nk(s') (cascade honnête) : SEULE
+    /// la contrainte de liaison secret (ligne 0) mord. Sans elle, un prouveur combinerait
+    /// l'owner d'une note possédée avec un nk arbitraire → nullifier détaché → double-
+    /// dépense illimitée. RED vérifié en neutralisant la famille SECRET (s0 → ZÉRO dans
+    /// cette famille, non committé) : la forge passait alors → cible bien cette contrainte.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "trace forgée : générer en --release")]
+    fn liaison_secret_owner_nk_mord() {
+        assert!(!verdict_forge(Forge::SecretNk(dg(561))), "s_nk ≠ s_owner doit mordre");
+    }
+
+    /// ANCRAGE VACC[0] (anti-inflation entrée 0) : la trace forge VACC[0] = −k et
+    /// décompose l'entrée 0 en (valeur + k), la sortie 0 gonflée de k gardant S_final =
+    /// fee. Toutes les liaisons VIN/VOUT restent honnêtes (VACC@60 = porteuses) : SEULE
+    /// l'assertion VACC[0] = 0 distingue la forge. Sans elle, k unités seraient créées
+    /// ex nihilo. RED vérifié en retirant l'assertion VACC[0] (non committé) : la forge
+    /// passait alors.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "trace forgée : générer en --release")]
+    fn vacc_initial_libre_mord() {
+        assert!(verdict_forge(Forge::Aucune), "trace honnête acceptée");
+        assert!(!verdict_forge(Forge::VaccInitial(100)), "VACC[0] ≠ 0 (inflation) doit mordre");
     }
 
     /// LIAISON RHO (propriété v0.2 « nullifier lié au commitment ») : rho du nullifier

@@ -274,6 +274,14 @@ vecteurs de test croisés avec une seconde implémentation, et versioning explic
 La migration du code (merkle.rs, note.rs) se fait AVEC le circuit, jamais avant,
 pour garantir que l'arbre consensus et l'arbre prouvé sont identiques.
 
+**Hypothèse de padding (domaine étendu).** Les cellules de padding `PAD_ZERO*` des
+éponges et les zéros de préambule ne sont PAS assertés par le circuit : le hash prouvé
+établit `H(payload ‖ padding)`, pas `H(payload)` seul. C'est sûr sous la résistance
+aux collisions du sponge Rescue-Prime (un prouveur ne peut pas exhiber deux paddings
+distincts menant au même digest sur un payload donné), hypothèse déjà présente dans
+`SpongeAir`/`merkle_path` v1. Non exploitable sans casser cette résistance ; à
+resserrer (assertions de padding explicites) si le modèle de menace l'exige.
+
 ### Précision d'implémentation (v0.2) — où `dual_hash` s'applique réellement
 
 Au sein du domaine « hash consensus », `dual_hash` (BLAKE3‖SHA3, 64 o, jamais tronqué)

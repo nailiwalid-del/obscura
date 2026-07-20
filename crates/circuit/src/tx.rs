@@ -22,6 +22,7 @@
 
 use crate::monolith::air::{prove_monolith, verify_monolith, MonolithPublicInputs};
 use crate::monolith::trace::MonolithWitness;
+use crate::range_check::RANGE_BITS;
 use crate::spend::SpendNote;
 use crate::ValidityProof;
 use crypto::hash::dual_hash;
@@ -162,6 +163,17 @@ pub fn prove_tx(
 /// (`apply_proved_tx`) — `verify_tx` n'établit que la preuve STARK + la cohérence du
 /// digest.
 pub fn verify_tx(root: &Digest, depth: usize, tx: &ProvedTx) -> bool {
+    // Borne native du fee (miroir de `balance.rs`) : l'équilibre n'est prouvé que
+    // MODULO p (`S ≡ fee (mod p)`, `fee: u64` réduit dans le corps). Sans cette borne,
+    // `fee = p − k` (valide en u64) fait passer des sorties dépassant les entrées de k :
+    // `S_final = Σin − Σout = −k ≡ p − k` satisfait l'égalité en corps, mais crée k
+    // unités (wrap mod p). Avec `fee < 2^RANGE_BITS` ET chaque montant `< 2^RANGE_BITS`
+    // (contrainte de range du circuit), on a `|Σin − Σout| < 4·2^60 + 2^60 < 2^63 ≪ p` :
+    // l'égalité en corps implique alors l'égalité ENTIÈRE (aucun wrap). Le vérificateur
+    // ne fait pas confiance au prouveur → cette borne EST la garantie de consensus.
+    if tx.fee >= (1u64 << RANGE_BITS) {
+        return false;
+    }
     let pi = MonolithPublicInputs {
         root: digest_to_felts(root),
         nullifiers: [
@@ -313,6 +325,57 @@ mod tests {
         let (_s, root, tx) = valid_tx();
         assert!(verify_tx(&root, DEPTH, &tx));
         assert!(!verify_tx(&digest(1), DEPTH, &tx));
+    }
+
+    /// INFLATION par wrap mod p via l'API publique (sans force brute white-box) : les
+    /// sorties dépassent les entrées de `k`, avec `fee = p − k`. L'équilibre du circuit
+    /// n'établit que `S ≡ fee (mod p)` : `S_final = Σin − Σout = −k ≡ p − k = fee` — la
+    /// preuve STARK est donc VALIDE (on le vérifie explicitement via `verify_monolith`).
+    /// Seule la borne native `fee < 2^RANGE_BITS` de `verify_tx` ferme le trou : `p − k`
+    /// dépasse 2^60 → rejet. RED vérifié en retirant la borne (non committé) :
+    /// `verify_tx` renvoyait alors `true` malgré k unités créées.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
+    fn fee_wrappe_rejete() {
+        // Modulus Goldilocks p = 2^64 − 2^32 + 1.
+        const P: u64 = 0xFFFF_FFFF_0000_0001;
+        let k = 1_000u64;
+
+        let secret = ShieldedSecret::from_felts(core::array::from_fn(|i| {
+            Felt::from_canonical_u64(700 + i as u64).unwrap()
+        }));
+        let owner = rescue::hash(Domain::Owner, secret.as_felts());
+        let n0 = SpendNote { value: 1_000, owner, rho: digest(20), r: digest(30) };
+        let n1 = SpendNote { value: 500, owner, rho: digest(40), r: digest(50) };
+        let cm0 = rescue::note_commitment(n0.value, &n0.owner, &n0.rho, &n0.r);
+        let cm1 = rescue::note_commitment(n1.value, &n1.owner, &n1.rho, &n1.r);
+        let (root, path0, path1) = build_tree(&cm0, &cm1);
+
+        // Σsorties = 1500 + k > Σentrées = 1500 : k unités créées ; fee = p − k ≡ −k.
+        let o0 = SpendNote { value: 1_000, owner: digest(60), rho: digest(61), r: digest(62) };
+        let o1 = SpendNote { value: 500 + k, owner: digest(70), rho: digest(71), r: digest(72) };
+        let inputs = [
+            ProvedInput { note: n0, path: path0, index: 0 },
+            ProvedInput { note: n1, path: path1, index: 3 },
+        ];
+        let intent = SigKeypair::generate();
+        let (proved_root, tx) = prove_tx(&secret, inputs, [o0, o1], P - k, &intent);
+        assert_eq!(proved_root, root);
+
+        // La preuve STARK est valide (S ≡ fee mod p) : le trou est bien réel...
+        let pi = MonolithPublicInputs {
+            root: digest_to_felts(&root),
+            nullifiers: [digest_to_felts(&tx.nullifiers[0]), digest_to_felts(&tx.nullifiers[1])],
+            output_commitments: [
+                digest_to_felts(&tx.output_commitments[0]),
+                digest_to_felts(&tx.output_commitments[1]),
+            ],
+            fee: tx.fee,
+            depth: DEPTH,
+        };
+        assert!(verify_monolith(&pi, DEPTH, &tx.proof), "preuve STARK valide (wrap mod p)");
+        // ...mais la borne native `fee < 2^60` de verify_tx le ferme.
+        assert!(!verify_tx(&root, DEPTH, &tx), "fee = p − k ≥ 2^60 doit être rejeté");
     }
 
     /// Entrée d'un AUTRE owner : la note 0 porte `owner = digest(9999)` ≠

@@ -104,8 +104,19 @@ fn key_initial_state(domain: Domain, secret: &[Felt; DIGEST_FELTS]) -> [BaseElem
 /// (`12..24`) côte à côte, pour LE MÊME secret — recopie de `key::build_key_trace`
 /// (sans dépendre de sa visibilité privée).
 fn key_rows(secret: &[Felt; DIGEST_FELTS]) -> Vec<[BaseElement; KEY_WIDTH]> {
-    let mut o = key_initial_state(Domain::Owner, secret);
-    let mut n = key_initial_state(Domain::Nk, secret);
+    key_rows_split(secret, secret)
+}
+
+/// Comme `key_rows` mais avec un secret DISTINCT par bloc (`s_owner` pour owner,
+/// `s_nk` pour nk). Pour un témoin honnête `s_owner == s_nk` (la liaison secret
+/// owner↔nk l'exige) ; le paramètre séparé sert uniquement à la forge
+/// `Forge::SecretNk` (miroir de `key::build_key_trace` à deux secrets).
+fn key_rows_split(
+    s_owner: &[Felt; DIGEST_FELTS],
+    s_nk: &[Felt; DIGEST_FELTS],
+) -> Vec<[BaseElement; KEY_WIDTH]> {
+    let mut o = key_initial_state(Domain::Owner, s_owner);
+    let mut n = key_initial_state(Domain::Nk, s_nk);
     let mut rows = Vec::with_capacity(ROUND_LEN);
     for step in 0..ROUND_LEN {
         let mut row = [BaseElement::ZERO; KEY_WIDTH];
@@ -255,6 +266,7 @@ pub(crate) fn build_monolith_trace(w: &MonolithWitness) -> TraceTable<BaseElemen
 
         let commit_payload = note_commit_payload(out.value, &out.owner, &out.rho, &out.r);
         let out_rows = sponge_rows_for(Domain::NoteCommitment, &commit_payload);
+        debug_assert_eq!(out_rows.len(), CM_ROWS_END - CM_ROWS_START);
         segment(&mut rows, &out_rows, 0, o_off);
 
         let vout = BaseElement::new(out.value);
@@ -376,6 +388,12 @@ pub(crate) fn witness_de_test_profondeur_consensus() -> (MonolithWitness, Digest
 pub(crate) enum Forge {
     /// Aucune forge : trace honnête (délègue à `build_monolith_trace`).
     Aucune,
+    /// Secret du bloc nk ≠ secret du bloc owner : le bloc KEY dérive owner de `s`
+    /// (honnête) mais nk de `s' ≠ s`. owner/nk restent INDIVIDUELLEMENT corrects pour
+    /// leur propre secret ; la porteuse NK_C et le nullifier consomment ce nk = H_nk(s')
+    /// (cascade honnête), donc SEULE la liaison secret owner↔nk (ligne 0) mord. Miroir
+    /// de `key.rs::liaison_secret_partage_mord`.
+    SecretNk(Digest),
     /// Owner CONSOMMÉ dans le commitment de l'entrée 0 ≠ owner produit par la clé.
     /// Aval recalculé : cm0, feuille0, nullifier0 et l'arbre (root/chemins).
     OwnerConsomme(Digest),
@@ -408,6 +426,13 @@ pub(crate) enum Forge {
     /// diffèrent de leurs porteuses (les gates VOUT restent honnêtes) : isole la
     /// famille VIN de la famille VOUT.
     ValeurBalEntrees(u64),
+    /// Inflation par VACC[0] libre : le bloc d'équilibre de l'entrée 0 démarre à
+    /// VACC[0] = −k (au lieu de 0) ; ses bits décomposent `valeur₀ + k` de sorte que
+    /// VACC@60 = valeur₀ (porteuse VIN honnête, liaison intacte) mais S encaisse
+    /// `valeur₀ + k`. La sortie 0 est gonflée de `k` (commitment + VOUT + bloc BAL
+    /// honnêtes à la nouvelle valeur) → S_final = fee tient. SEUL l'ancrage VACC[0] = 0
+    /// distingue la forge : sans lui, k unités sont créées ex nihilo.
+    VaccInitial(u64),
 }
 
 /// Arbre de profondeur 2 à partir des FEUILLES injectées directement (idx 0 et 3,
@@ -426,6 +451,43 @@ fn build_tree_from_leaves(leaf0: &Digest, leaf1: &Digest) -> (Digest, Vec<Digest
     (root, vec![l1, n_right], vec![l2, n_left])
 }
 
+/// Remplit l'équilibre comme `fill_balance`, mais VACC[0] du bloc 0 démarre à `−k`
+/// (au lieu de 0) : les bits du bloc 0 décomposent `decompose[0]` (= valeur₀ + k),
+/// VACC compense pour retomber sur la porteuse VIN₀ à la ligne 60 (VACC@60 = valeur₀).
+/// Sert UNIQUEMENT à `Forge::VaccInitial` : sans l'ancrage VACC[0] = 0, S encaisse la
+/// valeur gonflée → inflation. Les blocs 1..3 gardent VACC = 0 au départ (reset).
+#[cfg(test)]
+fn fill_balance_vacc0_forge(dst: &mut [[BaseElement; WIDTH]], decompose: [u64; 4], k: u64) {
+    let mut s = BaseElement::ZERO;
+    for (b, &amount) in decompose.iter().enumerate() {
+        let sign = if b < 2 { BaseElement::ONE } else { -BaseElement::ONE };
+        // SEUL le bloc 0 démarre à −k ; les autres à 0 (comme le reset honnête).
+        let mut vacc = if b == 0 { -BaseElement::new(k) } else { BaseElement::ZERO };
+        for r in 0..BAL_BLOCK {
+            let row = b * BAL_BLOCK + r;
+            let bit = if r < crate::range_check::RANGE_BITS {
+                (amount >> r) & 1
+            } else {
+                0
+            };
+            let bit_be = BaseElement::new(bit);
+            dst[row][BAL_OFF + BAL_BIT] = bit_be;
+            dst[row][BAL_OFF + BAL_S] = s;
+            dst[row][BAL_OFF + BAL_VACC] = vacc;
+            if r < crate::range_check::RANGE_BITS {
+                let pow = BaseElement::new(1u64 << r);
+                s += sign * bit_be * pow;
+                vacc += bit_be * pow;
+            }
+        }
+    }
+    for row in dst.iter_mut().skip(4 * BAL_BLOCK) {
+        row[BAL_OFF + BAL_BIT] = BaseElement::ZERO;
+        row[BAL_OFF + BAL_S] = s;
+        row[BAL_OFF + BAL_VACC] = BaseElement::ZERO;
+    }
+}
+
 /// Construit une trace de monolithe (profondeur 2) avec une forge de liaison. La
 /// trace reste SELF-consistante (segments valides, root partagée, équilibre =fee) :
 /// seule l'égalité de liaison ciblée est violée. Les publics se relisent de la trace
@@ -439,8 +501,14 @@ pub(crate) fn build_monolith_trace_forge(w: &MonolithWitness, forge: Forge) -> T
     let len = trace_len(2);
     let mut rows = vec![[BaseElement::ZERO; WIDTH]; len];
 
-    // --- Clé (honnête) : owner/nk PRODUCTEURS dérivés du secret. ---
-    let kr = key_rows(w.secret.as_felts());
+    // --- Clé : owner PRODUCTEUR dérivé du secret ; le bloc nk peut dériver d'un
+    //     secret FORGÉ (Forge::SecretNk) — nk = H_nk(s') alimente alors la porteuse
+    //     NK_C et le nullifier en cascade honnête, SEULE la liaison secret mord. ---
+    let s_nk = match forge {
+        Forge::SecretNk(s) => s.0,
+        _ => *w.secret.as_felts(),
+    };
+    let kr = key_rows_split(w.secret.as_felts(), &s_nk);
     segment(&mut rows, &kr, 0, KEY_OFF);
     let owner = read_digest(&kr, kr.len() - 1, RATE_START);
     let nk = read_digest(&kr, kr.len() - 1, KEY_NK_LOCAL_OFF + RATE_START);
@@ -526,14 +594,19 @@ pub(crate) fn build_monolith_trace_forge(w: &MonolithWitness, forge: Forge) -> T
     let m1 = crate::merkle_path::path_rows(&leaves_tree[1], &path1, 3);
     segment(&mut rows, &m1, 0, M1_OFF);
 
-    // --- Sorties (honnêtes). ---
+    // --- Sorties (honnêtes, SAUF la sortie 0 gonflée de k pour Forge::VaccInitial :
+    //     commitment + porteuse VOUT + bloc BAL cohérents à la NOUVELLE valeur). ---
     for (j, o_off) in [O0_OFF, O1_OFF].into_iter().enumerate() {
         let out = &w.outputs[j];
-        amounts[2 + j] = out.value;
-        let commit_payload = note_commit_payload(out.value, &out.owner, &out.rho, &out.r);
+        let out_value = match forge {
+            Forge::VaccInitial(k) if j == 0 => out.value + k,
+            _ => out.value,
+        };
+        amounts[2 + j] = out_value;
+        let commit_payload = note_commit_payload(out_value, &out.owner, &out.rho, &out.r);
         let out_rows = sponge_rows_for(Domain::NoteCommitment, &commit_payload);
         segment(&mut rows, &out_rows, 0, o_off);
-        let vout = BaseElement::new(out.value);
+        let vout = BaseElement::new(out_value);
         for row in rows.iter_mut() {
             row[VOUT_C[j]] = vout;
         }
@@ -557,7 +630,17 @@ pub(crate) fn build_monolith_trace_forge(w: &MonolithWitness, forge: Forge) -> T
         }
         _ => {}
     }
-    fill_balance(&mut rows, amounts);
+    if let Forge::VaccInitial(k) = forge {
+        // Bloc 0 : décompose valeur₀ + k, VACC[0] = −k → VACC@60 = valeur₀ (porteuse
+        // VIN honnête). `amounts` porte déjà la sortie 0 gonflée (bloc 2 = valeur+k),
+        // donc S_final = (valeur₀+k) + valeur₁ − (valeur_sortie0+k) − valeur_sortie1
+        // = fee. Seul VACC[0] ≠ 0 trahit la forge.
+        let mut decomp = amounts;
+        decomp[0] += k;
+        fill_balance_vacc0_forge(&mut rows, decomp, k);
+    } else {
+        fill_balance(&mut rows, amounts);
+    }
 
     let mut trace = TraceTable::new(WIDTH, len);
     for (i, row) in rows.iter().enumerate() {
