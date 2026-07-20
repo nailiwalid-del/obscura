@@ -153,7 +153,7 @@ mod tests {
         let sig_b = kp.sign("test/v1", b"autre message");
         let hybride_invalide = HybridSignature {
             ed25519: sig_a.ed25519,
-            mldsa: sig_b.mldsa.clone(),
+            mldsa: sig_b.mldsa,
         };
         assert!(!verify(
             &kp.public,

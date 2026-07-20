@@ -135,6 +135,7 @@ pub(crate) struct MonolithAir {
 ///   - commitment (m=32, p=13) : cellules 17..32 → **15** ;
 ///   - merge Merkle (m=12, p=8) : cellules 12..16 → **4** (bloc partiel) ;
 ///   - clé/feuille/nullifier (m ∈ {8, 8, 16}, préambules pleins) → 0.
+///
 /// KEY(16) + 2·U(28+15) + 2·M((8+4)·depth+4) + 2·O(12+15) + BAL(3) = 167 + 24·depth.
 /// BAL(3) = S[0]=0, S[l−1]=fee, VACC[0]=0 (ancrage anti-inflation de l'entrée 0).
 fn num_assertions(depth: usize) -> usize {
@@ -925,12 +926,54 @@ mod tests {
         assert!(!verdict_forge(Forge::RhoNullifier(0, dg(557))), "rho nf ≠ rho cm doit mordre");
     }
 
+    /// LIAISON RHO CÔTÉ COMMITMENT (ancre @7, différée de la revue T4 sur argument de
+    /// symétrie avec `liaison_rho_mord`) : le rho ABSORBÉ dans le commitment de
+    /// l'entrée 0 diverge de la porteuse RHO_C, alors que le nullifier reste honnête
+    /// (rho = note.rho, comme RHO_C) — cm/feuille/nullifier/arbre recalculés en
+    /// cascade honnête sur cm' = H(valeur ‖ owner ‖ rho' ‖ r). C'est le miroir
+    /// PRODUCTION de `liaison_rho_mord` (qui mord côté nullifier, @40/@47) : ancre
+    /// @7 distincte, cellules distinctes (inject cols +12..+16 ligne 7 du
+    /// COMMITMENT, vs +11 ligne 40 et +12..+15 ligne 47 du NULLIFIER). RED vérifié
+    /// en neutralisant localement la sous-boucle « Consommation @7 » de la famille
+    /// RHO dans `evaluate_transition` (`result[idx+k] = s7 * (...)` → `E::ZERO`,
+    /// NON committé) : la forge passait alors → confirme que le test cible bien
+    /// cette ancre et pas une autre (owner/nk @7 partagent le même sélecteur s7
+    /// mais des cellules disjointes, restées actives pendant le RED).
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "trace forgée : générer en --release")]
+    fn liaison_rho_commitment_mord() {
+        assert!(
+            !verdict_forge(Forge::RhoCommitment(0, dg(562))),
+            "rho commitment ≠ porteuse doit mordre"
+        );
+    }
+
     /// LIAISON CM_IN (P1 non détournable) : feuille bâtie sur un autre commitment que
     /// celui produit par l'entrée → rejet.
     #[test]
     #[cfg_attr(debug_assertions, ignore = "trace forgée : générer en --release")]
     fn liaison_cm_mord() {
         assert!(!verdict_forge(Forge::CmFeuille(0, dg(558))), "cm feuille ≠ cm produit doit mordre");
+    }
+
+    /// LIAISON CM_IN SUR L'ENTRÉE 1 (jumelle U1, différée de la revue T4 sur argument
+    /// de symétrie avec `liaison_cm_mord`) : même forge que `liaison_cm_mord` mais sur
+    /// l'entrée 1 (`Forge::CmFeuille(1, …)`) — exerce la SECONDE itération de la
+    /// boucle `for u_off in [U0_OFF, U1_OFF]` de la famille CM dans
+    /// `evaluate_transition`, sur des colonnes disjointes (U1_OFF au lieu de U0_OFF)
+    /// et un sélecteur de ligne partagé (s32) mais une porteuse CM_C[1] distincte de
+    /// CM_C[0]. Confirme que l'ancrage de l'entrée 1 est INDÉPENDANTE de celle de
+    /// l'entrée 0 (pas seulement dupliquée par construction Rust sans être réellement
+    /// exercée par le prouveur). RED vérifié en neutralisant localement toute la
+    /// sous-boucle « Consommation @32 » de la famille CM (`result[idx+k] = s32 *
+    /// (...)` → `E::ZERO`, pour i ∈ {0,1}, NON committé) : la forge passait alors.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "trace forgée : générer en --release")]
+    fn liaison_cm_mord_u1() {
+        assert!(
+            !verdict_forge(Forge::CmFeuille(1, dg(563))),
+            "cm feuille ≠ cm produit (entrée 1) doit mordre"
+        );
     }
 
     /// LIAISON FEUILLE↔CHEMIN : chemin de Merkle prouvé sur une autre feuille que
@@ -973,6 +1016,22 @@ mod tests {
     #[cfg_attr(debug_assertions, ignore = "trace forgée : générer en --release")]
     fn liaison_vin_isole_mord() {
         assert!(!verdict_forge(Forge::ValeurBalEntrees(900)), "VIN seul doit mordre");
+    }
+
+    /// ISOLATION VOUT (miroir de `liaison_vin_isole_mord`, différée de la revue T4 sur
+    /// argument de symétrie) : bloc BAL 2 (sortie 0) forgé à 700, compensé sur le
+    /// bloc BAL 3 (sortie 1, même signe −) → Σ signée reste fee, les gates VIN
+    /// restent honnêtes (VIN_C inchangées), les porteuses VOUT_C restent la valeur
+    /// RÉELLE des commitments de sortie (fixées avant la forge de montants) —
+    /// SEULS VOUT[0]/VOUT[1] diffèrent de leur porteuse. Un bug du seul gate VOUT ne
+    /// peut plus être masqué par le gate VIN. RED vérifié en neutralisant localement
+    /// les deux consommations VACC de la famille VOUT dans `evaluate_transition`
+    /// (`result[idx+1] = vacc_gate[2+j] * (...)` → `E::ZERO` pour j ∈ {0,1}, NON
+    /// committé) : la forge passait alors.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "trace forgée : générer en --release")]
+    fn liaison_vout_isole_mord() {
+        assert!(!verdict_forge(Forge::ValeurBalSorties(700)), "VOUT seul doit mordre");
     }
 
     /// PAD_ZERO* du COMMITMENT (préambule canonique) : l'entrée 0 publie

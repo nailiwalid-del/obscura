@@ -106,12 +106,12 @@ impl MerkleTree {
         let mut level = self.leaves.clone();
         let mut idx = index as usize;
         let mut siblings = Vec::with_capacity(self.depth);
-        for d in 0..self.depth {
+        for &e_d in e.iter().take(self.depth) {
             if level.len() % 2 == 1 {
-                level.push(e[d]);
+                level.push(e_d);
             }
             let sib = idx ^ 1;
-            siblings.push(if sib < level.len() { level[sib] } else { e[d] });
+            siblings.push(if sib < level.len() { level[sib] } else { e_d });
             level = level.chunks(2).map(|p| node_hash(&p[0], &p[1])).collect();
             idx >>= 1;
         }

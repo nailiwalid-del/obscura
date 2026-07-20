@@ -66,13 +66,20 @@ pub(crate) fn transition_degrees() -> Vec<TransitionConstraintDegree> {
 pub(crate) fn periodic_ark_columns() -> Vec<Vec<BaseElement>> {
     let mut cols = Vec::with_capacity(2 * STATE_WIDTH);
     for ark in [&Rp64_256::ARK1, &Rp64_256::ARK2] {
-        for i in 0..STATE_WIDTH {
+        // Transposition ARK[ronde][état] → colonnes[état][ronde] : `i` indexe la
+        // colonne (état) au sein de CHAQUE ligne `ark[r]` (une par ronde), pas un
+        // conteneur unique — le for-range est donc volontaire, pas un
+        // `needless_range_loop` classique (`ark.iter()` itérerait sur les 7 rondes,
+        // pas les 12 colonnes). Reformulé en `.map` pour rester silencieux côté
+        // clippy sans changer l'ordre ni les valeurs produites.
+        let cs = (0..STATE_WIDTH).map(|i| {
             let mut c = vec![BaseElement::ZERO; TRACE_LEN];
             for (r, c_r) in c.iter_mut().enumerate().take(NUM_ROUNDS) {
                 *c_r = ark[r][i];
             }
-            cols.push(c);
-        }
+            c
+        });
+        cols.extend(cs);
     }
     cols
 }

@@ -65,9 +65,14 @@ pub(crate) use plan::*;
 mod tests {
     use super::*;
 
+    // Budget de colonnes : garde-fou COMPILE-TIME (pas un test à exécuter — la
+    // valeur est déjà connue à la compilation). `const _: () = assert!(...)` évite
+    // le lint `assertions_on_constants` tout en PRÉSERVANT la vérification : si
+    // WIDTH dépasse le budget winterfell, la compilation échoue.
+    const _: () = assert!(WIDTH <= winterfell::TraceInfo::MAX_TRACE_WIDTH);
+
     #[test]
     fn budget_colonnes_respecte() {
-        assert!(WIDTH <= winterfell::TraceInfo::MAX_TRACE_WIDTH);
         assert_eq!(WIDTH, CARRIER_OFF + 36);
         // Groupes contigus, sans chevauchement.
         assert_eq!(U0_OFF, KEY_OFF + 24);

@@ -177,7 +177,7 @@ mod tests {
             &kp2,
             &KemCiphertext {
                 x25519_eph: ct.x25519_eph,
-                mlkem_ct: ct.mlkem_ct.clone(),
+                mlkem_ct: ct.mlkem_ct,
             },
         );
         assert_ne!(ss_a, ss_mauvais);

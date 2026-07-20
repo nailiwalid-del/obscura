@@ -405,6 +405,14 @@ pub(crate) enum Forge {
     /// Rho CONSOMMÉ dans le nullifier de l'entrée `i` ≠ rho du commitment (porteuse).
     /// Aval recalculé : nullifier_i.
     RhoNullifier(usize, Digest),
+    /// Rho CONSOMMÉ dans le COMMITMENT de l'entrée `i` (absorption, cellules @7 —
+    /// inject cols +12..+16, DISJOINTES du côté nullifier @40/@47 ciblé par
+    /// `RhoNullifier`) ≠ rho porteuse (RHO_C). La porteuse RHO_C et le nullifier
+    /// restent HONNÊTES (= note.rho) ; cm/feuille/arbre sont recalculés en cascade
+    /// honnête sur cm' = H(valeur ‖ owner ‖ rho' ‖ r). SEULE l'ancre RHO@7
+    /// (production/consommation côté commitment) mord — miroir de la moitié
+    /// nullifier déjà couverte par `RhoNullifier` (@40/@47).
+    RhoCommitment(usize, Digest),
     /// Cm CONSOMMÉ dans la feuille de l'entrée `i` ≠ cm produit par le commitment.
     /// Aval recalculé : feuille_i et l'arbre (root/chemins).
     CmFeuille(usize, Digest),
@@ -428,6 +436,13 @@ pub(crate) enum Forge {
     /// diffèrent de leurs porteuses (les gates VOUT restent honnêtes) : isole la
     /// famille VIN de la famille VOUT.
     ValeurBalEntrees(u64),
+    /// Valeur du bloc BAL 2 (sortie 0) forgée, compensée sur le bloc BAL 3 (sortie 1)
+    /// — deux blocs de SORTIE (même signe −) → Σ signée reste fee et SEULS les gates
+    /// VOUT[0]/VOUT[1] diffèrent de leurs porteuses (les gates VIN restent honnêtes,
+    /// les porteuses VOUT_C restent = valeur réelle du commitment de sortie, fixées
+    /// AVANT cette forge) : isole la famille VOUT de la famille VIN, miroir de
+    /// `ValeurBalEntrees`.
+    ValeurBalSorties(u64),
     /// PAD_ZERO* non canonique dans le COMMITMENT de l'entrée 0 : la cellule de
     /// padding idx 17 du préambule (première cellule PAD_ZERO, ligne 15, inject +1)
     /// vaut `v ≠ 0`. L'absorption ADDITIONNE cette cellule au rate → le digest
@@ -549,7 +564,14 @@ pub(crate) fn build_monolith_trace_forge(w: &MonolithWitness, forge: Forge) -> T
             Forge::OwnerConsomme(a) if i == 0 => a,
             _ => note.owner,
         };
-        let commit_payload = note_commit_payload(note.value, &owner_commit, &note.rho, &note.r);
+        // rho consommé dans le COMMITMENT (forge RhoCommitment — absorption @7,
+        // DISJOINTE du côté nullifier @40/@47 ciblé par RhoNullifier) ; la porteuse
+        // RHO_C et le nullifier restent honnêtes (= note.rho, cf. plus bas).
+        let rho_commit = match forge {
+            Forge::RhoCommitment(fi, a) if fi == i => a,
+            _ => note.rho,
+        };
+        let commit_payload = note_commit_payload(note.value, &owner_commit, &rho_commit, &note.r);
         // Padding non canonique (forge PaddingCommitment sur i==0) : même préambule
         // resized PAD_ZERO*, mais la cellule idx 17 (première PAD_ZERO) vaut v ≠ 0.
         // La capacité reste 32 et l'éponge est rejouée sur ce préambule forgé → le
@@ -715,6 +737,15 @@ pub(crate) fn build_monolith_trace_forge(w: &MonolithWitness, forge: Forge) -> T
             let delta = autre as i128 - amounts[0] as i128;
             amounts[0] = autre;
             amounts[1] = (amounts[1] as i128 - delta) as u64;
+        }
+        // Bloc 2 (sortie 0) forgé, compensation sur le bloc 3 (sortie 1, même
+        // signe −) : SEULS les gates VOUT diffèrent — isolation de la famille VOUT.
+        // Les porteuses VOUT_C (fixées plus haut, avant ce match, sur la valeur
+        // RÉELLE des commitments de sortie) ne sont PAS touchées par ce bloc.
+        Forge::ValeurBalSorties(autre) => {
+            let delta = autre as i128 - amounts[2] as i128;
+            amounts[2] = autre;
+            amounts[3] = (amounts[3] as i128 - delta) as u64;
         }
         _ => {}
     }
