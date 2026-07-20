@@ -40,15 +40,17 @@ au niveau AIR (voie du spike 3z-b0, ni fork winterfell ni migration) — trace
 (STARK_STATEMENT.md, « Argument HVZK »), bench ≈2× (1477,7 ms / 3,0 ms /
 90,5 Kio). Cap actuel (décision utilisateur) : **complétude/cohérence protocole
 avant sophistication crypto**. Reste :
-1. **Durcissement pré-testnet (#7)** — bien avancé : sérialisation canonique de
-   `ProvedTx` **faite** ; `zeroize` des secrets au drop **fait**
+1. **Durcissement pré-testnet (#7)** — **quasi terminé** : sérialisation canonique
+   de `ProvedTx` **faite** ; `zeroize` des secrets au drop **fait**
    (`ShieldedSecret` volatile, `WalletKeys`, clés AEAD ; trou pqcrypto documenté) ;
    audit `panic→Result` de la surface réseau **fait** (from_bytes/verify/scan/
    apply sans panique) ; **Merkle frontier fait** (`proved_hash::MerkleFrontier`,
    append-only O(depth), mémoire bornée, `TreeFull` en `Result` — plus de panique
-   « arbre plein » ; racine identique à `ProvedMerkleTree`, test différentiel).
-   Reste : persistance disque (frontier + nullifiers + fenêtre de racines) et
-   tests key-privacy IK-CCA (phase 4).
+   « arbre plein » ; racine identique à `ProvedMerkleTree`, test différentiel) ;
+   **persistance disque faite** (`ProvedLedgerState::{to_bytes, from_bytes, save,
+   load}` — dump canonique frontier+nullifiers+racines, écriture atomique
+   tmp+rename). Ne reste que les tests key-privacy IK-CCA (**phase 4**) → #7
+   effectivement bouclé pour la phase 3.
 2. **3z-c — généralisation M-in/N-out** : au-delà du 2-in/2-out figé, empilement
    accru des colonnes (levier de réduction de taille de preuve additionnel).
    Statut : la 1re tranche **3z-c1** (refonte segmentée à parité) a été entamée

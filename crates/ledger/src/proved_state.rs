@@ -24,6 +24,12 @@
 //! ROM — voir docs/STARK_STATEMENT.md, « Argument HVZK ») ; rien ne change côté
 //! ledger (blinding transparent au vérifieur).
 //!
+//! Persistance (#7) : `save`/`load` sérialisent l'état complet (frontier +
+//! nullifiers + fenêtre de racines) en octets canoniques et écrivent de façon
+//! ATOMIQUE (`<path>.tmp` puis `rename`) — un nœud survit au redémarrage. Le dump
+//! est bon marché côté arbre grâce à la frontier (O(depth)) ; seul l'ensemble des
+//! nullifiers est volumineux (inhérent).
+//!
 //! Hors périmètre (→ ledger/Phase 3z-c) : généralisation M-in/N-out.
 
 use crate::LedgerError;

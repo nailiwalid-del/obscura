@@ -265,10 +265,13 @@
 > mémoire bornée, `TreeFull` en `Result` (plus de panique « arbre plein »). Racine
 > IDENTIQUE à `ProvedMerkleTree` (test différentiel à chaque étape, depth 16 ET 32)
 > → preuves `circuit::membership` inchangées ; les CHEMINS restent produits côté
-> wallet (`ProvedMerkleTree`). Specs :
-> `2026-07-20-zeroize-secrets-design.md`, `2026-07-20-merkle-frontier-design.md`.
-> Restent en #7 : persistance disque (frontier + nullifiers + racines) et
-> key-privacy IK-CCA (phase 4).
+> wallet (`ProvedMerkleTree`). **Persistance disque** (`ProvedLedgerState::{to_bytes,
+> from_bytes, save, load}`) : dump canonique de l'état consensus (frontier ‖
+> nullifiers triés ‖ fenêtre de racines FIFO), décodage borné, écriture ATOMIQUE
+> (`tmp` + `rename`) → un nœud survit au redémarrage. Specs :
+> `2026-07-20-zeroize-secrets-design.md`, `2026-07-20-merkle-frontier-design.md`,
+> `2026-07-20-state-persistence-design.md`. #7 bouclé pour la phase 3 ; ne reste que
+> le test key-privacy IK-CCA (phase 4).
 >
 > **Reste hors Phase-3-validity** : **3z-c** (généralisation M-in/N-out,
 > empilement accru des colonnes de trace — levier additionnel de réduction de
