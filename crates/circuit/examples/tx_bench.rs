@@ -1,7 +1,7 @@
 //! Bench d'une transaction prouvée complète (2-in/2-out) à profondeur consensus (32).
 //!
 //! Mesure le temps de génération/vérification et la taille d'une preuve `ProvedTx`
-//! v2 (circuit P1–P7 monolithique) WITH WITNESS-HIDING (lignes de blinding en AIR).
+//! v3 (circuit P1–P7 monolithique) AVEC WITNESS-HIDING (lignes de blinding en AIR).
 //! Trace étendue à 1024 lignes (vs 512 validity-only), blowup = 16.
 //! Preuve unique remplace les ~219 Kio (15 preuves v1).
 //! Lancer en RELEASE :
@@ -60,16 +60,20 @@ fn main() {
         ProvedInput { note: n1, path: path1, index: i1 },
     ];
 
-    // Génération. Les enc_notes (enveloppes chiffrées de sortie) sont opaques ici —
-    // seule leur présence/liaison dans tx_digest v3 compte pour le bench ; on passe
-    // des bundles factices (le chiffrement réel est côté wallet/ledger).
+    // Génération. VRAIS enc_notes : chiffrés KEM hybride + AEAD cascade vers deux
+    // destinataires éphémères (l'exemple ne peut pas dépendre du crate `ledger` — au-
+    // dessus de `circuit` — donc on inline le chiffrement via `crypto`, comme le fait
+    // `ledger::proved_wallet::encrypt_note`). Tailles ainsi représentatives de la tx.
     let intent = crypto::sig::SigKeypair::generate();
-    // Tailles réalistes : kem_ct = 1 + 32 (X25519) + 1088 (Kyber768 ct) = 1121 o ;
-    // enc_note ≈ 24 (nonce) + 16 (tag) + 12 + 16 + note 104 ≈ 172 o.
-    let enc_notes = [
-        circuit::EncNote { kem_ct: vec![0u8; 1121], enc_note: vec![0u8; 172] },
-        circuit::EncNote { kem_ct: vec![0u8; 1121], enc_note: vec![0u8; 172] },
-    ];
+    let enc_note_reel = |cm: &proved_hash::digest::Digest, note: &SpendNote| {
+        let recipient = crypto::kem::KemKeypair::generate();
+        let (kem_ct, ss) = crypto::kem::encapsulate(&recipient.public);
+        let enc_note = crypto::aead::encrypt(&ss, &cm.to_bytes(), &note.to_bytes());
+        circuit::EncNote { kem_ct: kem_ct.to_bytes(), enc_note }
+    };
+    let oc0 = rescue::note_commitment(o0.value, &o0.owner, &o0.rho, &o0.r);
+    let oc1 = rescue::note_commitment(o1.value, &o1.owner, &o1.rho, &o1.r);
+    let enc_notes = [enc_note_reel(&oc0, &o0), enc_note_reel(&oc1, &o1)];
     let t0 = Instant::now();
     let (proved_root, tx) = prove_tx(&secret, inputs, [o0, o1], 20, &intent, enc_notes);
     let prove_ms = t0.elapsed().as_secs_f64() * 1e3;

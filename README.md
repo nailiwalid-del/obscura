@@ -28,21 +28,23 @@ ses notes en scannant le ledger avec sa clé de réception (KEM hybride + AEAD c
 ## Build & tests
 
 ```
-cargo test        # 26 tests : primitives, Merkle, paiement e2e, double dépense, altérations
+cargo test              # crypto, ledger, gadgets, e2e, double dépense, altérations
+cargo test --release    # + les preuves STARK du monolithe (gatées --release, cf. monolith::air)
 ```
 
 ## Feuille de route (v0.2 : le STARK est le centre, pas une option)
 
 1. ✅ Primitives crypto hybrides (avec versioning d'algorithmes)
 2. ✅ Ledger **transparent de dev** (explicitement non-privé, fonctions `_transparent`)
-3. ⬜ **Circuit STARK = définition du consensus** (P1–P7, docs/STARK_STATEMENT.md)
-   + migration Rescue-Prime des commitments/Merkle + retrait de spend_pk/path
+3. ✅ **Circuit STARK = définition du consensus** (P1–P7 monolithe, Rescue-Prime des
+   commitments/Merkle, spend_pk/path retirés, witness-hiding) — reste 3z-c (M-in/N-out)
 4. ⬜ Réseau P2P chiffré PQ + Dandelion++ + test de key privacy
 5. ⬜ Nœud, wallet CLI, testnet local multi-nœuds
 
-> Phase 3 : intégrité prouvée (P1–P7, monolithe) ; depuis 3z-b1 la preuve de
-> consensus est **witness-hiding (HVZK dans le modèle de l'oracle aléatoire)** —
+> Phase 3 : intégrité prouvée (P1–P7, monolithe 2-in/2-out) ; depuis 3z-b1 la preuve
+> de consensus est **witness-hiding (HVZK dans le modèle de l'oracle aléatoire)** —
 > caveat : honnête-vérifieur, prototype non audité (docs/STARK_STATEMENT.md,
-> « Argument HVZK »). Reste dans 3z : la généralisation M-in/N-out (3z-c).
+> « Argument HVZK »). `ProvedTx` v3 porte les `enc_notes` (scan wallet, liés au digest).
+> Reste dans 3z : la généralisation M-in/N-out (3z-c).
 
 **Prototype pédagogique — pas d'audit de sécurité, ne pas utiliser en production.**

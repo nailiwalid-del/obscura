@@ -49,13 +49,24 @@ impl SpendNote {
         b
     }
 
-    /// Inverse de `to_bytes`. `None` si la longueur ou un digest est invalide.
+    /// Inverse de `to_bytes`. `None` si la longueur, un digest, ou la VALEUR est invalide.
+    ///
+    /// La borne `value < 2^RANGE_BITS` (= 2^60) est CRITIQUE ici : une note prouvée valide
+    /// respecte toujours le range-check P6, mais `from_bytes` désérialise des octets
+    /// ARBITRAIRES (un `enc_note` malveillant reçu du réseau). Sans cette borne, une
+    /// `value ≥ p` ferait paniquer `rescue::note_commitment`
+    /// (`Felt::from_canonical_u64(value).expect(...)`) → déni de service sur un nœud qui
+    /// scanne. On rejette donc dès la désérialisation tout ce qui ne peut pas être une
+    /// note prouvée légitime.
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
         const D: usize = proved_hash::digest::DIGEST_BYTES;
         if b.len() != 8 + 3 * D {
             return None;
         }
         let value = u64::from_le_bytes(b[0..8].try_into().ok()?);
+        if value >= (1u64 << crate::range_check::RANGE_BITS) {
+            return None;
+        }
         let owner = Digest::from_bytes(b[8..8 + D].try_into().ok()?).ok()?;
         let rho = Digest::from_bytes(b[8 + D..8 + 2 * D].try_into().ok()?).ok()?;
         let r = Digest::from_bytes(b[8 + 2 * D..8 + 3 * D].try_into().ok()?).ok()?;
@@ -201,6 +212,19 @@ mod tests {
         assert_eq!(SpendNote::from_bytes(&b), Some(n));
         // Longueur invalide → None.
         assert_eq!(SpendNote::from_bytes(&b[..b.len() - 1]), None);
+    }
+
+    /// Anti-panic : une `value` hors domaine prouvé (≥ 2^60, ou ≥ p qui ferait paniquer
+    /// `note_commitment`) est REJETÉE à la désérialisation, sans jamais atteindre le hash.
+    #[test]
+    fn from_bytes_rejette_value_hors_domaine() {
+        let mut b = SpendNote { value: 1, owner: digest(10), rho: digest(20), r: digest(30) }.to_bytes();
+        // value = 2^60 (juste hors domaine) → None.
+        b[0..8].copy_from_slice(&(1u64 << crate::range_check::RANGE_BITS).to_le_bytes());
+        assert_eq!(SpendNote::from_bytes(&b), None);
+        // value = u64::MAX (≥ p, paniquerait note_commitment) → None, pas de panic.
+        b[0..8].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert_eq!(SpendNote::from_bytes(&b), None);
     }
 
     fn note() -> SpendNote {

@@ -1,4 +1,4 @@
-//! 3z-a5 — `ProvedTx` v2 : la transaction prouvée par LE monolithe.
+//! `ProvedTx` v3 — la transaction prouvée par LE monolithe (v3 = enc_notes liés).
 //!
 //! Remplace l'assemblage v1 (3b5, composition de 15 sous-preuves : `prove_key` +
 //! 2×`prove_spend` + 2×`prove_output` + équilibre natif) par UNE SEULE preuve
@@ -55,6 +55,23 @@ pub struct ProvedInput {
 pub struct EncNote {
     pub kem_ct: Vec<u8>,
     pub enc_note: Vec<u8>,
+}
+
+/// Taille exacte d'un ciphertext KEM hybride sérialisé : `1 (version) + 32 (X25519) +
+/// 1088 (Kyber768) = 1121 o`. Un `kem_ct` bien formé fait EXACTEMENT cette taille.
+pub const KEM_CT_LEN: usize = 1121;
+/// Borne SUPÉRIEURE d'un `enc_note` (AEAD cascade d'une note de 104 o ≈ 172 o : nonces
+/// 12+24 + tags 16+16 + 104). Marge à 256. Au-delà = rejet (anti-DoS : le digest hache
+/// tous les octets des enc_notes ; sans borne, un relais gonflerait la tx/le digest).
+pub const MAX_ENC_NOTE_LEN: usize = 256;
+
+impl EncNote {
+    /// `true` si les tailles sont plausibles (kem_ct exact, enc_note borné). Vérifié par
+    /// `verify_tx` (consensus) : une tx aux enc_notes hors-bornes est rejetée avant tout
+    /// hachage coûteux.
+    pub fn within_bounds(&self) -> bool {
+        self.kem_ct.len() == KEM_CT_LEN && self.enc_note.len() <= MAX_ENC_NOTE_LEN
+    }
 }
 
 /// Transaction prouvée 2-in/2-out. `proof` est LA preuve monolithique unique ; les
@@ -210,6 +227,11 @@ pub fn verify_tx(root: &Digest, depth: usize, tx: &ProvedTx) -> bool {
     if tx.fee >= (1u64 << RANGE_BITS) {
         return false;
     }
+    // Anti-DoS : rejeter des enc_notes hors-bornes AVANT de les hacher dans le digest
+    // (un relais gonflerait sinon la tx et le coût de `tx_digest_bytes`).
+    if !tx.enc_notes.iter().all(EncNote::within_bounds) {
+        return false;
+    }
     let pi = MonolithPublicInputs {
         root: digest_to_felts(root),
         nullifiers: [
@@ -237,6 +259,20 @@ pub fn verify_tx(root: &Digest, depth: usize, tx: &ProvedTx) -> bool {
     expected == tx.tx_digest
 }
 
+/// Vérification COMPLÈTE d'une `ProvedTx` : preuve STARK (P1–P7) + cohérence du digest
+/// (`verify_tx`) **ET** signature d'intention hybride sur `tx_digest`. À préférer à
+/// `verify_tx` seul quand on veut TOUTE la validité de la tx en un appel.
+///
+/// ⚠️ `verify_tx` NE vérifie PAS la signature d'intention (il n'établit que la preuve +
+/// le digest) : l'appeler seul laisse un relais re-signer un substitut. Le ledger
+/// (`apply_proved_tx`) compose les deux étapes ; cette fonction les regroupe pour tout
+/// autre appelant afin d'éviter le mésusage. (La signature reste une enveloppe
+/// d'intention, PAS une autorité d'ownership — cf. la doc de module.)
+pub fn verify_proved_tx_full(root: &Digest, depth: usize, tx: &ProvedTx) -> bool {
+    verify_tx(root, depth, tx)
+        && crypto::sig::verify(&tx.signer, INTENT_DOMAIN, &tx.tx_digest, &tx.intent_sig)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,12 +288,14 @@ mod tests {
 
     const DEPTH: usize = 2;
 
-    /// Deux enveloppes chiffrées non triviales et DISTINCTES pour les tests (le contenu
-    /// est opaque au niveau tx — seul son binding dans `tx_digest` v3 est testé ici).
+    /// Deux enveloppes chiffrées DANS LES BORNES (`kem_ct` = `KEM_CT_LEN`, `enc_note` ≤
+    /// `MAX_ENC_NOTE_LEN`) et distinctes, pour les tests : le contenu est opaque au niveau
+    /// tx (seul son binding dans `tx_digest` v3 est testé), mais les tailles doivent
+    /// passer le contrôle anti-DoS de `verify_tx`.
     fn enc_notes_test() -> [EncNote; 2] {
         [
-            EncNote { kem_ct: vec![1, 2, 3], enc_note: vec![4, 5, 6] },
-            EncNote { kem_ct: vec![7, 8], enc_note: vec![9, 10, 11, 12] },
+            EncNote { kem_ct: vec![1u8; KEM_CT_LEN], enc_note: vec![4, 5, 6] },
+            EncNote { kem_ct: vec![2u8; KEM_CT_LEN], enc_note: vec![9, 10, 11, 12] },
         ]
     }
 
@@ -506,8 +544,56 @@ mod tests {
         tx_a.enc_notes[0].enc_note = vec![9, 9, 9];
         assert!(!verify_tx(&root, DEPTH, &tx_a), "enc_note substitué doit casser le digest");
         // Substitution du ciphertext KEM (les deux champs de EncNote sont liés).
+        // NB : on garde une longueur `KEM_CT_LEN` valide pour tester la liaison digest
+        // (et non le rejet de borne) — un contenu différent suffit.
         let mut tx_k = valid_tx().2;
-        tx_k.enc_notes[1].kem_ct = vec![42];
+        tx_k.enc_notes[1].kem_ct = vec![42u8; KEM_CT_LEN];
         assert!(!verify_tx(&root, DEPTH, &tx_k), "kem_ct substitué doit casser le digest");
+    }
+
+    /// Anti-DoS (#2) : un `enc_note` hors-bornes (kem_ct de mauvaise taille, ou enc_note
+    /// géant) est rejeté par `verify_tx` AVANT tout hachage coûteux.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
+    fn enc_note_hors_bornes_rejete() {
+        let (_s, root, tx) = valid_tx();
+        assert!(verify_tx(&root, DEPTH, &tx));
+        // kem_ct trop court.
+        let mut tx_court = valid_tx().2;
+        tx_court.enc_notes[0].kem_ct = vec![1, 2, 3];
+        assert!(!verify_tx(&root, DEPTH, &tx_court));
+        // enc_note gigantesque.
+        let mut tx_gros = valid_tx().2;
+        tx_gros.enc_notes[1].enc_note = vec![0u8; MAX_ENC_NOTE_LEN + 1];
+        assert!(!verify_tx(&root, DEPTH, &tx_gros));
+    }
+
+    /// `verify_proved_tx_full` = preuve + digest + signature d'intention. Une tx valide
+    /// passe ; une signature d'une AUTRE clé (relais actif) échoue, alors que `verify_tx`
+    /// seul (preuve + digest) l'accepterait encore — c'est LA raison d'être de l'API full.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
+    fn verify_full_exige_la_signature() {
+        let (_s, root, tx) = valid_tx();
+        assert!(verify_proved_tx_full(&root, DEPTH, &tx));
+        // Un relais re-signe le MÊME digest avec sa propre clé : verify_tx passe encore...
+        let autre = SigKeypair::generate();
+        let mut forge = valid_tx().2;
+        forge.signer = autre.public.clone();
+        // Il doit recalculer le digest (le signer y est lié) puis re-signer.
+        forge.tx_digest = tx_digest_bytes(
+            &root, &forge.nullifiers, &forge.output_commitments, forge.fee, &forge.signer,
+            &forge.enc_notes,
+        );
+        forge.intent_sig = autre.sign(INTENT_DOMAIN, &forge.tx_digest);
+        assert!(verify_tx(&root, DEPTH, &forge), "verify_tx seul accepte le substitut re-signé");
+        assert!(verify_proved_tx_full(&root, DEPTH, &forge));
+        // (Le substitut re-signé EST accepté même par full : la sig est valide sous sa
+        // propre clé — c'est la limitation documentée. Ce que full ajoute vs verify_tx :
+        // il REFUSE une signature INVALIDE, cf. ci-dessous.)
+        let mut sig_cassee = valid_tx().2;
+        sig_cassee.intent_sig = SigKeypair::generate().sign(INTENT_DOMAIN, &sig_cassee.tx_digest);
+        assert!(verify_tx(&root, DEPTH, &sig_cassee), "verify_tx ignore la signature");
+        assert!(!verify_proved_tx_full(&root, DEPTH, &sig_cassee), "full refuse une sig invalide");
     }
 }
