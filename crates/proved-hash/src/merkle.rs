@@ -153,6 +153,25 @@ impl ProvedMerkleTree {
 #[derive(Debug, PartialEq, Eq)]
 pub struct TreeFull;
 
+/// Erreur de désérialisation d'une `MerkleFrontier` (`from_bytes`). Le fichier
+/// d'état est local et trusté : la validation détecte la CORRUPTION (troncature,
+/// tailles/index incohérents) sans jamais paniquer.
+#[derive(Debug, PartialEq, Eq)]
+pub enum FrontierDecodeError {
+    /// Moins d'octets que la taille attendue pour cette profondeur.
+    TooShort,
+    /// Octets résiduels après la fin — encodage non canonique.
+    TrailingBytes,
+    /// `depth` nul ou > 48.
+    BadDepth,
+    /// `next_index` > 2^depth (arbre impossible).
+    BadIndex,
+    /// Digest non canonique (`Digest::from_bytes` échoue).
+    BadDigest,
+    /// Arbre déclaré vide mais racine ≠ racine tout-vide.
+    InconsistentRoot,
+}
+
 /// Arbre de Merkle append-only qui ne conserve QUE le bord droit (frontier) :
 /// mémoire et coût par opération en O(depth), pas O(n). C'est l'état d'arbre du
 /// NŒUD consensus (`ledger::ProvedLedgerState`), qui n'a besoin que d'`append` +
@@ -230,6 +249,66 @@ impl MerkleFrontier {
         self.current_root = cur;
         self.next_index += 1;
         Ok(index)
+    }
+
+    /// Encodage canonique : `depth (u8) ‖ next_index (u64 LE) ‖ filled_subtrees
+    /// (depth × 32 o) ‖ current_root (32 o)`. `zeros` est dérivable de `depth`,
+    /// donc non sérialisé.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut b = Vec::with_capacity(1 + 8 + self.depth * 32 + 32);
+        b.push(self.depth as u8);
+        b.extend_from_slice(&self.next_index.to_le_bytes());
+        for d in &self.filled_subtrees {
+            b.extend_from_slice(&d.to_bytes());
+        }
+        b.extend_from_slice(&self.current_root.to_bytes());
+        b
+    }
+
+    /// Décode une frontier depuis `to_bytes`. Borné et validant (voir
+    /// `FrontierDecodeError`) — aucune panique sur octets corrompus.
+    pub fn from_bytes(b: &[u8]) -> Result<Self, FrontierDecodeError> {
+        if b.is_empty() {
+            return Err(FrontierDecodeError::TooShort);
+        }
+        let depth = b[0] as usize;
+        if depth == 0 || depth > 48 {
+            return Err(FrontierDecodeError::BadDepth);
+        }
+        let expected = 1 + 8 + depth * 32 + 32;
+        if b.len() < expected {
+            return Err(FrontierDecodeError::TooShort);
+        }
+        if b.len() > expected {
+            return Err(FrontierDecodeError::TrailingBytes);
+        }
+        let next_index = u64::from_le_bytes(b[1..9].try_into().unwrap());
+        if (next_index as u128) > (1u128 << depth) {
+            return Err(FrontierDecodeError::BadIndex);
+        }
+        let mut pos = 9;
+        let read_digest = |b: &[u8], pos: &mut usize| -> Result<Digest, FrontierDecodeError> {
+            let arr: [u8; 32] = b[*pos..*pos + 32].try_into().unwrap();
+            *pos += 32;
+            Digest::from_bytes(&arr).map_err(|_| FrontierDecodeError::BadDigest)
+        };
+        let mut filled_subtrees = Vec::with_capacity(depth);
+        for _ in 0..depth {
+            filled_subtrees.push(read_digest(b, &mut pos)?);
+        }
+        let current_root = read_digest(b, &mut pos)?;
+        let zeros = empties(depth);
+        // Cohérence bon marché : un arbre déclaré vide DOIT avoir la racine tout-vide.
+        if next_index == 0 && current_root != zeros[depth] {
+            return Err(FrontierDecodeError::InconsistentRoot);
+        }
+        Ok(MerkleFrontier {
+            depth,
+            filled_subtrees,
+            zeros,
+            current_root,
+            next_index,
+        })
     }
 }
 
@@ -362,5 +441,88 @@ mod tests {
         assert_eq!(f.append(&digest(99)), Err(TreeFull));
         assert_eq!(f.len(), 4, "len inchangée après refus");
         assert_eq!(f.root(), root_avant, "racine inchangée après refus");
+    }
+
+    /// Sérialisation canonique : `from_bytes(to_bytes)` restaure un état FIDÈLE
+    /// (même racine, même `len`), et un append ultérieur donne la même racine des
+    /// deux côtés (état interne identique, pas seulement la racine mémoïsée).
+    #[test]
+    fn frontier_serialisation_roundtrip() {
+        for depth in [DEV_DEPTH, CONSENSUS_DEPTH] {
+            let mut f = MerkleFrontier::new(depth);
+            for n in 0..5u64 {
+                f.append(&digest(1 + n * 3)).unwrap();
+            }
+            let bytes = f.to_bytes();
+            let f2 = MerkleFrontier::from_bytes(&bytes).expect("roundtrip");
+            assert_eq!(f2.to_bytes(), bytes, "ré-encodage identique (canonique)");
+            assert_eq!(f2.len(), f.len());
+            assert_eq!(f2.root(), f.root());
+            // État interne fidèle : un append supplémentaire donne la même racine.
+            let mut g = MerkleFrontier::from_bytes(&bytes).unwrap();
+            f.append(&digest(999)).unwrap();
+            g.append(&digest(999)).unwrap();
+            assert_eq!(f.root(), g.root(), "état interne restauré à l'identique");
+        }
+    }
+
+    /// Le roundtrip d'un arbre VIDE passe et reste vide (racine tout-vide).
+    #[test]
+    fn frontier_serialisation_arbre_vide() {
+        let f = MerkleFrontier::new(DEV_DEPTH);
+        let f2 = MerkleFrontier::from_bytes(&f.to_bytes()).expect("roundtrip vide");
+        assert!(f2.is_empty());
+        assert_eq!(f2.root(), f.root());
+    }
+
+    /// Matrice de rejet : chaque corruption rend l'erreur attendue, jamais de panique.
+    #[test]
+    fn frontier_serialisation_rejette_les_malformes() {
+        let mut f = MerkleFrontier::new(4);
+        f.append(&digest(1)).unwrap();
+        let bytes = f.to_bytes();
+        // `matches!` plutôt que `assert_eq!` : `MerkleFrontier` n'est pas `PartialEq`.
+        assert!(matches!(
+            MerkleFrontier::from_bytes(&bytes[..bytes.len() - 1]),
+            Err(FrontierDecodeError::TooShort)
+        ));
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(matches!(
+            MerkleFrontier::from_bytes(&trailing),
+            Err(FrontierDecodeError::TrailingBytes)
+        ));
+        // depth = 0.
+        let mut bad_depth = bytes.clone();
+        bad_depth[0] = 0;
+        assert!(matches!(
+            MerkleFrontier::from_bytes(&bad_depth),
+            Err(FrontierDecodeError::BadDepth)
+        ));
+        // next_index énorme (octets 1..9 à 0xFF).
+        let mut bad_idx = bytes.clone();
+        for byte in bad_idx[1..9].iter_mut() {
+            *byte = 0xFF;
+        }
+        assert!(matches!(
+            MerkleFrontier::from_bytes(&bad_idx),
+            Err(FrontierDecodeError::BadIndex)
+        ));
+        // Vide.
+        assert!(matches!(
+            MerkleFrontier::from_bytes(&[]),
+            Err(FrontierDecodeError::TooShort)
+        ));
+        // Racine incohérente : on reprend `bytes` (1 feuille, current_root réelle et
+        // canonique ≠ racine tout-vide) mais on force next_index = 0 → l'arbre est
+        // déclaré vide alors que sa racine ne l'est pas.
+        let mut inconsistent = bytes.clone();
+        for byte in inconsistent[1..9].iter_mut() {
+            *byte = 0;
+        }
+        assert!(matches!(
+            MerkleFrontier::from_bytes(&inconsistent),
+            Err(FrontierDecodeError::InconsistentRoot)
+        ));
     }
 }
