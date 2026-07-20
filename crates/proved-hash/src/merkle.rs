@@ -149,6 +149,90 @@ impl ProvedMerkleTree {
     }
 }
 
+/// L'arbre a atteint `2^depth` feuilles : plus aucune insertion possible.
+#[derive(Debug, PartialEq, Eq)]
+pub struct TreeFull;
+
+/// Arbre de Merkle append-only qui ne conserve QUE le bord droit (frontier) :
+/// mémoire et coût par opération en O(depth), pas O(n). C'est l'état d'arbre du
+/// NŒUD consensus (`ledger::ProvedLedgerState`), qui n'a besoin que d'`append` +
+/// `root`. Les CHEMINS d'appartenance restent produits par `ProvedMerkleTree`
+/// (rôle wallet : lui garde les feuilles). Racine identique à `ProvedMerkleTree`
+/// (mêmes `node`/`leaf`/`empties`) → les preuves `circuit::membership` sont
+/// inchangées (test différentiel `frontier_differentiel_full_tree`).
+pub struct MerkleFrontier {
+    depth: usize,
+    /// Bord droit : à chaque niveau `i`, le dernier nœud gauche en attente de frère.
+    filled_subtrees: Vec<Digest>,
+    /// Sous-arbres vides `empties()[0..=depth]` (frère droit par défaut).
+    zeros: Vec<Digest>,
+    current_root: Digest,
+    next_index: u64,
+}
+
+impl MerkleFrontier {
+    pub fn new(depth: usize) -> Self {
+        assert!(depth > 0 && depth <= 48, "profondeur invalide");
+        let zeros = empties(depth); // longueur depth+1
+        MerkleFrontier {
+            depth,
+            filled_subtrees: vec![zeros[0]; depth],
+            current_root: zeros[depth],
+            zeros,
+            next_index: 0,
+        }
+    }
+
+    /// Frontier aux paramètres consensus (profondeur 32).
+    pub fn consensus() -> Self {
+        Self::new(CONSENSUS_DEPTH)
+    }
+
+    pub fn depth(&self) -> usize {
+        self.depth
+    }
+
+    pub fn len(&self) -> u64 {
+        self.next_index
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.next_index == 0
+    }
+
+    /// Racine courante — mémoïsée, O(1).
+    pub fn root(&self) -> Digest {
+        self.current_root
+    }
+
+    /// Ajoute un commitment (la feuille `leaf(cm)` est calculée en interne, comme
+    /// `ProvedMerkleTree::append`). Retourne l'index d'insertion, ou `TreeFull` si
+    /// l'arbre a atteint `2^depth` feuilles (aucune panique — durcissement #7).
+    pub fn append(&mut self, cm: &Digest) -> Result<u64, TreeFull> {
+        if (self.next_index as u128) >= (1u128 << self.depth) {
+            return Err(TreeFull);
+        }
+        let index = self.next_index;
+        let mut idx = self.next_index;
+        let mut cur = leaf(cm);
+        for i in 0..self.depth {
+            let (left, right) = if idx % 2 == 0 {
+                // Nœud gauche : mémorise-le, frère droit encore vide.
+                self.filled_subtrees[i] = cur;
+                (cur, self.zeros[i])
+            } else {
+                // Nœud droit : combine avec le gauche mémorisé.
+                (self.filled_subtrees[i], cur)
+            };
+            cur = node(&left, &right);
+            idx /= 2;
+        }
+        self.current_root = cur;
+        self.next_index += 1;
+        Ok(index)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,5 +307,60 @@ mod tests {
         assert_ne!(r0, tree.root());
         assert!(tree.path(0).is_some());
         assert!(tree.path(1).is_none()); // une seule feuille
+    }
+
+    // --- MerkleFrontier (durcissement #7) ---
+
+    /// Un frontier vide a la MÊME racine (tout-vide) que `ProvedMerkleTree` vide,
+    /// à profondeur dev et consensus.
+    #[test]
+    fn frontier_vide_meme_racine_que_full() {
+        for depth in [DEV_DEPTH, CONSENSUS_DEPTH] {
+            let f = MerkleFrontier::new(depth);
+            assert_eq!(f.len(), 0);
+            assert!(f.is_empty());
+            assert_eq!(f.depth(), depth);
+            assert_eq!(f.root(), ProvedMerkleTree::new(depth).root());
+        }
+    }
+
+    /// Ancre de correction : la frontier incrémentale et le recalcul complet
+    /// produisent la MÊME racine à CHAQUE étape (tailles paires ET impaires), à
+    /// profondeur dev ET consensus. Deux implémentations indépendantes qui doivent
+    /// s'accorder → cross-check du hash consensus-critique.
+    #[test]
+    fn frontier_differentiel_full_tree() {
+        for depth in [DEV_DEPTH, CONSENSUS_DEPTH] {
+            let mut frontier = MerkleFrontier::new(depth);
+            let mut full = ProvedMerkleTree::new(depth);
+            for n in 0..9u64 {
+                let cm = digest(1 + n * 7);
+                let i_f = frontier.append(&cm).expect("pas plein");
+                let i_t = full.append(&cm);
+                assert_eq!(i_f, i_t, "index d'insertion identique @ depth {depth}");
+                assert_eq!(
+                    frontier.root(),
+                    full.root(),
+                    "racines identiques après {} feuilles @ depth {depth}",
+                    n + 1
+                );
+            }
+            assert_eq!(frontier.len(), 9);
+        }
+    }
+
+    /// Saturation : un arbre de profondeur 2 (4 feuilles) accepte 4 append puis
+    /// refuse le 5ᵉ avec `TreeFull`, sans panique ni mutation d'état.
+    #[test]
+    fn frontier_pleine_rend_treefull() {
+        let mut f = MerkleFrontier::new(2); // 2^2 = 4 feuilles max
+        for n in 0..4u64 {
+            assert_eq!(f.append(&digest(n)), Ok(n));
+        }
+        assert_eq!(f.len(), 4);
+        let root_avant = f.root();
+        assert_eq!(f.append(&digest(99)), Err(TreeFull));
+        assert_eq!(f.len(), 4, "len inchangée après refus");
+        assert_eq!(f.root(), root_avant, "racine inchangée après refus");
     }
 }
