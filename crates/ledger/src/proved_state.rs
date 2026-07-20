@@ -24,14 +24,14 @@ use crate::LedgerError;
 use circuit::{verify_tx, ProvedTx, INTENT_DOMAIN};
 use crypto::sig;
 use proved_hash::digest::Digest;
-use proved_hash::merkle::ProvedMerkleTree;
+use proved_hash::merkle::MerkleFrontier;
 use std::collections::{HashSet, VecDeque};
 
 /// Fenêtre glissante de racines récentes acceptées (cf. `state::RECENT_ROOTS_WINDOW`).
 pub const RECENT_ROOTS_WINDOW: usize = 100;
 
 pub struct ProvedLedgerState {
-    pub tree: ProvedMerkleTree,
+    pub tree: MerkleFrontier,
     nullifiers: HashSet<[u8; 32]>,
     recent_roots: HashSet<[u8; 32]>,
     roots_order: VecDeque<[u8; 32]>,
@@ -40,15 +40,15 @@ pub struct ProvedLedgerState {
 impl ProvedLedgerState {
     /// État aux paramètres consensus (profondeur 32).
     pub fn new() -> Self {
-        Self::with_tree(ProvedMerkleTree::consensus())
+        Self::with_tree(MerkleFrontier::consensus())
     }
 
     /// État en profondeur `depth` — tests/dev uniquement.
     pub fn with_depth(depth: usize) -> Self {
-        Self::with_tree(ProvedMerkleTree::new(depth))
+        Self::with_tree(MerkleFrontier::new(depth))
     }
 
-    fn with_tree(tree: ProvedMerkleTree) -> Self {
+    fn with_tree(tree: MerkleFrontier) -> Self {
         let mut s = ProvedLedgerState {
             tree,
             nullifiers: HashSet::new(),
@@ -72,12 +72,13 @@ impl ProvedLedgerState {
         }
     }
 
-    /// Émission (faucet du prototype) : insère un commitment prouvé, retourne son index.
-    pub fn mint(&mut self, cm: &Digest) -> u64 {
-        let idx = self.tree.append(cm);
+    /// Émission (faucet du prototype) : insère un commitment prouvé, retourne son
+    /// index. `TreeFull` si l'arbre est saturé (2^profondeur feuilles).
+    pub fn mint(&mut self, cm: &Digest) -> Result<u64, LedgerError> {
+        let idx = self.tree.append(cm).map_err(|_| LedgerError::TreeFull)?;
         let root = self.tree.root();
         self.remember_root(root);
-        idx
+        Ok(idx)
     }
 
     pub fn is_spent(&self, nullifier: &Digest) -> bool {
@@ -112,13 +113,21 @@ impl ProvedLedgerState {
                 return Err(LedgerError::DoubleSpend);
             }
         }
+        // 3 bis. Capacité : refuser AVANT toute mutation si les sorties ne tiennent
+        // pas dans l'arbre (atomicité — les nullifiers ne sont pas encore dépensés
+        // ici). À 2^32 feuilles c'est hors de portée pratique, mais on garantit qu'un
+        // arbre saturé rejette proprement (`TreeFull`) au lieu de paniquer.
+        let n_out = tx.output_commitments.len() as u128;
+        if (self.tree.len() as u128) + n_out > (1u128 << self.tree.depth()) {
+            return Err(LedgerError::TreeFull);
+        }
         // Application atomique.
         for nf in &tx.nullifiers {
             self.nullifiers.insert(nf.to_bytes());
         }
         let mut indices = Vec::with_capacity(tx.output_commitments.len());
         for oc in &tx.output_commitments {
-            indices.push(self.tree.append(oc));
+            indices.push(self.tree.append(oc).map_err(|_| LedgerError::TreeFull)?);
         }
         let root = self.tree.root();
         self.remember_root(root);
@@ -162,10 +171,17 @@ mod tests {
         let cm1 = rescue::note_commitment(n1.value, &n1.owner, &n1.rho, &n1.r);
 
         let mut state = ProvedLedgerState::with_depth(DEPTH);
-        let i0 = state.mint(&cm0);
-        let i1 = state.mint(&cm1);
-        let path0 = state.tree.path(i0).unwrap();
-        let path1 = state.tree.path(i1).unwrap();
+        // Arbre wallet parallèle : produit les chemins (le nœud n'a que la frontier,
+        // qui n'expose pas `path`). Mêmes commitments, même ordre → même racine
+        // (garanti par `merkle::frontier_differentiel_full_tree`), donc témoin valide.
+        let mut wallet_tree = proved_hash::merkle::ProvedMerkleTree::new(DEPTH);
+        let i0 = state.mint(&cm0).unwrap();
+        let i1 = state.mint(&cm1).unwrap();
+        wallet_tree.append(&cm0);
+        wallet_tree.append(&cm1);
+        debug_assert_eq!(state.tree.root(), wallet_tree.root());
+        let path0 = wallet_tree.path(i0).unwrap();
+        let path1 = wallet_tree.path(i1).unwrap();
 
         let o0 = SpendNote { value: 900, owner: digest(60), rho: digest(61), r: digest(62) };
         let o1 = SpendNote { value: 580, owner: digest(70), rho: digest(71), r: digest(72) };
@@ -218,8 +234,12 @@ mod tests {
         let cm1 = rescue::note_commitment(n1.value, &n1.owner, &n1.rho, &n1.r);
 
         let mut state = ProvedLedgerState::with_depth(DEPTH);
-        let (i0, i1) = (state.mint(&cm0), state.mint(&cm1));
-        let (path0, path1) = (state.tree.path(i0).unwrap(), state.tree.path(i1).unwrap());
+        // Arbre wallet parallèle pour les chemins (cf. `setup`).
+        let mut wallet_tree = proved_hash::merkle::ProvedMerkleTree::new(DEPTH);
+        let (i0, i1) = (state.mint(&cm0).unwrap(), state.mint(&cm1).unwrap());
+        wallet_tree.append(&cm0);
+        wallet_tree.append(&cm1);
+        let (path0, path1) = (wallet_tree.path(i0).unwrap(), wallet_tree.path(i1).unwrap());
 
         // Deux destinataires avec leurs clés KEM et owners prouvés.
         let alice = crypto::kem::KemKeypair::generate();
@@ -346,6 +366,17 @@ mod tests {
             state.apply_proved_tx(&tx),
             Err(LedgerError::InvalidSignature)
         ));
+    }
+
+    /// Saturation via `mint` : un arbre de faible profondeur refuse le mint qui
+    /// dépasse `2^profondeur` — `Result` (`TreeFull`), jamais de panique. Aucune
+    /// preuve STARK ⇒ tourne en build nu (pas de `--release`).
+    #[test]
+    fn mint_sur_arbre_plein_rend_treefull() {
+        let mut state = ProvedLedgerState::with_depth(1); // 2^1 = 2 feuilles
+        assert!(state.mint(&digest(1)).is_ok());
+        assert!(state.mint(&digest(2)).is_ok());
+        assert!(matches!(state.mint(&digest(3)), Err(LedgerError::TreeFull)));
     }
 
     /// Échanger le signataire casse `tx_digest` (il y est lié) → la preuve est rejetée

@@ -58,4 +58,6 @@ pub enum LedgerError {
     UnknownIndex,
     #[error("preuve de transaction invalide")]
     InvalidProof,
+    #[error("arbre plein : capacité 2^profondeur atteinte")]
+    TreeFull,
 }

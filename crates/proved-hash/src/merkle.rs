@@ -216,7 +216,7 @@ impl MerkleFrontier {
         let mut idx = self.next_index;
         let mut cur = leaf(cm);
         for i in 0..self.depth {
-            let (left, right) = if idx % 2 == 0 {
+            let (left, right) = if idx.is_multiple_of(2) {
                 // Nœud gauche : mémorise-le, frère droit encore vide.
                 self.filled_subtrees[i] = cur;
                 (cur, self.zeros[i])
