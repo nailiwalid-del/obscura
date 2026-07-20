@@ -169,17 +169,21 @@ mod tests {
 
         let o0 = SpendNote { value: 900, owner: digest(60), rho: digest(61), r: digest(62) };
         let o1 = SpendNote { value: 580, owner: digest(70), rho: digest(71), r: digest(72) };
+        let oc0 = rescue::note_commitment(o0.value, &o0.owner, &o0.rho, &o0.r);
+        let oc1 = rescue::note_commitment(o1.value, &o1.owner, &o1.rho, &o1.r);
 
         let inputs = [
             ProvedInput { note: n0, path: path0, index: i0 },
             ProvedInput { note: n1, path: path1, index: i1 },
         ];
         let intent = crypto::sig::SigKeypair::generate();
-        // enc_notes opaques (le scan wallet est testé ailleurs) — leur binding dans
-        // tx_digest v3 est couvert par le test d'anti-substitution côté circuit.
+        // enc_notes RÉELS chiffrés vers deux destinataires (keypairs éphémères ici — le
+        // scan de bout en bout est testé par `applique_puis_scanne`). Leur binding dans
+        // tx_digest v3 est ainsi exercé sur de vrais ciphertexts.
+        let (r0, r1) = (crypto::kem::KemKeypair::generate(), crypto::kem::KemKeypair::generate());
         let enc_notes = [
-            circuit::EncNote { kem_ct: vec![1, 2, 3], enc_note: vec![4, 5, 6] },
-            circuit::EncNote { kem_ct: vec![7, 8], enc_note: vec![9, 10, 11] },
+            crate::proved_wallet::encrypt_note(&r0.public, &oc0, &o0),
+            crate::proved_wallet::encrypt_note(&r1.public, &oc1, &o1),
         ];
         let (_root, tx) = prove_tx(&secret, inputs, [o0, o1], 20, &intent, enc_notes);
         (state, tx)
@@ -196,6 +200,63 @@ mod tests {
         // Nullifiers désormais dépensés.
         assert!(state.is_spent(&tx.nullifiers[0]));
         assert!(state.is_spent(&tx.nullifiers[1]));
+    }
+
+    /// e2e chemin prouvé : construire → appliquer → SCANNER. Les deux destinataires
+    /// retrouvent LEUR note de sortie via `scan_proved_output` sur
+    /// `(output_commitments[j], enc_notes[j])` ; un non-destinataire échoue.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "sous-preuves gatées : --release")]
+    fn applique_puis_scanne() {
+        let secret = proved_hash::digest::ShieldedSecret::from_felts(core::array::from_fn(|i| {
+            Felt::from_canonical_u64(700 + i as u64).unwrap()
+        }));
+        let owner = rescue::hash(Domain::Owner, secret.as_felts());
+        let n0 = SpendNote { value: 1_000, owner, rho: digest(20), r: digest(30) };
+        let n1 = SpendNote { value: 500, owner, rho: digest(40), r: digest(50) };
+        let cm0 = rescue::note_commitment(n0.value, &n0.owner, &n0.rho, &n0.r);
+        let cm1 = rescue::note_commitment(n1.value, &n1.owner, &n1.rho, &n1.r);
+
+        let mut state = ProvedLedgerState::with_depth(DEPTH);
+        let (i0, i1) = (state.mint(&cm0), state.mint(&cm1));
+        let (path0, path1) = (state.tree.path(i0).unwrap(), state.tree.path(i1).unwrap());
+
+        // Deux destinataires avec leurs clés KEM et owners prouvés.
+        let alice = crypto::kem::KemKeypair::generate();
+        let bob = crypto::kem::KemKeypair::generate();
+        let (owner_a, owner_b) = (digest(60), digest(70));
+        let o0 = SpendNote { value: 900, owner: owner_a, rho: digest(61), r: digest(62) };
+        let o1 = SpendNote { value: 580, owner: owner_b, rho: digest(71), r: digest(72) };
+        let oc0 = rescue::note_commitment(o0.value, &o0.owner, &o0.rho, &o0.r);
+        let oc1 = rescue::note_commitment(o1.value, &o1.owner, &o1.rho, &o1.r);
+
+        let inputs = [
+            ProvedInput { note: n0, path: path0, index: i0 },
+            ProvedInput { note: n1, path: path1, index: i1 },
+        ];
+        let enc_notes = [
+            crate::proved_wallet::encrypt_note(&alice.public, &oc0, &o0),
+            crate::proved_wallet::encrypt_note(&bob.public, &oc1, &o1),
+        ];
+        let intent = crypto::sig::SigKeypair::generate();
+        let (_root, tx) = prove_tx(&secret, inputs, [o0.clone(), o1.clone()], 20, &intent, enc_notes);
+
+        state.apply_proved_tx(&tx).expect("tx valide");
+
+        // Alice retrouve o0, Bob retrouve o1 — sur les PUBLICS de la tx (oc + enc_note).
+        assert_eq!(
+            crate::proved_wallet::scan_proved_output(&alice, &owner_a, &tx.output_commitments[0], &tx.enc_notes[0]),
+            Some(o0)
+        );
+        assert_eq!(
+            crate::proved_wallet::scan_proved_output(&bob, &owner_b, &tx.output_commitments[1], &tx.enc_notes[1]),
+            Some(o1)
+        );
+        // Alice n'est pas destinataire de la sortie 1.
+        assert_eq!(
+            crate::proved_wallet::scan_proved_output(&alice, &owner_a, &tx.output_commitments[1], &tx.enc_notes[1]),
+            None
+        );
     }
 
     #[test]
