@@ -126,7 +126,7 @@ impl KemPublicKey {
         let mut x = [0u8; 32];
         x.copy_from_slice(&b[1..33]);
         let m = kyber768::PublicKey::from_bytes(&b[33..])
-            .map_err(|_| CryptoError::InvalidEncoding("mlkem pk"))?;
+            .map_err(|_| CryptoError::InvalidEncoding("kyber pk"))?;
         Ok(KemPublicKey {
             x25519: x,
             kyber: m,
@@ -148,7 +148,7 @@ impl KemCiphertext {
         let mut x = [0u8; 32];
         x.copy_from_slice(&b[1..33]);
         let m = kyber768::Ciphertext::from_bytes(&b[33..])
-            .map_err(|_| CryptoError::InvalidEncoding("mlkem ct"))?;
+            .map_err(|_| CryptoError::InvalidEncoding("kyber ct"))?;
         Ok(KemCiphertext {
             x25519_eph: x,
             kyber_ct: m,

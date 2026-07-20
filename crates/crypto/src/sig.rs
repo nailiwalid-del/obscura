@@ -94,7 +94,7 @@ impl SigPublicKey {
         let ed =
             VerifyingKey::from_bytes(&e).map_err(|_| CryptoError::InvalidEncoding("ed25519 pk"))?;
         let ml = dilithium3::PublicKey::from_bytes(&b[33..])
-            .map_err(|_| CryptoError::InvalidEncoding("mldsa pk"))?;
+            .map_err(|_| CryptoError::InvalidEncoding("dilithium pk"))?;
         Ok(SigPublicKey {
             ed25519: ed,
             dilithium: ml,
@@ -116,7 +116,7 @@ impl HybridSignature {
         let mut e = [0u8; 64];
         e.copy_from_slice(&b[1..65]);
         let ml = dilithium3::DetachedSignature::from_bytes(&b[65..])
-            .map_err(|_| CryptoError::InvalidEncoding("mldsa sig"))?;
+            .map_err(|_| CryptoError::InvalidEncoding("dilithium sig"))?;
         Ok(HybridSignature {
             ed25519: Signature::from_bytes(&e),
             dilithium: ml,
