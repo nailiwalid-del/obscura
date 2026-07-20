@@ -1001,6 +1001,101 @@ mod tests {
         );
     }
 
+    /// MASQUAGE EXHAUSTIF (witness-hiding 3z-b1c) : généralise
+    /// `masquage_owner_ouvertures_aleatoires` (colonne unique) à un échantillon
+    /// représentatif de TOUTES les familles de colonnes témoins — porteuses (owner
+    /// complet, nk complet, un représentant de rho/cm/leaf/vin/vout), la cellule
+    /// secret de KEY, une cellule témoin BRUTE d'éponge (payload du commitment U0,
+    /// non recopiée par une porteuse) et l'accumulateur d'équilibre BAL_S. Pour
+    /// chaque colonne : (a) aucune ouverture FRI ne vaut la valeur témoin
+    /// correspondante (reconstruite hors-circuit depuis `w`, jamais lue dans la
+    /// trace) ; (b) les ouvertures ne sont pas toutes identiques (signal de
+    /// variation — une colonne non masquée retournerait sa constante partout) ;
+    /// (c) deux preuves de la MÊME tx (graines distinctes) ont des ouvertures
+    /// DISJOINTES sur chaque colonne. Motif et helper `ouvertures_colonne` repris
+    /// tels quels de T2 (DRY : aucune logique de parsing dupliquée).
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "AIR gaté : générer en --release")]
+    fn masquage_colonnes_temoins() {
+        use proved_hash::merkle;
+        use proved_hash::rescue;
+
+        let (w, _root) = witness_de_test();
+        let (pi1, p1) = preuve_seedee(&w, 41);
+        let (pi2, p2) = preuve_seedee(&w, 42);
+        assert!(verify_monolith(&pi1, 2, &p1), "preuve blindée 1 acceptée");
+        assert!(verify_monolith(&pi2, 2, &p2), "preuve blindée 2 acceptée");
+
+        // Valeurs témoins hors-circuit, reconstruites depuis `w` (jamais depuis la
+        // trace ni depuis la preuve) : owner/nk via les hachages de clé, rho/valeurs
+        // via les notes elles-mêmes, cm/leaf via les fonctions de référence.
+        let owner = rescue::hash(Domain::Owner, w.secret.as_felts());
+        let nk = rescue::hash(Domain::Nk, w.secret.as_felts());
+        let n0 = &w.inputs[0].note;
+        let cm0 = rescue::note_commitment(n0.value, &n0.owner, &n0.rho, &n0.r);
+        let leaf0 = merkle::leaf(&cm0);
+
+        // Table (nom, colonne, valeur témoin attendue) : 8 premières porteuses
+        // (OWNER_C + NK_C complets) + un représentant de rho/cm/leaf/vin/vout, la
+        // cellule secret (KEY_OFF+7), une cellule témoin d'éponge (U0, valeur du
+        // commitment à la ligne d'absorption 0) et BAL_S (accumulateur final =
+        // fee, ligne used−1 = 255 — valeur non triviale, à l'intérieur de [0,used)).
+        let cases: Vec<(&str, usize, BaseElement)> = vec![
+            ("OWNER_C[0]", OWNER_C, owner.0[0].to_winter()),
+            ("OWNER_C[1]", OWNER_C + 1, owner.0[1].to_winter()),
+            ("OWNER_C[2]", OWNER_C + 2, owner.0[2].to_winter()),
+            ("OWNER_C[3]", OWNER_C + 3, owner.0[3].to_winter()),
+            ("NK_C[0]", NK_C, nk.0[0].to_winter()),
+            ("NK_C[1]", NK_C + 1, nk.0[1].to_winter()),
+            ("NK_C[2]", NK_C + 2, nk.0[2].to_winter()),
+            ("NK_C[3]", NK_C + 3, nk.0[3].to_winter()),
+            ("RHO_C[0][0]", RHO_C[0], n0.rho.0[0].to_winter()),
+            ("CM_C[0][0]", CM_C[0], cm0.0[0].to_winter()),
+            ("LEAF_C[0][0]", LEAF_C[0], leaf0.0[0].to_winter()),
+            ("VIN_C[0]", VIN_C[0], BaseElement::new(n0.value)),
+            ("VOUT_C[0]", VOUT_C[0], BaseElement::new(w.outputs[0].value)),
+            ("KEY_SECRET[0]", KEY_OFF + 7, w.secret.as_felts()[0].to_winter()),
+            ("U0_COMMIT_VALUE", U0_OFF + 7, BaseElement::new(n0.value)),
+            ("BAL_S(fin)", BAL_OFF + BAL_S, BaseElement::new(w.fee)),
+        ];
+
+        for (nom, col, temoin) in &cases {
+            let o1 = ouvertures_colonne(&p1, *col);
+            let o2 = ouvertures_colonne(&p2, *col);
+            assert!(!o1.is_empty(), "{nom} : au moins une ouverture (p1)");
+            assert!(!o2.is_empty(), "{nom} : au moins une ouverture (p2)");
+
+            // (a) aucune ouverture ne vaut la valeur témoin.
+            assert_eq!(
+                o1.iter().filter(|&&v| v == *temoin).count(),
+                0,
+                "{nom} : aucune ouverture de p1 ne doit valoir le témoin"
+            );
+            assert_eq!(
+                o2.iter().filter(|&&v| v == *temoin).count(),
+                0,
+                "{nom} : aucune ouverture de p2 ne doit valoir le témoin"
+            );
+
+            // (b) signal de masquage minimal : les ouvertures d'une même preuve ne
+            // sont pas toutes identiques (une colonne non blindée renverrait sa
+            // constante témoin à CHAQUE position de requête, cf. l'expérience A du
+            // spike zk-spike sans blinding).
+            assert!(
+                o1.iter().skip(1).any(|v| v != &o1[0]),
+                "{nom} : les ouvertures de p1 doivent varier"
+            );
+
+            // (c) deux preuves de la même tx, graines distinctes → ouvertures
+            // DISJOINTES (l'aléa de blinding, distinct par graine, se propage dans
+            // les combinaisons linéaires lues par chaque ouverture).
+            assert!(
+                o1.iter().all(|v| !o2.contains(v)),
+                "{nom} : les ouvertures p1/p2 doivent être disjointes"
+            );
+        }
+    }
+
     /// Roundtrip complet : prouve le monolithe, vérifie, et rejette des publics
     /// falsifiés. Gaté release (l'AIR a des colonnes témoins constantes → degrés
     /// input-dépendants, cf. `merkle_path`).
