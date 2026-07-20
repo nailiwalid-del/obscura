@@ -29,12 +29,38 @@ use proved_hash::rescue::note_commit_payload;
 use proved_hash::merkle;
 
 /// Note d'entrée (domaine prouvé). `value < 2^60`.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct SpendNote {
     pub value: u64,
     pub owner: Digest,
     pub rho: Digest,
     pub r: Digest,
+}
+
+impl SpendNote {
+    /// Encodage canonique injectif : `value(8 LE) ‖ owner(32) ‖ rho(32) ‖ r(32)` = 104 o.
+    /// Sert au chiffrement de la note vers un destinataire (`enc_note`, hors-circuit).
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut b = Vec::with_capacity(8 + 3 * proved_hash::digest::DIGEST_BYTES);
+        b.extend_from_slice(&self.value.to_le_bytes());
+        b.extend_from_slice(&self.owner.to_bytes());
+        b.extend_from_slice(&self.rho.to_bytes());
+        b.extend_from_slice(&self.r.to_bytes());
+        b
+    }
+
+    /// Inverse de `to_bytes`. `None` si la longueur ou un digest est invalide.
+    pub fn from_bytes(b: &[u8]) -> Option<Self> {
+        const D: usize = proved_hash::digest::DIGEST_BYTES;
+        if b.len() != 8 + 3 * D {
+            return None;
+        }
+        let value = u64::from_le_bytes(b[0..8].try_into().ok()?);
+        let owner = Digest::from_bytes(b[8..8 + D].try_into().ok()?).ok()?;
+        let rho = Digest::from_bytes(b[8 + D..8 + 2 * D].try_into().ok()?).ok()?;
+        let r = Digest::from_bytes(b[8 + 2 * D..8 + 3 * D].try_into().ok()?).ok()?;
+        Some(SpendNote { value, owner, rho, r })
+    }
 }
 
 /// Preuve composée d'une dépense. `cm_in`/`value`/`rho` sont des liaisons PUBLIQUES ;
@@ -165,6 +191,16 @@ mod tests {
         Digest(core::array::from_fn(|i| {
             Felt::from_canonical_u64(seed + i as u64).unwrap()
         }))
+    }
+
+    #[test]
+    fn spend_note_roundtrip_serialisation() {
+        let n = SpendNote { value: 4_200, owner: digest(10), rho: digest(20), r: digest(30) };
+        let b = n.to_bytes();
+        assert_eq!(b.len(), 8 + 3 * 32);
+        assert_eq!(SpendNote::from_bytes(&b), Some(n));
+        // Longueur invalide → None.
+        assert_eq!(SpendNote::from_bytes(&b[..b.len() - 1]), None);
     }
 
     fn note() -> SpendNote {
