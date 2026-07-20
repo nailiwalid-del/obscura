@@ -21,6 +21,18 @@ pub struct WalletKeys {
     pub nk: [u8; 32],
 }
 
+// Effacement des secrets bruts au drop (durcissement #7). Les moitiés dalek de `spend`
+// (Ed25519) et `receive` (X25519) s'effacent déjà d'elles-mêmes au drop ; les moitiés
+// pqcrypto (Dilithium3/Kyber768) NE sont PAS effacées (limitation de la crate, à
+// revisiter à la migration FIPS — cf. crypto/{kem,sig}.rs).
+impl Drop for WalletKeys {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.shielded_secret.zeroize();
+        self.nk.zeroize();
+    }
+}
+
 /// Adresse publique : (identité de la note, clé publique KEM).
 /// Communiquée hors-chaîne au payeur, jamais publiée on-chain.
 #[derive(Clone)]

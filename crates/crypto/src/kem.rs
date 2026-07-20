@@ -1,6 +1,10 @@
 //! KEM hybride : X25519 (courbes elliptiques) + Kyber768 (réseaux euclidiens, round-3, byte 0x01).
 //! Le secret partagé combine les deux via KDF sur le transcript complet :
 //! il reste sûr tant que L'UN des deux problèmes sous-jacents tient.
+//!
+//! ⚠️ Zeroize (durcissement #7) : la moitié X25519 (`StaticSecret` dalek) s'efface au
+//! drop ; la moitié Kyber768 (`SecretKey` pqcrypto) NE s'efface PAS (pqcrypto n'expose
+//! pas de zeroize). Limitation assumée à revisiter à la migration FIPS 0x02.
 
 use crate::CryptoError;
 use pqcrypto_kyber::kyber768;

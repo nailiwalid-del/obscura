@@ -2,7 +2,6 @@
 
 use crate::felt::Felt;
 use crate::EncodingError;
-use zeroize::Zeroize;
 
 pub const DIGEST_FELTS: usize = 4;
 pub const DIGEST_BYTES: usize = 32;
@@ -84,6 +83,26 @@ impl ShieldedSecret {
     }
 }
 
+// Effacement mémoire au drop (durcissement #7). `Felt` n'est pas un type `Zeroize`
+// natif → écriture VOLATILE de chaque felt à zéro (best-effort non élidable), plus une
+// barrière compilateur. Documenté comme best-effort (pas de garantie matérielle).
+impl zeroize::Zeroize for ShieldedSecret {
+    fn zeroize(&mut self) {
+        for f in self.0.iter_mut() {
+            // SAFETY: `f` est un `&mut Felt` valide et aligné ; `Felt: Copy`.
+            unsafe { core::ptr::write_volatile(f, Felt::ZERO) };
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl Drop for ShieldedSecret {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.zeroize();
+    }
+}
+
 // Debug masqué : ne jamais révéler le secret dans les logs.
 impl core::fmt::Debug for ShieldedSecret {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -91,19 +110,6 @@ impl core::fmt::Debug for ShieldedSecret {
     }
 }
 
-// Effacement best-effort à la libération.
-impl Zeroize for ShieldedSecret {
-    fn zeroize(&mut self) {
-        for felt in self.0.iter_mut() {
-            *felt = Felt::ZERO;
-        }
-    }
-}
-impl Drop for ShieldedSecret {
-    fn drop(&mut self) {
-        self.zeroize();
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -140,5 +146,14 @@ mod tests {
         let mut bytes = [0u8; DIGEST_BYTES];
         bytes[0..8].copy_from_slice(&u64::MAX.to_le_bytes());
         assert!(ShieldedSecret::from_bytes(&bytes).is_err());
+    }
+
+    /// Durcissement #7 : `zeroize()` remet le secret à zéro (observable via `to_bytes`).
+    #[test]
+    fn shielded_secret_zeroize() {
+        use zeroize::Zeroize;
+        let mut s = ShieldedSecret::from_felts([felt(7), felt(8), felt(9), felt(10)]);
+        s.zeroize();
+        assert_eq!(s.to_bytes(), [0u8; DIGEST_BYTES]);
     }
 }

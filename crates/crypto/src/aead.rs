@@ -7,6 +7,7 @@ use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use rand_core::{OsRng, RngCore};
+use zeroize::Zeroize;
 
 const AES_NONCE_LEN: usize = 12;
 const XCHACHA_NONCE_LEN: usize = 24;
@@ -20,7 +21,7 @@ fn keys(master: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
 
 /// Chiffre `plaintext` (avec données associées `aad`) sous la clé maître.
 pub fn encrypt(master: &[u8; 32], aad: &[u8], plaintext: &[u8]) -> Vec<u8> {
-    let (k_aes, k_xc) = keys(master);
+    let (mut k_aes, mut k_xc) = keys(master);
 
     // Couche interne : AES-256-GCM
     let aes = Aes256Gcm::new_from_slice(&k_aes).expect("taille de clé");
@@ -46,6 +47,11 @@ pub fn encrypt(master: &[u8; 32], aad: &[u8], plaintext: &[u8]) -> Vec<u8> {
         .encrypt(XNonce::from_slice(&n2), Payload { msg: &wrapped, aad })
         .expect("chiffrement XChaCha");
 
+    // Effacement des clés dérivées (durcissement #7 ; les objets cipher s'effacent
+    // eux-mêmes au drop).
+    k_aes.zeroize();
+    k_xc.zeroize();
+
     let mut out = n2.to_vec();
     out.extend_from_slice(&outer);
     out
@@ -56,21 +62,29 @@ pub fn decrypt(master: &[u8; 32], aad: &[u8], ciphertext: &[u8]) -> Result<Vec<u
     if ciphertext.len() < XCHACHA_NONCE_LEN + 16 {
         return Err(CryptoError::DecryptionFailed);
     }
-    let (k_aes, k_xc) = keys(master);
+    let (mut k_aes, mut k_xc) = keys(master);
 
-    let (n2, outer) = ciphertext.split_at(XCHACHA_NONCE_LEN);
-    let xc = XChaCha20Poly1305::new_from_slice(&k_xc).expect("taille de clé");
-    let wrapped = xc
-        .decrypt(XNonce::from_slice(n2), Payload { msg: outer, aad })
-        .map_err(|_| CryptoError::DecryptionFailed)?;
+    // IIFE : quel que soit le chemin (erreur `?` ou succès), on efface les clés dérivées
+    // ensuite (durcissement #7).
+    let result = (|| {
+        let (n2, outer) = ciphertext.split_at(XCHACHA_NONCE_LEN);
+        let xc = XChaCha20Poly1305::new_from_slice(&k_xc).expect("taille de clé");
+        let wrapped = xc
+            .decrypt(XNonce::from_slice(n2), Payload { msg: outer, aad })
+            .map_err(|_| CryptoError::DecryptionFailed)?;
 
-    if wrapped.len() < AES_NONCE_LEN + 16 {
-        return Err(CryptoError::DecryptionFailed);
-    }
-    let (n1, inner) = wrapped.split_at(AES_NONCE_LEN);
-    let aes = Aes256Gcm::new_from_slice(&k_aes).expect("taille de clé");
-    aes.decrypt(Nonce::from_slice(n1), Payload { msg: inner, aad })
-        .map_err(|_| CryptoError::DecryptionFailed)
+        if wrapped.len() < AES_NONCE_LEN + 16 {
+            return Err(CryptoError::DecryptionFailed);
+        }
+        let (n1, inner) = wrapped.split_at(AES_NONCE_LEN);
+        let aes = Aes256Gcm::new_from_slice(&k_aes).expect("taille de clé");
+        aes.decrypt(Nonce::from_slice(n1), Payload { msg: inner, aad })
+            .map_err(|_| CryptoError::DecryptionFailed)
+    })();
+
+    k_aes.zeroize();
+    k_xc.zeroize();
+    result
 }
 
 #[cfg(test)]

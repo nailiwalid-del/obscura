@@ -1,6 +1,10 @@
 //! Signature hybride : Ed25519 + Dilithium3 (round-3, byte 0x01).
 //! La vérification exige que LES DEUX signatures soient valides :
 //! forger exige de casser les courbes elliptiques ET les réseaux euclidiens.
+//!
+//! ⚠️ Zeroize (durcissement #7) : la moitié Ed25519 (`SigningKey` dalek) s'efface au
+//! drop ; la moitié Dilithium3 (`SecretKey` pqcrypto) NE s'efface PAS (limitation
+//! pqcrypto). À revisiter à la migration FIPS 0x02.
 
 use crate::CryptoError;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
