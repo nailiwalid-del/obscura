@@ -103,7 +103,10 @@ pub(crate) fn build_seg_trace_seeded(
     let key_i = 0;
     debug_assert_eq!(schedule[key_i], SegKind::Key);
     let kr = key_rows(w.secret.as_felts());
-    debug_assert_eq!(kr.len(), KEY_LEN);
+    // Le calcul de clé occupe `KEY_USED_ROWS` (8) des `KEY_LEN` (16) lignes du
+    // segment ; le reste est inactif (voir seg_layout : alignement sur le cycle 16).
+    debug_assert_eq!(kr.len(), KEY_USED_ROWS);
+    // (`KEY_USED_ROWS <= KEY_LEN` est garanti par une garde compile-time de seg_layout.)
     seg_copy(&mut rows, &kr, seg_start(key_i, depth), SEG_KEY_OFF);
     let owner = read_digest(&kr, kr.len() - 1, RATE_START);
     let nk = read_digest(&kr, kr.len() - 1, KEY_NK_LOCAL_OFF + RATE_START);

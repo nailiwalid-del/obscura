@@ -121,9 +121,23 @@ mod plan {
     /// Lignes par niveau du chemin de Merkle (= `merkle_path::BLOCK`, bloc B=2).
     pub(crate) const MERKLE_LEVEL_ROWS: usize = 16;
 
-    /// Longueur d'un segment KEY : 1 bloc de permutation Rescue (8 lignes) — les
-    /// deux éponges owner/nk tournent CÔTE À CÔTE en colonnes (`SEG_KEY_W` = 24).
-    pub(crate) const KEY_LEN: usize = crate::rescue_round::TRACE_LEN; // 8
+    /// Longueur d'un segment KEY : **16** lignes, alors que le calcul lui-même n'en
+    /// occupe que 8 (1 bloc de permutation Rescue ; les deux éponges owner/nk
+    /// tournent CÔTE À CÔTE en colonnes, `SEG_KEY_W` = 24). Les 8 lignes restantes
+    /// sont inactives (éteintes par le sélecteur de type dans l'AIR).
+    ///
+    /// ⚠️ **Pourquoi 16 et pas 8** (corrigé en T3) : les colonnes périodiques du
+    /// chemin de Merkle sont CYCLIQUES de période `MERKLE_LEVEL_ROWS` = 16
+    /// (`round_flag` à p ∈ {7,15}, `init0`/`init7`/`chain`) et s'alignent sur
+    /// `row % 16`. Avec `KEY_LEN = 8`, TOUS les segments suivants démarraient à
+    /// ≡ 8 (mod 16) — le cycle de Merkle aurait été désaligné dans chaque segment
+    /// d'entrée. Toutes les longueurs de segment étant des multiples de 16, chaque
+    /// `seg_start` l'est aussi (garde compile-time plus bas). Coût réel : NUL —
+    /// `trace_len` reste 512 (depth 2) et 2048 (depth 32).
+    pub(crate) const KEY_LEN: usize = MERKLE_LEVEL_ROWS; // 16 (dont 8 utiles)
+
+    /// Lignes effectivement calculées dans un segment KEY (le reste est inactif).
+    pub(crate) const KEY_USED_ROWS: usize = crate::rescue_round::TRACE_LEN; // 8
 
     /// Plancher de longueur d'un segment IN. 64 car il faut couvrir la pile
     /// d'éponge d'une entrée (`NF_ROWS_END` = 56) et les 60 lignes de bits du
@@ -191,7 +205,7 @@ mod plan {
     }
 
     /// Lignes utiles (contraintes + assertions) : somme des longueurs des
-    /// segments du schedule (au consensus : 8 + 2·512 + 2·64 = 1160).
+    /// segments du schedule (au consensus : 16 + 2·512 + 2·64 = 1168).
     pub(crate) fn used_rows(depth: usize) -> usize {
         schedule_2in2out()
             .iter()
@@ -214,8 +228,20 @@ mod plan {
     const _: () = assert!(MIN_IN_LEN.is_power_of_two());
     const _: () = assert!(OUT_LEN >= CM_ROWS_END);
     const _: () = assert!(OUT_LEN >= crate::range_check::RANGE_BITS);
-    // Le bloc KEY tient dans la largeur d'un segment.
+    // Le bloc KEY tient dans la largeur d'un segment, et son calcul tient dans sa longueur.
     const _: () = assert!(SEG_KEY_OFF + SEG_KEY_W <= SEG_WIDTH);
+    const _: () = assert!(KEY_USED_ROWS <= KEY_LEN);
+
+    // ALIGNEMENT SUR LE CYCLE DE MERKLE — invariant STRUCTUREL, pas accidentel.
+    // Les colonnes périodiques du chemin de Merkle sont cycliques de période
+    // MERKLE_LEVEL_ROWS et s'alignent sur `row % MERKLE_LEVEL_ROWS`. Si CHAQUE
+    // longueur de segment est un multiple de 16, alors chaque `seg_start` (somme
+    // cumulée de longueurs) l'est aussi, quel que soit le schedule — y compris les
+    // schedules variables de 3z-c2. C'est la garde qui rend la généralisation sûre.
+    const _: () = assert!(KEY_LEN.is_multiple_of(MERKLE_LEVEL_ROWS));
+    const _: () = assert!(OUT_LEN.is_multiple_of(MERKLE_LEVEL_ROWS));
+    // (in_len = max(MIN_IN_LEN, 16·depth) : MIN_IN_LEN multiple de 16 — asserté
+    // ci-dessus — et 16·depth trivialement, donc in_len l'est pour tout depth.)
 }
 // Ré-export transitoirement non consommé : `seg_trace` (T2) et `seg_air` (T3)
 // l'utiliseront. À dé-annoter dès T2.
@@ -287,8 +313,13 @@ mod tests {
 
     #[test]
     fn longueurs_par_type_couvrent_leurs_gadgets() {
-        // KEY : 1 bloc de permutation (owner/nk côte à côte en colonnes).
-        assert_eq!(KEY_LEN, crate::rescue_round::TRACE_LEN); // 8
+        // KEY : le CALCUL fait 1 bloc de permutation (owner/nk côte à côte en
+        // colonnes) = 8 lignes, mais le SEGMENT en réserve 16 pour rester aligné sur
+        // le cycle de Merkle (cf. doc de KEY_LEN). Les 8 lignes restantes sont
+        // inactives.
+        assert_eq!(KEY_USED_ROWS, crate::rescue_round::TRACE_LEN); // 8
+        assert_eq!(KEY_LEN, MERKLE_LEVEL_ROWS); // 16
+        const { assert!(KEY_USED_ROWS <= KEY_LEN) };
         // IN : la pile d'éponge (cm 32 + leaf 8 + nf 16 = 56 lignes) ET le chemin
         // de Merkle (16·depth) tournent en PARALLÈLE (groupes de colonnes
         // disjoints). in_len = max des deux, jamais la somme.
@@ -355,24 +386,36 @@ mod tests {
             }
             assert_eq!(used_rows(depth), attendu);
         }
-        // Frontières concrètes au consensus (profondeur 32) : KEY 8, IN 512.
+        // Frontières concrètes au consensus (profondeur 32) : KEY 16, IN 512.
         assert_eq!(seg_start(0, 32), 0);
-        assert_eq!(seg_start(1, 32), 8);
-        assert_eq!(seg_start(2, 32), 520);
-        assert_eq!(seg_start(3, 32), 1032);
-        assert_eq!(seg_start(4, 32), 1096);
+        assert_eq!(seg_start(1, 32), 16);
+        assert_eq!(seg_start(2, 32), 528);
+        assert_eq!(seg_start(3, 32), 1040);
+        assert_eq!(seg_start(4, 32), 1104);
+        // INVARIANT D'ALIGNEMENT : chaque frontière de segment est un multiple de
+        // MERKLE_LEVEL_ROWS, sans quoi les colonnes périodiques cycliques du chemin
+        // de Merkle seraient déphasées dans les segments d'entrée (bug corrigé en T3).
+        for depth in [2, 4, 16, 32] {
+            for i in 0..N_SEGMENTS {
+                assert_eq!(
+                    seg_start(i, depth) % MERKLE_LEVEL_ROWS,
+                    0,
+                    "frontière du segment {i} @ depth {depth} désalignée du cycle Merkle"
+                );
+            }
+        }
     }
 
     #[test]
     fn trace_len_avec_blinding() {
-        // Consensus (profondeur 32) : 8 + 2·512 + 2·64 = 1160 lignes utiles.
+        // Consensus (profondeur 32) : 16 + 2·512 + 2·64 = 1168 lignes utiles.
         assert_eq!(used_rows(32), KEY_LEN + 2 * in_len(32) + 2 * OUT_LEN);
-        assert_eq!(used_rows(32), 1160);
+        assert_eq!(used_rows(32), 1168);
         assert_eq!(trace_len(32), (used_rows(32) + BLIND_ROWS).next_power_of_two());
         assert_eq!(trace_len(32), 2048);
         assert!(trace_len(32).is_power_of_two());
         assert!(trace_len(32) >= used_rows(32) + BLIND_ROWS);
-        // Dev (profondeur 2) : 8 + 2·64 + 2·64 = 264 lignes utiles.
+        // Dev (profondeur 2) : 16 + 2·64 + 2·64 = 272 lignes utiles.
         assert_eq!(used_rows(2), KEY_LEN + 2 * MIN_IN_LEN + 2 * OUT_LEN);
         assert_eq!(trace_len(2), (used_rows(2) + BLIND_ROWS).next_power_of_two());
         assert_eq!(trace_len(2), 512);
