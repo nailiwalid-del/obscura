@@ -28,3 +28,5 @@ pub(crate) mod trace;
 pub(crate) mod seg_layout;
 #[allow(dead_code)]
 pub(crate) mod seg_trace;
+#[allow(dead_code)]
+pub(crate) mod seg_air;
