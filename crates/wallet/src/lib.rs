@@ -71,7 +71,7 @@ pub mod adresse;
 pub mod persistance;
 pub mod synchro;
 
-use circuit::{prove_tx, EncNote, ProvedInput, ProvedTx, SpendNote};
+use circuit::{EncNote, ProvedInput, ProvedTx, SpendNote};
 use crypto::kem::{KemKeypair, KemPublicKey};
 use crypto::sig::SigKeypair;
 use ledger::proved_wallet::{encrypt_note, scan_proved_output};
@@ -82,20 +82,31 @@ use proved_hash::merkle::ProvedMerkleTree;
 use proved_hash::rescue;
 use rand_core::{OsRng, RngCore};
 
-/// Le circuit actuel est figé en 2 entrées / 2 sorties (généralisation = 3z-c2).
-pub const N_ENTREES: usize = 2;
+/// Bornes de forme du circuit (3z-c2) : jusqu'à `MAX_IN` entrées, `MAX_OUT` sorties.
+pub use circuit::{MAX_IN, MAX_OUT};
+
+/// Nombre d'entrées PRÉFÉRÉ par défaut : 2. Ce n'est plus une contrainte du circuit
+/// (il accepte `1..=MAX_IN`) mais une politique de VIE PRIVÉE — cf. `construire` et
+/// docs/THREAT_MODEL : la forme (m, n) est publique, et 2/2 est le seau d'anonymat
+/// le plus peuplé. On n'en sort que par nécessité (une note ne suffit pas, ou trop
+/// de petites notes) ou sur une commande explicite (`consolider`).
+pub const N_ENTREES_DEFAUT: usize = 2;
 
 /// Borne des montants imposée par le circuit (`RANGE_BITS` = 60).
 pub const MONTANT_MAX: u64 = 1 << 60;
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum WalletError {
-    #[error("il faut exactement {N_ENTREES} notes dépensables (disponibles : {0})")]
-    PasAssezDeNotes(usize),
+    #[error("aucune note dépensable")]
+    AucuneNote,
+    #[error("consolidation : il faut au moins 2 notes (disponibles : {0})")]
+    RienAConsolider(usize),
     #[error("solde insuffisant : {disponible} disponible, {requis} requis")]
     SoldeInsuffisant { disponible: u64, requis: u64 },
     #[error("montant hors bornes du circuit (< 2^60)")]
     MontantHorsBornes,
+    #[error("forme de transaction invalide (hors bornes 1..={MAX_IN}/1..={MAX_OUT})")]
+    FormeInvalide,
     #[error(
         "arbre hors frontière de bloc : {feuilles} feuilles pour une ancre à {ancre} — \
          prouver ici publierait une ancre quasi unique"
@@ -220,10 +231,21 @@ impl Wallet {
 
     /// Construit et PROUVE une transaction payant `montant` à `destinataire`.
     ///
+    /// # Forme choisie, et pourquoi 2/2 par défaut
+    ///
+    /// Le circuit accepte désormais `1..=MAX_IN` entrées (3z-c2), mais la forme
+    /// (m, n) est PUBLIQUE : un observateur range les transactions par forme, et les
+    /// formes rares partitionnent l'ensemble d'anonymat. `construire` vise donc
+    /// **2 entrées / 2 sorties** — le seau le plus peuplé — et n'en sort que par
+    /// NÉCESSITÉ : une seule note en réserve (alors `m = 1`, ce qui débloque enfin le
+    /// wallet à note unique), ou deux notes qui ne couvrent pas le montant (alors
+    /// `m` monte jusqu'à `MAX_IN`). La consolidation VOLONTAIRE de nombreuses notes
+    /// passe par [`Wallet::consolider`].
+    ///
     /// Produit toujours DEUX sorties : le paiement, et la **monnaie rendue** vers
-    /// nous-mêmes. Oublier la seconde brûlerait la différence — le circuit exige
-    /// `Σ entrées = Σ sorties + frais` en égalité stricte, et n'a aucun moyen de
-    /// signaler qu'on s'est spolié soi-même.
+    /// nous-mêmes (même à 0 — le circuit exige `Σ entrées = Σ sorties + frais` en
+    /// égalité stricte). Le versement de l'excédent dans les FRAIS serait valide et
+    /// coûteux, d'où `frais` en paramètre EXPLICITE.
     ///
     /// ⚠️ À exécuter en `--release` (AIR du monolithe gatée).
     pub fn construire(
@@ -235,11 +257,86 @@ impl Wallet {
         if montant >= MONTANT_MAX || frais >= MONTANT_MAX {
             return Err(WalletError::MontantHorsBornes);
         }
-        // L'ANCRE AVANT TOUT : `tx.anchor` est public et vaut la racine de cet arbre.
-        // S'il a débordé de la dernière frontière de bloc, cette racine n'est celle
-        // d'aucun autre wallet — elle nous désignerait aussi sûrement qu'un nom.
-        // Refuser ici est la seule protection possible : rien, plus loin dans la
-        // chaîne, ne peut distinguer une ancre à mi-bloc d'une ancre légitime.
+        self.verifier_ancre()?;
+        if self.notes.is_empty() {
+            return Err(WalletError::AucuneNote);
+        }
+        let requis = montant.checked_add(frais).ok_or(WalletError::MontantHorsBornes)?;
+
+        // Sélection : on accumule jusqu'à COUVRIR `requis`, mais on ne s'arrête pas à
+        // UNE note tant qu'on peut en prendre une seconde — c'est le défaut 2/2.
+        // Plafonné à MAX_IN.
+        let mut choisies: Vec<&NoteDetenue> = Vec::new();
+        let mut somme = 0u64;
+        for note in &self.notes {
+            let couvre_et_deux = somme >= requis && choisies.len() >= N_ENTREES_DEFAUT;
+            if couvre_et_deux || choisies.len() >= MAX_IN {
+                break;
+            }
+            somme += note.note.value;
+            choisies.push(note);
+        }
+        if somme < requis {
+            return Err(WalletError::SoldeInsuffisant { disponible: somme, requis });
+        }
+
+        let monnaie = somme - requis;
+        let sorties = vec![
+            (
+                SpendNote { value: montant, owner: destinataire.owner, rho: self.alea(), r: self.alea() },
+                destinataire.kem.clone(),
+            ),
+            (
+                // Monnaie rendue vers NOUS — chiffrée vers notre propre clé, sinon
+                // nous ne la retrouverions pas au scan.
+                SpendNote { value: monnaie, owner: self.owner, rho: self.alea(), r: self.alea() },
+                self.reception.public.clone(),
+            ),
+        ];
+        self.assembler(&choisies, sorties, frais)
+    }
+
+    /// CONSOLIDE plusieurs notes en UNE seule vers soi-même : `M`-in / 1-out.
+    ///
+    /// C'est le geste que « payez d'abord, consolidez ensuite » suppose : un wallet
+    /// éparpillé en petites notes ne peut pas payer un gros montant sans dépasser
+    /// `MAX_IN`. `consolider` regroupe jusqu'à `MAX_IN` notes en une, dépensable d'un
+    /// bloc au paiement suivant.
+    ///
+    /// ⚠️ C'est une action VOLONTAIRE : elle produit une forme `M`/1, rare, donc
+    /// distinctive (cf. THREAT_MODEL — la forme est publique). On l'assume ici parce
+    /// que l'alternative — ne pas pouvoir dépenser — est pire.
+    ///
+    /// La note consolidée porte `Σ − frais`, chiffrée vers notre propre clé.
+    /// ⚠️ Elle n'entre dans la vue du wallet qu'à la SYNCHRONISATION (même mécanique
+    /// que la monnaie rendue) : `consolider` fait DISPARAÎTRE les notes source de la
+    /// vue immédiate.
+    pub fn consolider(&self, frais: u64) -> Result<ProvedTx, WalletError> {
+        if frais >= MONTANT_MAX {
+            return Err(WalletError::MontantHorsBornes);
+        }
+        self.verifier_ancre()?;
+        if self.notes.len() < 2 {
+            return Err(WalletError::RienAConsolider(self.notes.len()));
+        }
+        let choisies: Vec<&NoteDetenue> = self.notes.iter().take(MAX_IN).collect();
+        let somme: u64 = choisies.iter().map(|n| n.note.value).sum();
+        if somme <= frais {
+            return Err(WalletError::SoldeInsuffisant { disponible: somme, requis: frais + 1 });
+        }
+        let sorties = vec![(
+            SpendNote { value: somme - frais, owner: self.owner, rho: self.alea(), r: self.alea() },
+            self.reception.public.clone(),
+        )];
+        self.assembler(&choisies, sorties, frais)
+    }
+
+    /// L'ANCRE AVANT TOUT : `tx.anchor` est public et vaut la racine de cet arbre.
+    /// S'il a débordé de la dernière frontière de bloc, cette racine n'est celle
+    /// d'aucun autre wallet — elle nous désignerait aussi sûrement qu'un nom. Refuser
+    /// ici est la seule protection possible : rien en aval ne peut distinguer une
+    /// ancre à mi-bloc d'une ancre légitime.
+    fn verifier_ancre(&self) -> Result<(), WalletError> {
         let feuilles = self.arbre.len() as u64;
         if feuilles != self.feuilles_ancrees {
             return Err(WalletError::ArbreHorsFrontiereDeBloc {
@@ -247,80 +344,43 @@ impl Wallet {
                 ancre: self.feuilles_ancrees,
             });
         }
-        if self.notes.len() < N_ENTREES {
-            return Err(WalletError::PasAssezDeNotes(self.notes.len()));
-        }
-        // Sélection : les `N_ENTREES` premières notes (une stratégie plus fine —
-        // minimiser la monnaie, éviter de lier des notes — relève d'une politique
-        // de confidentialité, pas de la mécanique).
-        let choisies: Vec<&NoteDetenue> = self.notes.iter().take(N_ENTREES).collect();
-        let disponible: u64 = choisies.iter().map(|n| n.note.value).sum();
-        let requis = montant.checked_add(frais).ok_or(WalletError::MontantHorsBornes)?;
-        if disponible < requis {
-            return Err(WalletError::SoldeInsuffisant { disponible, requis });
-        }
+        Ok(())
+    }
 
-        // LA monnaie rendue. Son omission rendrait la transaction INVALIDE (équilibre
-        // strict), pas silencieusement spoliatrice — c'est en revanche le versement
-        // de l'excédent dans les FRAIS qui serait valide et coûteux, d'où `frais`
-        // en paramètre explicite plutôt qu'en résidu.
-        let monnaie = disponible - requis;
+    /// Assemble et prouve une transaction à FORME choisie : `choisies` entrées,
+    /// `sorties` (note + clé de réception du destinataire). Point de passage UNIQUE
+    /// de `construire` et `consolider` — l'enveloppe par sortie, la clé d'intention
+    /// fraîche et la preuve à forme variable y vivent une seule fois.
+    fn assembler(
+        &self,
+        choisies: &[&NoteDetenue],
+        sorties: Vec<(SpendNote, KemPublicKey)>,
+        frais: u64,
+    ) -> Result<ProvedTx, WalletError> {
+        let entrees: Vec<ProvedInput> = choisies
+            .iter()
+            .map(|d| ProvedInput {
+                note: d.note.clone(),
+                path: self.arbre.path(d.index).expect("index observé, donc dans l'arbre"),
+                index: d.index,
+            })
+            .collect();
 
-        let sortie_paiement = SpendNote {
-            value: montant,
-            owner: destinataire.owner,
-            rho: self.alea(),
-            r: self.alea(),
-        };
-        let sortie_monnaie = SpendNote {
-            value: monnaie,
-            owner: self.owner, // vers NOUS
-            rho: self.alea(),
-            r: self.alea(),
-        };
+        let (notes_out, enc): (Vec<SpendNote>, Vec<EncNote>) = sorties
+            .into_iter()
+            .map(|(note, kem)| {
+                let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
+                let e = encrypt_note(&kem, &cm, &note);
+                (note, e)
+            })
+            .unzip();
 
-        let cm_paiement = rescue::note_commitment(
-            sortie_paiement.value,
-            &sortie_paiement.owner,
-            &sortie_paiement.rho,
-            &sortie_paiement.r,
-        );
-        let cm_monnaie = rescue::note_commitment(
-            sortie_monnaie.value,
-            &sortie_monnaie.owner,
-            &sortie_monnaie.rho,
-            &sortie_monnaie.r,
-        );
-
-        // Chaque sortie est chiffrée vers SON destinataire — la monnaie vers notre
-        // propre clé de réception, sinon nous ne pourrions pas la retrouver au scan.
-        let enc = [
-            encrypt_note(&destinataire.kem, &cm_paiement, &sortie_paiement),
-            encrypt_note(&self.reception.public, &cm_monnaie, &sortie_monnaie),
-        ];
-
-        let entrees: [ProvedInput; N_ENTREES] = core::array::from_fn(|i| ProvedInput {
-            note: choisies[i].note.clone(),
-            path: self
-                .arbre
-                .path(choisies[i].index)
-                .expect("index observé, donc dans l'arbre"),
-            index: choisies[i].index,
-        });
-
-        // Clé d'intention FRAÎCHE à chaque transaction — voir « Le signataire est
-        // public » en tête de module. La réutiliser lierait publiquement toutes nos
-        // transactions entre elles.
+        // Clé d'intention FRAÎCHE à chaque transaction — cf. « Le signataire est
+        // public » en tête de module.
         let intent = SigKeypair::generate();
-
-        let (_racine, tx) = prove_tx(
-            &self.secret,
-            entrees,
-            [sortie_paiement, sortie_monnaie],
-            frais,
-            &intent,
-            enc,
-        );
+        let (_racine, tx) =
+            circuit::prove_tx_forme(&self.secret, entrees, notes_out, frais, &intent, enc)
+                .map_err(|_| WalletError::FormeInvalide)?;
         Ok(tx)
     }
 
@@ -502,10 +562,10 @@ mod tests {
     }
 
     #[test]
-    fn refuse_sans_assez_de_notes() {
+    fn refuse_sans_note() {
         let w = Wallet::depuis_secret(secret(700), PROFONDEUR);
         let dest = Wallet::depuis_secret(secret(900), PROFONDEUR).adresse();
-        assert!(matches!(w.construire(&dest, 100, 10), Err(WalletError::PasAssezDeNotes(0))));
+        assert!(matches!(w.construire(&dest, 100, 10), Err(WalletError::AucuneNote)));
     }
 
     #[test]
@@ -561,6 +621,91 @@ mod tests {
         let note = retrouvee.expect("la monnaie doit nous être déchiffrable");
         assert_eq!(note.value, 1_180, "monnaie = disponible − montant − frais");
         assert_eq!(note.owner, w.owner(), "la monnaie revient à NOUS");
+    }
+
+    /// PAIEMENT AVEC UNE SEULE NOTE (m = 1) — le cas qui MOTIVAIT 3z-c2.
+    ///
+    /// Avant la variabilité, un wallet à note unique ne pouvait pas payer
+    /// (`PasAssezDeNotes(1)`). Ici, une seule note de 1 000 paie 300 (frais 20) et
+    /// produit une transaction 1-in/2-out valide, dont la monnaie rendue (680) nous
+    /// est déchiffrable.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "preuve gatée : --release")]
+    fn paiement_avec_une_seule_note() {
+        let mut w = Wallet::depuis_secret(secret(700), PROFONDEUR);
+        let (lot, etat) = lot_de_genese(&w, &[1_000], PROFONDEUR);
+        w.synchroniser(&[lot]).expect("rejeu");
+        assert_eq!(w.notes().len(), 1, "une seule note en réserve");
+
+        let dest = Wallet::depuis_secret(secret(900), PROFONDEUR);
+        let tx = w.construire(&dest.adresse(), 300, 20).expect("1-in/2-out constructible");
+        assert_eq!(tx.m(), 1, "une entrée");
+        assert_eq!(tx.n(), 2, "paiement + monnaie");
+        assert!(
+            circuit::verify_proved_tx_full(&etat.tree.root(), PROFONDEUR, &tx),
+            "la transaction à note unique doit être valide"
+        );
+
+        // Le destinataire lit son paiement ; nous, notre monnaie rendue (680).
+        let paiement = scan_proved_output(
+            &dest.reception, &dest.owner, &tx.output_commitments[0], &tx.enc_notes[0],
+        );
+        assert_eq!(paiement.map(|n| n.value), Some(300));
+        let monnaie = scan_proved_output(
+            &w.reception, &w.owner, &tx.output_commitments[1], &tx.enc_notes[1],
+        );
+        assert_eq!(monnaie.map(|n| n.value), Some(680));
+    }
+
+    /// DÉFAUT 2/2 : avec plusieurs notes, `construire` en prend DEUX même si UNE
+    /// suffirait — c'est la politique de vie privée (le seau d'anonymat le plus
+    /// peuplé). On paie 100 depuis un wallet de deux notes de 1 000 : une seule
+    /// couvrirait, mais la forme doit rester 2/2.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "preuve gatée : --release")]
+    fn deux_notes_donnent_la_forme_2_2_par_defaut() {
+        let mut w = Wallet::depuis_secret(secret(700), PROFONDEUR);
+        let _ = crediter(&mut w, 1_000, 1_000);
+        let dest = Wallet::depuis_secret(secret(900), PROFONDEUR).adresse();
+        let tx = w.construire(&dest, 100, 10).expect("constructible");
+        assert_eq!(
+            (tx.m(), tx.n()),
+            (2, 2),
+            "défaut 2/2 : deux entrées même si une suffirait (vie privée)"
+        );
+    }
+
+    /// CONSOLIDATION : trois notes → une seule vers soi (M-in / 1-out), qui permet
+    /// ensuite de payer un montant qu'aucune paire ne couvrait.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "preuve gatée : --release")]
+    fn consolidation_reduit_a_une_note() {
+        let mut w = Wallet::depuis_secret(secret(700), PROFONDEUR);
+        let (lot, etat) = lot_de_genese(&w, &[100, 200, 300], PROFONDEUR);
+        w.synchroniser(&[lot]).expect("rejeu");
+        assert_eq!(w.notes().len(), 3);
+
+        let tx = w.consolider(5).expect("consolidation constructible");
+        assert_eq!(tx.m(), 3, "trois entrées consolidées");
+        assert_eq!(tx.n(), 1, "une seule sortie");
+        assert!(
+            circuit::verify_proved_tx_full(&etat.tree.root(), PROFONDEUR, &tx),
+            "la consolidation doit être valide"
+        );
+        // La note consolidée (595 = 600 − 5) nous est déchiffrable.
+        let note = scan_proved_output(
+            &w.reception, &w.owner, &tx.output_commitments[0], &tx.enc_notes[0],
+        );
+        assert_eq!(note.map(|n| n.value), Some(595));
+    }
+
+    /// Consolider exige au moins deux notes — une seule n'a rien à regrouper.
+    #[test]
+    fn consolider_refuse_une_seule_note() {
+        let mut w = Wallet::depuis_secret(secret(700), PROFONDEUR);
+        let (lot, _etat) = lot_de_genese(&w, &[1_000], PROFONDEUR);
+        w.synchroniser(&[lot]).expect("rejeu");
+        assert!(matches!(w.consolider(5), Err(WalletError::RienAConsolider(1))));
     }
 
     /// LIABILITÉ : deux transactions du MÊME wallet ne doivent pas partager de

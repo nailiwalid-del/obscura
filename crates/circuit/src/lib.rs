@@ -46,8 +46,8 @@ pub mod rescue_perm;
 pub use range_check::RANGE_BITS;
 pub use spend::SpendNote;
 pub use tx::{
-    prove_tx, verify_proved_tx_full, verify_tx, EncNote, ProvedInput, ProvedTx, TxDecodeError,
-    INTENT_DOMAIN, MAX_IN, MAX_OUT,
+    prove_tx, prove_tx_forme, verify_proved_tx_full, verify_tx, EncNote, ProvedInput, ProvedTx,
+    TxDecodeError, INTENT_DOMAIN, MAX_IN, MAX_OUT,
 };
 
 // --- Surface DEV (`--features dev-circuits`) : sous-circuits standalone ---

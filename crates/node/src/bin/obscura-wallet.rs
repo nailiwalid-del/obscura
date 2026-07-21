@@ -60,6 +60,7 @@ fn usage() -> ! {
     eprintln!("  adresse      --fichier <f>                   affiche l'adresse à communiquer");
     eprintln!("  synchroniser --fichier <f> --noeud <ip:port> rejoue l'historique, se met à jour");
     eprintln!("  solde        --fichier <f>                   affiche le solde connu");
+    eprintln!("  consolider   --fichier <f> --noeud <ip:port>  regroupe ses notes en une seule");
     eprintln!("  envoyer      --fichier <f> --a <adresse> \\");
     eprintln!("               --montant <n> [--frais <n>] --noeud <ip:port> \\");
     eprintln!("               [--noeud-synchro <ip:port>]");
@@ -157,6 +158,7 @@ fn main() {
         "synchroniser" => synchroniser(&fichier, &o),
         "solde" => solde(&fichier),
         "envoyer" => envoyer(&fichier, &o),
+        "consolider" => consolider(&fichier, &o),
         _ => usage(),
     }
 }
@@ -354,9 +356,11 @@ fn envoyer(fichier: &Path, o: &Options) {
         .construire(&destinataire, montant, o.frais)
         .unwrap_or_else(|e| abandon(&format!("transaction impossible : {e}")));
     println!(
-        "preuve générée en {:.1} s ({:.1} Kio)",
+        "preuve générée en {:.1} s ({:.1} Kio) — forme {}-in/{}-out",
         debut.elapsed().as_secs_f64(),
-        tx.to_bytes().len() as f64 / 1024.0
+        tx.to_bytes().len() as f64 / 1024.0,
+        tx.m(),
+        tx.n(),
     );
 
     let mut connexion = connecter(noeud, DELAI_ECRITURE);
@@ -393,4 +397,51 @@ fn envoyer(fichier: &Path, o: &Options) {
         println!("    scellée dans un bloc. Elle REVIENDRA au solde à la prochaine");
         println!("    `synchroniser` — elle est chiffrée vers vous, donc reconnue au scan.");
     }
+}
+
+/// `consolider` : regroupe les notes du wallet en UNE seule (M-in/1-out), pour
+/// pouvoir ensuite payer un montant qu'aucune paire de notes ne couvrait.
+///
+/// ⚠️ Produit une forme rare (M/1), donc distinctive au regard d'un observateur —
+/// la forme d'une transaction est publique. C'est un geste VOLONTAIRE, dont
+/// l'alternative (ne pas pouvoir dépenser) est pire ; l'avertissement le rappelle.
+fn consolider(fichier: &Path, o: &Options) {
+    let Some(noeud) = o.noeud else {
+        eprintln!("--noeud est obligatoire pour consolider");
+        usage()
+    };
+    let mut w = charger(fichier);
+    if w.prochaine_hauteur() == 0 {
+        abandon("wallet non synchronisé : lancez d'abord `synchroniser`.");
+    }
+    println!(
+        "⚠️  consolider produit une transaction de forme M-in/1-out, plus rare donc
+             plus distinctive qu'un paiement 2/2 (la forme est publique). À n'utiliser
+             que si vos notes sont trop éparpillées pour payer autrement."
+    );
+    println!("construction de la preuve (plusieurs secondes)…");
+    let tx = w
+        .consolider(o.frais)
+        .unwrap_or_else(|e| abandon(&format!("consolidation impossible : {e}")));
+    println!("preuve générée — forme {}-in/1-out", tx.m());
+
+    let mut connexion = connecter(noeud, DELAI_ECRITURE);
+    let octets = Message::Transaction(Box::new(tx)).to_bytes();
+    if let Err(e) = connexion.envoyer(&octets) {
+        abandon(&format!("envoi échoué : {e:?} — aucune note marquée dépensée"));
+    }
+    println!("transaction soumise à {noeud}");
+
+    let tx = match Message::from_bytes(&octets) {
+        Ok(Message::Transaction(tx)) => tx,
+        _ => abandon("réencodage impossible (bug interne)"),
+    };
+    let consommees = w.oublier_depensees(&tx);
+    if let Err(e) = w.enregistrer(fichier) {
+        abandon(&format!("transaction ENVOYÉE mais wallet non enregistré : {e}"));
+    }
+    println!("{consommees} notes regroupées — solde connu : {}", w.solde());
+    println!();
+    println!("ℹ️  La note consolidée REVIENDRA au solde à la prochaine `synchroniser`");
+    println!("    (chiffrée vers vous, reconnue au scan, comme la monnaie rendue).");
 }
