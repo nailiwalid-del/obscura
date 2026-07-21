@@ -15,7 +15,11 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
 - `crates/net` : **transport chiffré PQ** (phase 4, brique 1/4) — handshake hybride
   3 passes avec **forward secrecy** (éphémères jetés) et **masquage d'identité**
   (identités chiffrées sur le fil), machine à états en typestate, canal anti-rejeu
-  par compteur de séquence en AAD. Réutilise kem/sig/aead sans primitive nouvelle.
+  par compteur de séquence en AAD, **cadrage sur le fil** (longueur préfixée, borne
+  anti-DoS vérifiée AVANT allocation) et `Connexion` générique sur `Read + Write`
+  (testée sur tuyau mémoire, prête pour TcpStream). Réutilise kem/sig/aead sans
+  primitive nouvelle. Cadrage SYNCHRONE délibéré : il fixe le FORMAT DE FIL, pas la
+  stratégie d'E/S — un runtime async plus tard ne changera pas un octet sur le fil.
   ⚠️ L'identité du RÉPONDEUR reste révélée à un MitM actif (inhérent au rôle ;
   fermable par un motif Noise-IK pour les sorties) — cf. spec transport-pq.
 - `crates/ledger` : notes engagées, nullifiers, Merkle (BLAKE3, prof. 16), tx, validation — testés

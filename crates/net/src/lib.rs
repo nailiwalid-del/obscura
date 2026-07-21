@@ -31,6 +31,19 @@
 //! **Hors périmètre** : l'analyse de trafic (tailles, horaires, volumes). Padding et
 //! cover traffic relèvent de Dandelion++/mixnet (briques 3-4).
 //!
+//! # Couches
+//!
+//! | module | rôle |
+//! |---|---|
+//! | [`frame`] | cadrage sur le fil (longueur préfixée, borne anti-DoS) |
+//! | [`handshake`] | les 3 passes, en typestate |
+//! | [`session`] | canal chiffré anti-rejeu |
+//! | [`connexion`] | assemblage des trois, générique sur `Read + Write` |
+//!
+//! Le cadrage est SYNCHRONE délibérément : il fixe le FORMAT DE FIL, qui est
+//! l'artefact durable, pas la stratégie d'E/S. Passer à un runtime asynchrone plus
+//! tard ne changera pas un octet sur le fil.
+//!
 //! # Surface hostile
 //!
 //! Tout décodage est un point d'entrée réseau : curseur borné, longueurs vérifiées
@@ -39,9 +52,13 @@
 
 use crypto::hash::{derive_key, dual_hash};
 
+pub mod connexion;
+pub mod frame;
 pub mod handshake;
 pub mod session;
 
+pub use connexion::Connexion;
+pub use frame::{MAX_CADRE, ecrire_cadre, lire_cadre};
 pub use handshake::{Initiateur, Repondeur};
 pub use session::Session;
 
@@ -63,6 +80,11 @@ pub enum NetError {
     EncodageInvalide,
     #[error("compteur de séquence épuisé : session à renouveler")]
     SessionEpuisee,
+    /// Erreur d'E/S sous-jacente. On ne conserve que le `ErrorKind` : cela garde
+    /// `NetError` comparable (tests lisibles) et suffit à distinguer une fermeture
+    /// propre (`UnexpectedEof` sur l'en-tête) d'une anomalie.
+    #[error("erreur d'E/S : {0:?}")]
+    Io(std::io::ErrorKind),
 }
 
 // ================================================================================
