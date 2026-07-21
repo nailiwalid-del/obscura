@@ -1585,6 +1585,76 @@ mod tests {
         assert!(or.iter().any(|v| *v != or[0]), "ROOT_C doit aussi être blindée");
     }
 
+    /// SOUNDNESS À LA PROFONDEUR CONSENSUS (32) — comble un trou de couverture.
+    ///
+    /// Toutes les autres forges tournent à la profondeur 2, où la géométrie est
+    /// QUALITATIVEMENT différente :
+    ///
+    /// | | depth 2 | depth 32 |
+    /// |---|---|---|
+    /// | `in_len` | 64 | 512 |
+    /// | chemin de Merkle | 32 lignes | 512 lignes |
+    /// | slack dans le segment | 32 | **0** |
+    /// | ancre de racine (locale) | 31 | **511 = seg_len − 1** |
+    ///
+    /// À la profondeur consensus, le chemin remplit EXACTEMENT le segment et l'ancre
+    /// de racine tombe sur sa DERNIÈRE ligne — la transition y traverse vers le
+    /// segment suivant. Un défaut de traitement de frontière serait invisible à la
+    /// profondeur 2 et ne se manifesterait qu'en production. D'où ce test.
+    ///
+    /// Coûteux (deux preuves à profondeur 32) : ignoré par défaut.
+    #[test]
+    #[ignore = "coûteux (profondeur 32) : lancer avec --ignored"]
+    fn soundness_a_la_profondeur_consensus() {
+        use crate::monolith::seg_trace::{build_seg_trace_forge, SegForge};
+        use crate::monolith::trace::witness_de_test_profondeur_consensus;
+        use proved_hash::digest::Digest;
+        use proved_hash::felt::Felt;
+
+        let (w, _root) = witness_de_test_profondeur_consensus();
+        let depth = w.inputs[0].path.len();
+        assert_eq!(depth, 32);
+        // Le cas limite : l'ancre de racine est bien sur la dernière ligne du segment.
+        assert_eq!(MERKLE_LEVEL_ROWS * depth - 1, seg_len(SegKind::Input, depth) - 1);
+
+        // (a) témoin honnête : accepté.
+        let (pi, proof) = prove_seg_monolith(&w);
+        assert!(
+            verify_seg_monolith(&pi, depth, &proof),
+            "témoin honnête accepté à la profondeur consensus"
+        );
+
+        // (b) forge anti-double-dépense : rejetée. On vise CmNullifier, qui
+        // n'altère pas l'arbre — le rejet est donc bien imputable à la liaison CM
+        // et non à un effet de bord de reconstruction.
+        let faux = Digest(core::array::from_fn(|i| {
+            Felt::from_canonical_u64(9999 + i as u64).unwrap()
+        }));
+        let trace = build_seg_trace_forge(&w, SegForge::CmNullifier(0, faux));
+        let pi_f = MonolithPublicInputs {
+            root: read4(&trace, ROOT_C, 0),
+            nullifiers: [
+                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(1, depth) + NF_ROWS_END - 1),
+                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(2, depth) + NF_ROWS_END - 1),
+            ],
+            output_commitments: [
+                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(3, depth) + CM_ROWS_END - 1),
+                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(4, depth) + CM_ROWS_END - 1),
+            ],
+            fee: w.fee,
+            depth,
+        };
+        let prover = SegMonolithProver {
+            options: crate::proof_options_hi(),
+            pi: pi_f.clone(),
+        };
+        let proof_f = ValidityProof(prover.prove(trace).expect("génération"));
+        assert!(
+            !verify_seg_monolith(&pi_f, depth, &proof_f),
+            "forge CmNullifier doit être rejetée AUSSI à la profondeur consensus"
+        );
+    }
+
     /// ORACLE DE PARITÉ — le test que la construction côte à côte rend possible :
     /// le MÊME témoin doit produire les MÊMES publics par les deux monolithes.
     ///
