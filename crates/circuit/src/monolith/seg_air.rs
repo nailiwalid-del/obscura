@@ -11,12 +11,12 @@
 //! `winterfell::Air` (transitions, assertions, degrés) est l'étape 2b et lira ces
 //! champs nommés — jamais des indices en dur.
 //!
-//! # Le renversement par rapport au côte-à-côte
+//! # Le renversement par rapport au côte-à-côte (historique, supprimé en C2-T8)
 //!
-//! Dans `super::air`, les quatre éponges (2 entrées + 2 sorties) vivent sur des
-//! COLONNES distinctes et partagent le même sélecteur de LIGNE (`sel_u`, `sel_o`).
-//! Ici, elles partagent la même colonne et sont distinguées par leur SEGMENT de
-//! lignes. Donc :
+//! Dans l'AIR côte-à-côte, les quatre éponges (2 entrées + 2 sorties) vivaient sur
+//! des COLONNES distinctes et partageaient le même sélecteur de LIGNE (`sel_u`,
+//! `sel_o`). Ici, elles partagent la même colonne et sont distinguées par leur
+//! SEGMENT de lignes. Donc :
 //!
 //! - les familles de contraintes sont **mutualisées** (une seule famille d'éponge
 //!   au lieu de quatre, un seul chemin de Merkle au lieu de deux) ;
@@ -30,11 +30,10 @@
 //! `seg_start` est un multiple de `MERKLE_LEVEL_ROWS` (garde compile-time de
 //! `seg_layout`). C'est précisément ce que le passage `KEY_LEN` 8 → 16 a assuré.
 
-use super::air::{push_preamble, MonolithPublicInputs};
 use super::seg_layout::*;
 #[cfg(test)]
 use super::seg_trace::build_seg_trace;
-use super::trace::MonolithWitness;
+use super::socle::{push_preamble, MonolithPublicInputs, MonolithWitness};
 use crate::merkle_path::enforce_merkle_transition;
 use crate::rescue_round::{enforce_round_block, STATE_WIDTH};
 use crate::sponge::{enforce_sponge_transition, RATE_START};
@@ -507,7 +506,7 @@ impl winterfell::Air for SegMonolithAir {
     type PublicInputs = MonolithPublicInputs;
 
     fn new(trace_info: TraceInfo, pi: MonolithPublicInputs, options: ProofOptions) -> Self {
-        // Witness-hiding : mêmes exigences qu'en côte-à-côte (cf. super::air::new).
+        // Witness-hiding : mêmes exigences que le côte-à-côte historique en posait.
         assert!(
             BLIND_ROWS >= options.num_queries() + 4,
             "BLIND_ROWS ({}) doit couvrir num_queries + 4 ({})",
@@ -1059,7 +1058,7 @@ pub(crate) fn verify_seg_monolith(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::monolith::trace::witness_de_test;
+    use crate::monolith::socle::witness_de_test;
 
     const DEPTHS: [usize; 2] = [2, 32];
 
@@ -1479,78 +1478,6 @@ mod tests {
         assert!(
             !verify_seg_monolith(&pi, depth, &proof),
             "VACC initial non nul doit être rejeté (ancrage anti-inflation)"
-        );
-    }
-
-    /// MESURE DÉCISIVE (T6 anticipé) : segmenté vs côte-à-côte à la profondeur
-    /// CONSENSUS (32), sur le même témoin.
-    ///
-    /// Le design 3z-c1 laissait la question ouverte — « l'effet net sur la taille de
-    /// preuve reste à mesurer : la largeur ÷2,2 peut compenser, voire battre, la
-    /// longueur ×2 ; le bench tranche ». Ce test EST ce bench. Il conditionne
-    /// l'intérêt d'investir dans le reste de la refonte (et dans 3z-c2).
-    ///
-    /// Ignoré par défaut (coûteux) : `cargo test -p circuit --release --lib
-    /// mesure_segmente_vs_cote_a_cote -- --ignored --nocapture`.
-    #[test]
-    #[ignore = "bench : lancer explicitement avec --ignored --nocapture"]
-    fn mesure_segmente_vs_cote_a_cote() {
-        use crate::monolith::trace::witness_de_test_profondeur_consensus;
-        use std::time::Instant;
-
-        let (w, _root) = witness_de_test_profondeur_consensus();
-        let depth = w.inputs[0].path.len();
-        assert_eq!(depth, 32, "profondeur consensus");
-
-        // --- Segmenté ---
-        let t0 = Instant::now();
-        let (pi_seg, proof_seg) = prove_seg_monolith(&w);
-        let gen_seg = t0.elapsed();
-        let t1 = Instant::now();
-        assert!(verify_seg_monolith(&pi_seg, depth, &proof_seg));
-        let ver_seg = t1.elapsed();
-        let taille_seg = proof_seg.0.to_bytes().len();
-
-        // --- Côte-à-côte (référence 3z-b1) ---
-        let (w2, _) = witness_de_test_profondeur_consensus();
-        let t2 = Instant::now();
-        let (pi_ref, proof_ref) = super::super::air::prove_monolith(&w2);
-        let gen_ref = t2.elapsed();
-        let t3 = Instant::now();
-        assert!(super::super::air::verify_monolith(&pi_ref, depth, &proof_ref));
-        let ver_ref = t3.elapsed();
-        let taille_ref = proof_ref.0.to_bytes().len();
-
-        // Parité des publics à la profondeur consensus, tant qu'on y est.
-        assert_eq!(pi_seg.root, pi_ref.root);
-        assert_eq!(pi_seg.nullifiers, pi_ref.nullifiers);
-        assert_eq!(pi_seg.output_commitments, pi_ref.output_commitments);
-
-        println!("\n=== profondeur 32 (consensus) ===");
-        println!(
-            "côte-à-côte : largeur {:3}, trace {:5} | gen {:7.1} ms | ver {:5.1} ms | {:6.1} Kio",
-            super::super::layout::WIDTH,
-            super::super::layout::trace_len(depth),
-            gen_ref.as_secs_f64() * 1e3,
-            ver_ref.as_secs_f64() * 1e3,
-            taille_ref as f64 / 1024.0
-        );
-        println!(
-            "segmenté    : largeur {:3}, trace {:5} | gen {:7.1} ms | ver {:5.1} ms | {:6.1} Kio",
-            WIDTH,
-            trace_len(depth),
-            gen_seg.as_secs_f64() * 1e3,
-            ver_seg.as_secs_f64() * 1e3,
-            taille_seg as f64 / 1024.0
-        );
-        println!(
-            "ratio taille segmenté/côte-à-côte : {:.3}  (< 1 = le segmenté gagne)",
-            taille_seg as f64 / taille_ref as f64
-        );
-        println!(
-            "ratio gen : {:.2}×   ratio ver : {:.2}×\n",
-            gen_seg.as_secs_f64() / gen_ref.as_secs_f64(),
-            ver_seg.as_secs_f64() / ver_ref.as_secs_f64()
         );
     }
 
@@ -2081,7 +2008,7 @@ mod tests {
     #[ignore = "coûteux (profondeur 32) : lancer avec --ignored"]
     fn soundness_a_la_profondeur_consensus() {
         use crate::monolith::seg_trace::SegForge;
-        use crate::monolith::trace::witness_de_test_profondeur_consensus;
+        use crate::monolith::socle::witness_de_test_profondeur_consensus;
         use proved_hash::digest::Digest;
         use proved_hash::felt::Felt;
 
@@ -2190,29 +2117,6 @@ mod tests {
             lignes_a, lignes_b,
             "les préambules des deux entrées doivent viser des lignes DISTINCTES"
         );
-    }
-
-    /// ORACLE DE PARITÉ — le test que la construction côte à côte rend possible :
-    /// le MÊME témoin doit produire les MÊMES publics par les deux monolithes.
-    ///
-    /// C'est la non-régression la plus forte disponible : elle compare le segmenté
-    /// à une implémentation indépendante et déjà éprouvée, plutôt qu'à ses propres
-    /// attentes.
-    #[test]
-    #[cfg_attr(debug_assertions, ignore = "monolithes gatés : --release")]
-    fn parite_publics_segmente_vs_cote_a_cote() {
-        let (w, _root) = witness_de_test();
-        let (pi_seg, _) = prove_seg_monolith(&w);
-        let (pi_ref, _) = super::super::air::prove_monolith(&w);
-
-        assert_eq!(pi_seg.root, pi_ref.root, "racine");
-        assert_eq!(pi_seg.nullifiers, pi_ref.nullifiers, "nullifiers");
-        assert_eq!(
-            pi_seg.output_commitments, pi_ref.output_commitments,
-            "commitments de sortie"
-        );
-        assert_eq!(pi_seg.fee, pi_ref.fee, "fee");
-        assert_eq!(pi_seg.depth, pi_ref.depth, "profondeur");
     }
 
     fn indices_non_nuls(col: &[BaseElement]) -> Vec<usize> {

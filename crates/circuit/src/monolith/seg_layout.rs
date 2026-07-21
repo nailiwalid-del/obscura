@@ -6,8 +6,8 @@
 //! `[KEY] → [IN0] → [IN1] → [OUT0] → [OUT1] → [blinding]`. Chaque segment occupe
 //! `seg_len(kind, depth)` lignes contiguës (une longueur uniforme calée sur le
 //! chemin de Merkle gaspillait ~480 lignes sur KEY/OUT et quadruplait la trace) ;
-//! le schedule 2-in/2-out est FIGÉ mais construit à partir d'une liste de types
-//! (`SegKind`) — c'est la **couture** que 3z-c2 fera varier (M-in/N-out).
+//! le schedule est construit à partir d'une liste de types (`SegKind`) et VARIE
+//! avec la forme depuis 3z-c2 (M-in/N-out, `Forme`).
 //!
 //! **Décision de géométrie (parallélisme intra-segment)** : dans un segment IN,
 //! la pile d'éponge cm→feuille→nullifier (56 lignes) et le chemin de Merkle
@@ -23,9 +23,8 @@
 //! (exception DOCUMENTÉE : le bloc KEY, 24 colonnes, déborde de 4 colonnes sur le
 //! groupe Merkle — inactif sur un segment KEY, gaté par le sélecteur de type).
 
-// Bloc groupé : ces constantes sont LUES par `trace.rs`/`air.rs` (Tâches 2-3 de
-// 3z-c1), atteignables depuis l'API publique du crate (`tx::prove_tx` →
-// `prove_monolith` → `build_monolith_trace`).
+// Bloc groupé : ces constantes sont LUES par `seg_trace.rs`/`seg_air.rs`,
+// atteignables depuis l'API publique du crate (`tx::prove_tx` → `prove_seg_forme`).
 mod plan {
     use crate::rescue_round::STATE_WIDTH;
     use crate::sponge::TRACE_WIDTH as SPONGE_W;
@@ -91,18 +90,19 @@ mod plan {
     const VOUT_C_0: usize = VIN_C_1 + 1;
     const VOUT_C_1: usize = VOUT_C_0 + 1;
 
-    // Porteuses 2/2 figées — depuis C2-T3, l'AIR indexe par `Forme::{rho_c,…}`. Ne
-    // restent LUES que par le test d'équivalence `forme_2_2_identique_aux_constantes`,
-    // qui verrouille que la forme reproduit ces valeurs. À retirer en C2-T8.
-    #[cfg_attr(not(test), allow(dead_code))]
+    // Porteuses 2/2 ÉPINGLÉES, test-only (C2-T8) — depuis C2-T3, l'AIR indexe par
+    // `Forme::{rho_c,…}`. Ces valeurs restent pour VERROUILLER la géométrie 2/2
+    // (`forme_2_2_identique_aux_constantes`) : la forme 2/2 est du CONSENSUS, sa
+    // disposition ne doit pas dériver en silence sous un refactor de `Forme`.
+    #[cfg(test)]
     pub(crate) const RHO_C: [usize; 2] = [RHO_C_0, RHO_C_1];
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) const CM_C: [usize; 2] = [CM_C_0, CM_C_1];
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) const LEAF_C: [usize; 2] = [LEAF_C_0, LEAF_C_1];
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) const VIN_C: [usize; 2] = [VIN_C_0, VIN_C_1];
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) const VOUT_C: [usize; 2] = [VOUT_C_0, VOUT_C_1];
 
     /// Accumulateur d'équilibre chaîné à travers TOUS les segments : démarre à 0
@@ -163,6 +163,9 @@ mod plan {
     pub(crate) const BLIND_ROWS: usize = 40;
 
     /// Nombre de segments du schedule 2-in/2-out figé (1 KEY + 2 IN + 2 OUT).
+    /// Test-only depuis C2-T8, comme le reste de la forme 2/2 épinglée
+    /// (production : `Forme::n_segments`).
+    #[cfg(test)]
     pub(crate) const N_SEGMENTS: usize = 5;
 
     /// Type d'un segment — la couture 3z-c2 : la généralisation M-in/N-out fera
@@ -174,7 +177,10 @@ mod plan {
         Output,
     }
 
-    /// Schedule figé de la forme 2-in/2-out (3z-c1, parité avec le côte-à-côte).
+    /// Schedule figé de la forme 2-in/2-out (3z-c1). Test-only depuis C2-T8 :
+    /// le schedule de production sort de `Forme::seg_kind` ; celui-ci reste la
+    /// référence ÉPINGLÉE de la forme historique.
+    #[cfg(test)]
     pub(crate) fn schedule_2in2out() -> [SegKind; N_SEGMENTS] {
         [
             SegKind::Key,
@@ -202,10 +208,10 @@ mod plan {
         core::cmp::max(MIN_IN_LEN, MERKLE_LEVEL_ROWS * depth)
     }
 
-    /// Ligne de début du segment `i` du schedule : somme CUMULÉE des longueurs
-    /// des segments précédents (frontières irrégulières — au consensus :
-    /// 0, 8, 520, 1032, 1096). Pavage contigu, sans trou ni chevauchement.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Ligne de début du segment `i` du schedule 2/2 : somme CUMULÉE des longueurs
+    /// des segments précédents. Test-only depuis C2-T8 (production :
+    /// `Forme::seg_start`) — référence épinglée de la forme historique.
+    #[cfg(test)]
     pub(crate) fn seg_start(i: usize, depth: usize) -> usize {
         schedule_2in2out()[..i]
             .iter()
@@ -213,8 +219,9 @@ mod plan {
             .sum()
     }
 
-    /// Lignes utiles (contraintes + assertions) : somme des longueurs des
-    /// segments du schedule (au consensus : 16 + 2·512 + 2·64 = 1168).
+    /// Lignes utiles 2/2 (au consensus : 16 + 2·512 + 2·64 = 1168). Test-only
+    /// depuis C2-T8 (production : `Forme::used_rows`).
+    #[cfg(test)]
     pub(crate) fn used_rows(depth: usize) -> usize {
         schedule_2in2out()
             .iter()
@@ -222,11 +229,10 @@ mod plan {
             .sum()
     }
 
-    /// Longueur de trace pour une profondeur d'arbre donnée : lignes utiles +
-    /// lignes de blinding, arrondies à la puissance de 2 supérieure (winterfell).
-    /// (Depuis C2-T2, le constructeur passe par `Forme::trace_len` ; cette forme
-    /// libre reste la référence des tests d'équivalence 2/2. À retirer en C2-T8.)
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Longueur de trace 2/2 : lignes utiles + blinding, puissance de 2
+    /// supérieure (winterfell). Test-only depuis C2-T8 (production :
+    /// `Forme::trace_len`) — référence épinglée de la forme historique.
+    #[cfg(test)]
     pub(crate) fn trace_len(depth: usize) -> usize {
         (used_rows(depth) + BLIND_ROWS).next_power_of_two()
     }
@@ -234,11 +240,10 @@ mod plan {
     // ============================================================================
     // FORME VARIABLE (3z-c2) : M entrées / N sorties, bornées.
     //
-    // Les constantes 2-in/2-out ci-dessus restent la source des consommateurs
-    // actuels (`seg_trace`, `seg_air`) jusqu'à leur bascule (C2-T2/T3). La forme
-    // les GÉNÉRALISE sans les toucher : `Forme::F22` doit produire exactement les
-    // mêmes valeurs — c'est ce que le test `forme_2_2_identique_aux_constantes`
-    // garantit, et c'est ce qui rend la bascule sans risque.
+    // La forme GÉNÉRALISE la géométrie 2/2 historique : `Forme::F22` doit
+    // produire exactement les valeurs épinglées ci-dessus — c'est ce que le test
+    // `forme_2_2_identique_aux_constantes` garantit. La 2/2 étant la forme de
+    // CONSENSUS la plus peuplée, sa géométrie ne doit jamais dériver en silence.
     // ============================================================================
 
     /// Bornes de forme — constantes de CONSENSUS (les changer = nouvelle version
@@ -269,8 +274,8 @@ mod plan {
         pub n: usize,
     }
 
-    // Consommé hors tests à partir de C2-T2 (trace paramétrée) — le même sursis
-    // annoté que `plan::*` avait connu entre T1 et T2 de 3z-c1. À retirer dès T2.
+    // L'allow couvre les méthodes de commodité consommées seulement par les tests
+    // et les gardes const (F22, …) — le gros de l'impl est sur le chemin de prod.
     #[allow(dead_code)]
     impl Forme {
         /// La forme historique 2-in/2-out — celle des constantes ci-dessus, et la
@@ -598,11 +603,12 @@ mod tests {
         }
     }
 
-    /// LA FORME 2/2 EST BIT-IDENTIQUE AUX CONSTANTES HISTORIQUES.
+    /// LA FORME 2/2 EST BIT-IDENTIQUE AUX CONSTANTES HISTORIQUES ÉPINGLÉES.
     ///
-    /// C'est le test qui rend la bascule C2-T2/T3 sans risque : tant qu'il est
-    /// vert, remplacer une constante par l'appel de méthode équivalent ne peut pas
-    /// changer un seul offset — donc pas une seule contrainte de l'AIR 2/2.
+    /// Né pour rendre la bascule C2-T2/T3 sans risque, conservé après C2-T8 comme
+    /// ÉPINGLE DE CONSENSUS : la 2/2 est la forme par défaut du wallet, des preuves
+    /// existantes s'y vérifient — un refactor de `Forme` qui déplacerait un offset
+    /// changerait l'AIR 2/2 en silence. Tant que ce test est vert, c'est impossible.
     #[test]
     fn forme_2_2_identique_aux_constantes() {
         let f = Forme::F22;

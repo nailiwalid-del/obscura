@@ -328,13 +328,24 @@
 > 2/2 → 67,7 Kio / 3,8 ms (inchangé, non-régression) ; 4/4 → 80,3 Kio / 12,6 ms. La
 > taille croît doucement avec la forme, la vérification reste sous 13 ms au pire cas.
 >
-> ⚠️ **Reste** : le côte-à-côte (oracle de parité 2/2) N'EST PAS encore supprimé —
-> son retrait exige d'extraire ses helpers partagés (`MonolithPublicInputs`,
-> `push_preamble`, les constructeurs de trace) que le segmenté réutilise, un refactor
-> mécanique mais transverse, décidé pour plus tard afin de ne pas toucher du code de
-> consensus à la hâte. Les forges à reconstruction d'arbre restent à profondeur 2
-> (`build_tree_from_leaves` câblé) — dette D8. Le côte-à-côte est `#[allow(dead_code)]`
-> et hors du chemin de production (`tx.rs` passe par le segmenté).
+> **C2-T8 — le côte-à-côte est SUPPRIMÉ** : `monolith/{air,layout,trace}.rs`
+> (~2 600 lignes) sont effacés. Ce que les deux implémentations PARTAGEAIENT — la
+> construction cryptographique : `MonolithPublicInputs` (+ Fiat-Shamir),
+> `push_preamble`, `key_rows`/`sponge_rows_for`/`read_digest`, le témoin 2/2 et
+> les témoins de test — vit désormais dans `monolith/socle.rs`, module SANS layout
+> (pas un offset de colonne). Extraction = pur DÉPLACEMENT : pas un octet de
+> comportement ne change (Fiat-Shamir inchangé, suite verte sans modification des
+> attentes). L'oracle de parité et le bench segmenté-vs-côte-à-côte partent avec
+> lui (leur objet est atteint ; `mesure_formes` reste le bench vivant). Les formes
+> libres 2/2 de `seg_layout` (`RHO_C…`, `schedule_2in2out`, `seg_start`,
+> `used_rows`, `trace_len`, `N_SEGMENTS`) passent en `#[cfg(test)]` : ce ne sont
+> plus des sursis de bascule mais des **épingles de consensus** — la 2/2 est la
+> forme par défaut du wallet, des preuves existantes s'y vérifient, et
+> `forme_2_2_identique_aux_constantes` interdit à un refactor de `Forme` d'en
+> déplacer un offset en silence.
+>
+> ⚠️ **Reste** : les forges à reconstruction d'arbre restent à profondeur 2
+> (`build_tree_from_leaves` câblé) — dette D8.
 
 **Ce statement EST la règle de consensus d'une dépense valide.** Tout le reste du
 protocole s'organise autour de lui. Le mode transparent actuel (`apply_transparent`)

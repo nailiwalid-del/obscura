@@ -13,7 +13,10 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
 
 ## État
 
-- `crates/crypto` : hash, kem, sig, aead — testés
+- `crates/crypto` : hash, kem, sig, aead — testés. KEM **contributif** : les points
+  X25519 d'ordre faible sont rejetés à l'encapsulation ET à la décapsulation
+  (`CryptoError::NonContributif`) — sinon un pair hostile force un DH nul et la moitié
+  courbes disparaît en silence, Kyber portant seul la sécurité.
 - `crates/net` : **transport chiffré PQ** (phase 4, brique 1/4) — handshake hybride
   3 passes avec **forward secrecy** (éphémères jetés) et **masquage d'identité**
   (identités chiffrées sur le fil), machine à états en typestate, canal anti-rejeu
@@ -35,6 +38,11 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   **`bloc`** (finalité) : lot ORDONNÉ chaîné au parent, id = `dual_hash` non tronqué,
   décodage borné (MAX_TX_PAR_BLOC vérifié AVANT allocation ; `const _: () = assert!`
   consigne à la compilation qu'un bloc plein dépasse 30× le cadre réseau).
+  **Plafond de scellement en OCTETS** : `MAX_OCTETS_BLOC` = cadre réseau −
+  `crypto::aead::SURCOUT` − marge message (≈ 1 Mio), vérifié au scellement ET au
+  décodage — MAX_TX_PAR_BLOC borne le NOMBRE, pas le POIDS (~15 tx de 68 Kio
+  suffisent à déborder le cadre), et le cadre borne le CHIFFRÉ, d'où la soustraction
+  du surcoût AEAD (sans elle, un bloc scellé à la borne était indiffusable de 5 o).
   **Émission (genèse seule)** : `Bloc` porte `emissions: Vec<Emission>` et la règle est
   `hauteur > 0 ⇒ emissions.is_empty()` (`BlocRefus::EmissionHorsGenese`), contrôle O(1)
   fait AVANT le chaînage, l'instantané et toute vérification STARK. `mint` est PRIVÉE :
@@ -103,11 +111,14 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   nouvelle sans liste). Soundness variable (C2-T4) : 3 forges D7 (forme liée, fin
   d'équilibre variable, ordre publics↔segments), RED sur chacune. Re-bench prof. 32 :
   1/1 = 55,7 Kio / 1,6 ms ; 2/2 = 67,7 Kio / 3,8 ms (non-régression) ; 4/4 =
-  80,3 Kio / 12,6 ms. ⚠️ Le **côte-à-côte** (201 col, oracle de parité 2/2) n'est
-  PAS encore supprimé — retrait = extraire ses helpers partagés (`MonolithPublicInputs`,
-  `push_preamble`), refactor transverse différé pour ne pas toucher le consensus à la
-  hâte ; il est `#[allow(dead_code)]`, hors chemin de prod. Forges à reconstruction
-  d'arbre encore en profondeur 2 (dette D8).
+  80,3 Kio / 12,6 ms. Le **côte-à-côte** (201 col, oracle de parité 2/2) est
+  SUPPRIMÉ (C2-T8) : ses helpers partagés (`MonolithPublicInputs`, `push_preamble`,
+  `key_rows`/`sponge_rows_for`, témoins de test) vivent dans `monolith/socle.rs`
+  (module SANS layout — pur déplacement, zéro octet de comportement changé), et la
+  géométrie 2/2 reste ÉPINGLÉE par des constantes `#[cfg(test)]` de `seg_layout`
+  (`forme_2_2_identique_aux_constantes` : un refactor de `Forme` ne peut pas
+  déplacer un offset 2/2 en silence — la 2/2 est du consensus). Forges à
+  reconstruction d'arbre encore en profondeur 2 (dette D8).
   Caveat : honnête-vérifieur, prototype non audité (voir docs/STARK_STATEMENT.md,
   « Argument HVZK »). Les gadgets autonomes du crate restent validity-only.
   `ProvedTx` v4 porte les `enc_notes` (enveloppes chiffrées des sorties, une par
@@ -218,8 +229,9 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   décision d'opérateur. ⚠️ Aucune élection de producteur — ordre CONVENU, pas DÉFENDU.
   **Corrections issues de la revue adversariale** (détail : docs/THREAT_MODEL.md,
   « Défauts trouvés par revue adversariale ») : `sceller` PLAFONNE à MAX_TX_PAR_BLOC
-  (une borne de `from_bytes` doit exister aussi dans le CONSTRUCTEUR, sinon elle ne
-  protège que l'entrant) ; `RECENT_ROOTS_WINDOW` = 4 blocs pleins + assertion de
+  ET à MAX_OCTETS_BLOC (une borne de `from_bytes` doit exister aussi dans le
+  CONSTRUCTEUR, sinon elle ne protège que l'entrant — et la variante OCTETS du même
+  défaut est fermée par le plafond de scellement, cf. `crates/ledger`) ; `RECENT_ROOTS_WINDOW` = 4 blocs pleins + assertion de
   compilation (à 100, un bloc chargé purgeait toutes les ancres → transactions en vol
   refusées, et censure à coût nul par un scelleur adverse) ; une VERSION inconnue ne
   pénalise plus (sinon une mise à jour bannit les nœuds en arrière et effondre
@@ -301,16 +313,11 @@ dans un nœud réel, testnet local validé, binaires) — voir « État » ci-de
 pour le circuit, le journal de tête de docs/STARK_STATEMENT.md est LA référence.
 Cap actuel (décision utilisateur) : **complétude/cohérence protocole avant
 sophistication crypto**. Reste :
-1. **3z-c2 — variabilité M-in/N-out ≤ MAX — LIVRÉE (C2-T1..T7)** : circuit,
+1. **3z-c2 — variabilité M-in/N-out ≤ MAX — LIVRÉE (C2-T1..T8)** : circuit,
    trace, AIR, soundness, masquage, ProvedTx v4, wallet (note unique paie,
-   `consolider`, défaut 2/2). Reste C2-T8 partiel : la SUPPRESSION du côte-à-côte
-   (refactor transverse d'extraction de helpers, différé) et les forges à
-   reconstruction d'arbre en profondeur 32 (dette D8). — Ancien texte de suivi :
-   la couture `SegKind`/schedule était
-   en place depuis 3z-c1 ; la bascule supprimera le côte-à-côte (aujourd'hui
-   conservé comme oracle de parité — mêmes publics, même témoin). Restent aussi
-   2 forges non portées (`PaddingMerkle`, `VaccInitial` fine) et les forges à
-   reconstruction d'arbre qui restent en profondeur 2.
+   `consolider`, défaut 2/2), et la SUPPRESSION du côte-à-côte (C2-T8, helpers
+   extraits dans `monolith/socle.rs`). Reste : les forges à reconstruction
+   d'arbre en profondeur 32 (dette D8, `build_tree_from_leaves` câblé prof. 2).
    ⚠️ Piège identifié à ne pas rejouer : mutualiser des colonnes peut SUPPRIMER
    une garantie que la redondance offrait gratuitement (cf. « Liaison de racine »
    dans STARK_STATEMENT.md) — auditer chaque fusion sous cet angle.

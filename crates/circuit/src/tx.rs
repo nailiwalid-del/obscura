@@ -2,8 +2,8 @@
 //!
 //! Remplace l'assemblage v1 (3b5, composition de 15 sous-preuves : `prove_key` +
 //! 2×`prove_spend` + 2×`prove_output` + équilibre natif) par UNE SEULE preuve
-//! STARK — celle du monolithe (`monolith::air::prove_monolith`), qui établit
-//! **P1–P7 pour la transaction entière** (clé, deux dépenses, deux sorties,
+//! STARK — celle du monolithe segmenté (`monolith::seg_air::prove_seg_forme`), qui
+//! établit **P1–P7 pour la transaction entière** (clé, dépenses, sorties,
 //! équilibre, TOUTES les liaisons inter-segments) dans une trace unique.
 //!
 //! Publics MINIMAUX : racine, les deux nullifiers, les deux commitments de sortie,
@@ -21,18 +21,19 @@
 //! d'ownership : celle-ci vient de la liaison `owner = H_owner(secret)` DANS le monolithe.
 //! La signature hybride d'intention reste une enveloppe anti-malléabilité, PAS une
 //! autorisation d'ownership : l'autorité vient de la liaison `owner = H_owner(secret)`
-//! DANS le monolithe (contrainte AIR, cf. `monolith::air` « liaisons par porteuses »).
+//! DANS le monolithe (contrainte AIR, cf. `monolith::seg_air`, liaisons par porteuses).
 //!
-//! ⚠️ **À générer en `--release`** (AIR du monolithe gatée, cf. `monolith::air`).
+//! ⚠️ **À générer en `--release`** (AIR du monolithe gatée, cf. `monolith::seg_air`).
 
-// BASCULE 3z-c1 (T6) : `tx.rs` passe du monolithe CÔTE-À-CÔTE au monolithe
-// SEGMENTÉ. L'API publique est INCHANGÉE — c'est tout l'objet du contrat de parité
-// (mêmes publics pour le même témoin, cf. `seg_air::parite_publics_*`), et c'est
-// pourquoi la bascule tient en un import. Gain mesuré à la profondeur consensus :
-// preuve 67,4 Kio au lieu de 90,4 (−25 %), pour 1,34× en génération et 1,64× en
-// vérification (4,0 ms — négligeable). La taille est le coût PERMANENT, payé par
-// chaque nœud qui stocke et relaie chaque transaction.
-use crate::monolith::air::MonolithPublicInputs;
+// BASCULE 3z-c1 (T6) : `tx.rs` est passé du monolithe CÔTE-À-CÔTE au monolithe
+// SEGMENTÉ. L'API publique était INCHANGÉE — c'était tout l'objet du contrat de
+// parité (mêmes publics pour le même témoin), et c'est pourquoi la bascule a tenu
+// en un import ; l'oracle côte-à-côte a été SUPPRIMÉ en C2-T8 (cf. `monolith`).
+// Gain mesuré à la profondeur consensus : preuve 67,4 Kio au lieu de 90,4 (−25 %),
+// pour 1,34× en génération et 1,64× en vérification (4,0 ms — négligeable). La
+// taille est le coût PERMANENT, payé par chaque nœud qui stocke et relaie chaque
+// transaction.
+use crate::monolith::socle::MonolithPublicInputs;
 use crate::monolith::seg_air::{
     verify_seg_monolith as verify_monolith,
 };
@@ -197,7 +198,7 @@ fn felts_to_digest(f: &[BaseElement; DIGEST_FELTS]) -> Digest {
 /// chemins de même profondeur cohérents avec un même arbre, équilibre respecté,
 /// montants `< 2^60`. Une entrée qui ne respecte pas ces préconditions ne fait PAS
 /// paniquer la construction : elle produit une preuve que `verify_tx` rejette (la
-/// liaison correspondante mord dans l'AIR du monolithe, cf. `monolith::air`).
+/// liaison correspondante mord dans l'AIR du monolithe, cf. `monolith::seg_air`).
 pub fn prove_tx(
     secret: &ShieldedSecret,
     inputs: [ProvedInput; 2],
@@ -574,10 +575,10 @@ mod tests {
     /// prouveur ET le vérificateur utilisent donc le MÊME `fee` faux (999) alors que
     /// la trace réelle atteint `S = 20`, l'assertion est fausse relativement à la
     /// trace commise : aucun panic (aucune vérification hors-circuit de l'équilibre
-    /// dans `build_monolith_trace`/`prove_monolith`), mais la preuve — bien générée —
-    /// ne peut pas satisfaire une assertion fausse et `verify_monolith` (donc
-    /// `verify_tx`) rejette. Même mécanisme que la falsification de `fee` dans
-    /// `monolith::air::tests::roundtrip_monolithe`, ici appliqué AVANT la preuve
+    /// dans le constructeur de trace ni le prouveur), mais la preuve — bien
+    /// générée — ne peut pas satisfaire une assertion fausse et la vérification
+    /// (donc `verify_tx`) rejette. Même mécanisme que la falsification de `fee`
+    /// dans les roundtrips de `monolith::seg_air`, ici appliqué AVANT la preuve
     /// plutôt qu'après.
     #[test]
     #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
@@ -673,15 +674,14 @@ mod tests {
     }
 
     /// Entrée d'un AUTRE owner : la note 0 porte `owner = digest(9999)` ≠
-    /// `H_owner(secret)`. `build_monolith_trace` ne fait AUCUN assert d'égalité — le
-    /// commitment est construit avec l'owner mensonger tel quel (comme le ferait un
-    /// prouveur malhonnête), et l'arbre/le chemin restent self-consistants avec ce
+    /// `H_owner(secret)`. Le constructeur de trace ne fait AUCUN assert d'égalité —
+    /// le commitment est construit avec l'owner mensonger tel quel (comme le ferait
+    /// un prouveur malhonnête), et l'arbre/le chemin restent self-consistants avec ce
     /// commitment (`proved_root == root` tient). SEULE la contrainte AIR de liaison
-    /// owner (« Consommation @0 » de `monolith::air::evaluate_transition`, qui force
-    /// l'owner consommé par le commitment de l'entrée == l'owner produit par la clé
-    /// dérivée du secret) mord — exactement le mécanisme de
-    /// `monolith::air::tests::liaison_owner_mord`, ici exercé via l'API publique
-    /// `prove_tx`/`verify_tx` plutôt que par forge white-box directe de la trace.
+    /// owner mord (l'owner consommé par le commitment de l'entrée == l'owner produit
+    /// par la clé dérivée du secret) — exactement le mécanisme des forges de liaison
+    /// de `monolith::seg_air`, ici exercé via l'API publique `prove_tx`/`verify_tx`
+    /// plutôt que par forge white-box directe de la trace.
     #[test]
     #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
     fn entree_d_un_autre_owner_rejetee() {

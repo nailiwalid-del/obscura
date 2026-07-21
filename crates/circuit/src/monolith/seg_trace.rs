@@ -1,28 +1,28 @@
 //! Constructeur de trace du monolithe SEGMENTÉ (3z-c1, tâche T2).
 //!
-//! Contrairement au monolithe côte-à-côte (`super::trace`), qui range chaque
-//! entrée/sortie dans SES PROPRES colonnes sur les mêmes lignes, celui-ci empile
-//! les unités en **segments séquentiels de lignes** partageant les MÊMES colonnes :
-//! `[KEY][IN0][IN1][OUT0][OUT1]` puis les lignes de blinding. C'est ce qui permettra
-//! (3z-c2) de faire varier le NOMBRE d'entrées/sorties sans exploser la largeur —
-//! le côte-à-côte plafonne à ~255 colonnes.
+//! Contrairement au monolithe côte-à-côte historique (3z-b1, supprimé en C2-T8),
+//! qui rangeait chaque entrée/sortie dans SES PROPRES colonnes sur les mêmes
+//! lignes, celui-ci empile les unités en **segments séquentiels de lignes**
+//! partageant les MÊMES colonnes : `[KEY][IN×m][OUT×n]` puis les lignes de
+//! blinding. C'est ce qui permet (3z-c2) de faire varier le NOMBRE
+//! d'entrées/sorties sans exploser la largeur — le côte-à-côte plafonnait à
+//! ~255 colonnes.
 //!
 //! Ce module ne fait tourner AUCUN prouveur : il est la RÉFÉRENCE DIFFÉRENTIELLE
 //! de la disposition segmentée (les cellules produites doivent coïncider avec
-//! `rescue::note_commitment`, `merkle::leaf`, `merkle::fold`), exactement comme
-//! `super::trace` l'est pour le côte-à-côte. L'AIR segmentée est la tâche T3.
+//! `rescue::note_commitment`, `merkle::leaf`, `merkle::fold`). L'AIR segmentée
+//! vit dans `seg_air`.
 //!
-//! **Construit À CÔTÉ de l'existant** (cf. `super::mod`) : les gadgets de lignes
-//! (`key_rows`, `sponge_rows_for`, `merkle_path::path_rows`) sont RÉUTILISÉS tels
-//! quels depuis `super::trace` — les deux monolithes partagent donc la même
-//! construction cryptographique, seule la DISPOSITION change. C'est ce qui rend
-//! l'oracle de parité crédible.
+//! Les gadgets de lignes (`key_rows`, `sponge_rows_for`, `merkle_path::path_rows`)
+//! viennent du socle partagé (`super::socle`) — la même construction
+//! cryptographique que le côte-à-côte utilisait, seule la DISPOSITION diffère.
+//! C'est ce qui rendait l'oracle de parité crédible tant qu'il a existé.
 //!
 //! Witness-hiding (3z-b1) : la région `[used_rows, trace_len)` est remplie d'aléa
-//! frais sur toutes les colonnes, comme dans le côte-à-côte.
+//! frais sur toutes les colonnes.
 
 use super::seg_layout::*;
-use super::trace::{
+use super::socle::{
     felt_alea, key_rows, key_rows_split, read_digest, sponge_rows_for, MonolithWitness,
     KEY_NK_LOCAL_OFF,
 };
@@ -77,9 +77,9 @@ impl SegWitness {
         self.forme
     }
 
-    /// Conversion depuis le témoin 2/2 historique — le pont de parité : tant que
-    /// `prove_seg_monolith` prend un `MonolithWitness`, l'oracle côte-à-côte et
-    /// toute la suite 2/2 tournent sur le chemin GÉNÉRALISÉ via cette conversion.
+    /// Conversion depuis le témoin 2/2 historique : `prove_seg_monolith` prend un
+    /// `MonolithWitness`, et toute la suite 2/2 tourne sur le chemin GÉNÉRALISÉ
+    /// via cette conversion.
     pub(crate) fn depuis_2in2out(w: &MonolithWitness) -> SegWitness {
         SegWitness::new(
             w.secret.clone(),
@@ -91,8 +91,8 @@ impl SegWitness {
     }
 }
 
-/// Recopie `rows` dans le tampon segmenté à `(row_off, col_off)`. Pendant de
-/// `super::trace::segment`, mais pour la largeur `WIDTH` du layout SEGMENTÉ.
+/// Recopie `rows` (segment de lignes × colonnes) dans le tampon segmenté à
+/// `(row_off, col_off)`, à la largeur du TAMPON (`WIDTH_MAX`).
 fn seg_copy<const N: usize>(
     dst: &mut [[BaseElement; WIDTH_MAX]],
     rows: &[[BaseElement; N]],
@@ -460,7 +460,7 @@ fn build_seg_trace_interne(
         assert_eq!(f, Forme::F22, "forge à reconstruction d'arbre : 2/2 seulement (C2-T4)");
         let f0 = feuille_injectee(w, 0, forge);
         let f1 = feuille_injectee(w, 1, forge);
-        let (_root, p0, p1) = super::trace::build_tree_from_leaves(&f0, &f1);
+        let (_root, p0, p1) = super::socle::build_tree_from_leaves(&f0, &f1);
         vec![p0, p1]
     } else {
         chemins_temoin()
@@ -502,8 +502,10 @@ fn build_seg_trace_interne(
         match kind {
             SegKind::Key => {
                 // Aucune contribution à l'équilibre : `S` reste constant, bits à 0.
+                // (Colonne S de LA FORME — pas la constante 2/2 : sur une autre
+                // forme, S_COL pointerait dans les porteuses.)
                 for r in 0..seg_rows {
-                    rows[start + r][S_COL] = s;
+                    rows[start + r][f.s_col()] = s;
                 }
             }
             SegKind::Input => {
@@ -679,7 +681,7 @@ fn build_seg_trace_interne(
 /// partiel) et la colonne PARTAGÉE `S_COL`, et retourne la valeur de `S` après le
 /// segment.
 ///
-/// Sémantique reprise telle quelle du côte-à-côte (`super::trace::fill_balance`),
+/// Sémantique reprise telle quelle du `fill_balance` du côte-à-côte historique,
 /// mais par segment : `S` porté par la ligne est la somme signée AVANT la
 /// contribution de cette ligne ; `VACC` est la valeur partielle reconstruite depuis
 /// les bits, remise à 0 au début du segment. Les lignes au-delà de `RANGE_BITS`
