@@ -138,7 +138,10 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   empreinte `dual_hash` NON tronquée (un octet retourné dans un montant donnerait
   sinon un solde faux sans erreur), cohérence croisée note↔arbre au chargement.
   Aucune variante « charger ou créer » : un fichier illisible ne doit jamais devenir
-  un wallet vide. ⚠️ NON chiffré au repos.
+  un wallet vide. Chiffré au repos (Argon2id + cascade AEAD, `Protection` obligatoire
+  et explicite — `Aucune` est un choix assumé, jamais un défaut) ; un fichier en clair
+  n'est relu QUE sous `Protection::Aucune` (phrase fournie ⇒ `FichierEnClair`, la
+  migration est un geste : `OBSCURA_WALLET_MIGRER=1` côté CLI).
   `oublier_depensees(&tx)` reconnaît nos notes en RECALCULANT leurs nullifiers —
   marche donc sur toute transaction observée, pas seulement les nôtres.
   **`synchro`** (rejeu de l'historique, synchronisation 3/3) : `Wallet::synchroniser`
@@ -276,9 +279,7 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   qui ne pilote rien (la position n'avance que sur la tranche demandée) ; `hauteur_tete <
   hauteur` est refusé au décodage. Testé sur sockets réelles
   (`crates/node/tests/synchronisation.rs`).
-  ⚠️ Restent : `executer` tient le verrou pendant l'écriture ; le service de BLOCS
-  n'est **pas étranglé** (amplification 9 o → jusqu'à 34 Mio ; le seau écrit lui est
-  applicable tel quel, il n'y est pas branché) ; `ArchiveBlocs` (blocs récents,
+  ⚠️ Restent : `executer` tient le verrou pendant l'écriture ; `ArchiveBlocs` (blocs récents,
   rattrapage) NON persistée — à ne pas confondre avec l'historique des sorties, qui
   l'est ; un nœud sur une chaîne DIVERGENTE ne se répare pas (état append-only) ;
   le découpage multi-morceaux n'est testé qu'au niveau du FORMAT (une genèse plafonne à
@@ -322,8 +323,9 @@ sophistication crypto**. Reste :
    privée) ; une coinbase reste hors périmètre. Ce qui reste ouvert (cf.
    docs/THREAT_MODEL.md) : le nœud servant apprend IP/cadence/position et peut MENTIR PAR
    OMISSION ; le rôle d'archiviste est coûteux ; l'arbre du wallet reste en O(n).
-3. Persistance du wallet ✅ / du nœud ✅ / CLI ✅ / genèse paramétrée ✅ (faits) ;
-   reste le chiffrement au repos du fichier de wallet (Argon2 + saisie interactive).
+3. Persistance du wallet ✅ / du nœud ✅ / CLI ✅ / genèse paramétrée ✅ /
+   chiffrement au repos du fichier de wallet ✅ (Argon2id + cascade AEAD, choix
+   explicite, migration par `OBSCURA_WALLET_MIGRER=1`) — tous faits.
 
 ## Décisions v0.2 (revue intégrée — ne pas régresser)
 

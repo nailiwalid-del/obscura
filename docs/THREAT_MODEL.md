@@ -522,9 +522,11 @@ prend historique ET identifiants de blocs au MEME noeud n'a rien verifie.
   groupe inconnu n'est pas servi tant qu'aucun seau n'est revenu a plein. Occuper toutes
   les places exige 1 024 groupes reseau distincts ; le deni obtenu ne porte que sur le
   service d'historique, jamais sur le consensus, la propagation ou le rattrapage.
-- **Le service de BLOCS (`sur_demande_bloc`) n'est toujours pas etrangle.** Son
-  amplification (9 octets → jusqu'a 34 Mio) reste ouverte : le seau ecrit ici lui est
-  applicable tel quel, il n'y est pas branche.
+- **Le service de BLOCS (`sur_demande_bloc`) est etrangle depuis** : le meme seau a
+  jetons, indexe sur `GroupeReseau`, y est branche (fail-closed sans adresse connue,
+  silence a credit epuise — indistinguable des autres silences). L'amplification
+  residuelle est celle d'UN bloc par jeton (9 octets → jusqu'a ~1 Mio par cadre),
+  au meme tarif que le service d'historique.
 - L'etranglement se fonde sur l'adresse SOURCE observee : un adversaire derriere un NAT
   partage le seau de son voisin, et un adversaire disposant reellement de nombreux
   prefixes obtient autant de seaux. Rendre l'attaque chere et visible, pas impossible.
