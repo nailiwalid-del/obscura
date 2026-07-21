@@ -99,6 +99,81 @@ pub(crate) enum SegForge {
     /// commitment. C'est LA liaison anti-double-dépense : sans elle un nullifier
     /// peut être calculé sur un autre commitment que celui réellement dépensé.
     CmNullifier(usize, Digest),
+
+    // --- Forges qui altèrent le COMMITMENT ou la FEUILLE : elles changent la
+    //     racine, donc l'arbre est REBÂTI (cf. `rebatit_arbre`) pour que les deux
+    //     entrées restent sur la MÊME racine — sans quoi `root_in` mordrait à la
+    //     place de la liaison visée et le test ne prouverait rien. ---
+    /// `owner` CONSOMMÉ dans le commitment de l'entrée `i` ≠ owner produit par la
+    /// clé (porteuse `OWNER_C` honnête). Sans cette liaison, un prouveur dépense
+    /// une note dont il n'est PAS le propriétaire.
+    OwnerConsomme(usize, Digest),
+    /// `rho` CONSOMMÉ dans le COMMITMENT de l'entrée `i` (cellules @7, DISJOINTES
+    /// du côté nullifier ciblé par `RhoNullifier`) ≠ rho de la porteuse.
+    RhoCommitment(usize, Digest),
+    /// `cm` CONSOMMÉ dans la FEUILLE de l'entrée `i` ≠ cm produit par le commitment.
+    CmFeuille(usize, Digest),
+    /// Feuille INJECTÉE dans le chemin de l'entrée `i` ≠ feuille produite par
+    /// l'éponge (porteuse `LEAF_C` honnête).
+    LeafChemin(usize, Digest),
+}
+
+impl SegForge {
+    /// `true` si la forge change une feuille injectée dans l'arbre : il faut alors
+    /// rebâtir l'arbre pour que les deux entrées gardent la MÊME racine.
+    fn rebatit_arbre(self) -> bool {
+        matches!(
+            self,
+            SegForge::OwnerConsomme(..)
+                | SegForge::RhoCommitment(..)
+                | SegForge::CmFeuille(..)
+                | SegForge::LeafChemin(..)
+        )
+    }
+
+    /// Owner à CONSOMMER dans le commitment de l'entrée `i` (honnête par défaut).
+    fn owner_commit(self, i: usize, honnete: Digest) -> Digest {
+        match self {
+            SegForge::OwnerConsomme(fi, a) if fi == i => a,
+            _ => honnete,
+        }
+    }
+
+    /// Rho à CONSOMMER dans le commitment de l'entrée `i`.
+    fn rho_commit(self, i: usize, honnete: Digest) -> Digest {
+        match self {
+            SegForge::RhoCommitment(fi, a) if fi == i => a,
+            _ => honnete,
+        }
+    }
+
+    /// Cm à CONSOMMER dans la feuille de l'entrée `i`.
+    fn cm_feuille(self, i: usize, honnete: Digest) -> Digest {
+        match self {
+            SegForge::CmFeuille(fi, a) if fi == i => a,
+            _ => honnete,
+        }
+    }
+
+    /// Feuille à INJECTER dans le chemin de l'entrée `i`.
+    fn leaf_chemin(self, i: usize, honnete: Digest) -> Digest {
+        match self {
+            SegForge::LeafChemin(fi, a) if fi == i => a,
+            _ => honnete,
+        }
+    }
+}
+
+/// Feuille qui sera réellement injectée dans l'arbre pour l'entrée `i`, forges
+/// comprises. Utilisé par la pré-passe de reconstruction d'arbre.
+fn feuille_injectee(w: &MonolithWitness, i: usize, forge: SegForge) -> Digest {
+    let note = &w.inputs[i].note;
+    let owner = forge.owner_commit(i, note.owner);
+    let rho = forge.rho_commit(i, note.rho);
+    let cm = proved_hash::rescue::note_commitment(note.value, &owner, &rho, &note.r);
+    let cm_leaf = forge.cm_feuille(i, cm);
+    let leaf = proved_hash::merkle::leaf(&cm_leaf);
+    forge.leaf_chemin(i, leaf)
 }
 
 /// Construit la trace segmentée avec un aléa de blinding tiré d'`OsRng`
@@ -155,6 +230,27 @@ fn build_seg_trace_interne(
     let mut rows = vec![[BaseElement::ZERO; WIDTH]; len];
     let schedule = schedule_2in2out();
 
+    // Pré-passe de RECONSTRUCTION D'ARBRE. Une forge qui altère le commitment ou la
+    // feuille change la racine repliée : si on gardait les chemins du témoin, les
+    // deux entrées se replieraient vers des racines DIFFÉRENTES et c'est `root_in`
+    // qui mordrait — masquant la liaison qu'on veut tester. On rebâtit donc l'arbre
+    // sur les feuilles réellement injectées, pour que la trace reste
+    // self-consistante et que SEULE la liaison visée diffère.
+    // (La reconstruction est gatée `cfg(test)` : hors tests, `forge` vaut toujours
+    // `Aucune` et les chemins sont ceux du témoin.)
+    let chemins_temoin = || [w.inputs[0].path.clone(), w.inputs[1].path.clone()];
+    #[cfg(test)]
+    let chemins: [Vec<Digest>; 2] = if forge.rebatit_arbre() {
+        let f0 = feuille_injectee(w, 0, forge);
+        let f1 = feuille_injectee(w, 1, forge);
+        let (_root, p0, p1) = super::trace::build_tree_from_leaves(&f0, &f1);
+        [p0, p1]
+    } else {
+        chemins_temoin()
+    };
+    #[cfg(not(test))]
+    let chemins: [Vec<Digest>; 2] = chemins_temoin();
+
     // --- Segment KEY : owner ∧ nk du MÊME secret. ---
     let key_i = 0;
     debug_assert_eq!(schedule[key_i], SegKind::Key);
@@ -197,15 +293,21 @@ fn build_seg_trace_interne(
                 let note = &input.note;
 
                 // cm = H_NoteCommitment(value ‖ owner ‖ rho ‖ r) — lignes 0..32.
+                // Forges OwnerConsomme / RhoCommitment : on réécrit l'opérande
+                // CONSOMMÉ ici, les porteuses OWNER_C/RHO_C restant honnêtes.
+                let owner_commit = forge.owner_commit(n_in, note.owner);
+                let rho_commit = forge.rho_commit(n_in, note.rho);
                 let cm_payload =
-                    note_commit_payload(note.value, &note.owner, &note.rho, &note.r);
+                    note_commit_payload(note.value, &owner_commit, &rho_commit, &note.r);
                 let cm_rows = sponge_rows_for(Domain::NoteCommitment, &cm_payload);
                 debug_assert_eq!(cm_rows.len(), CM_ROWS_END - CM_ROWS_START);
                 seg_copy(&mut rows, &cm_rows, start + CM_ROWS_START, SEG_SPONGE_OFF);
                 let cm = read_digest(&cm_rows, cm_rows.len() - 1, RATE_START);
 
                 // feuille = H_MerkleLeaf(cm) — lignes 32..40.
-                let leaf_rows = sponge_rows_for(Domain::MerkleLeaf, &cm.0);
+                // Forge CmFeuille : cm consommé ici ≠ cm produit (porteuse honnête).
+                let cm_leaf = forge.cm_feuille(n_in, cm);
+                let leaf_rows = sponge_rows_for(Domain::MerkleLeaf, &cm_leaf.0);
                 debug_assert_eq!(leaf_rows.len(), LEAF_ROWS_END - LEAF_ROWS_START);
                 seg_copy(&mut rows, &leaf_rows, start + LEAF_ROWS_START, SEG_SPONGE_OFF);
                 let leaf_d = read_digest(&leaf_rows, leaf_rows.len() - 1, RATE_START);
@@ -235,7 +337,11 @@ fn build_seg_trace_interne(
 
                 // Chemin de Merkle, EN PARALLÈLE de la pile d'éponge (colonnes
                 // disjointes) : lignes locales 0..16·depth.
-                let m_rows = crate::merkle_path::path_rows(&leaf_d, &input.path, input.index);
+                // Forge LeafChemin : feuille injectée ≠ feuille produite. Les chemins
+                // viennent de la pré-passe (rebâtis si la forge change une feuille).
+                let leaf_injectee = forge.leaf_chemin(n_in, leaf_d);
+                let m_rows =
+                    crate::merkle_path::path_rows(&leaf_injectee, &chemins[n_in], input.index);
                 debug_assert_eq!(m_rows.len(), MERKLE_LEVEL_ROWS * depth);
                 debug_assert!(m_rows.len() <= seg_rows, "le chemin tient dans le segment");
                 seg_copy(&mut rows, &m_rows, start, SEG_MERKLE_OFF);

@@ -1364,6 +1364,49 @@ mod tests {
         );
     }
 
+    /// FORGES (RED) des liaisons COMMITMENT et FEUILLE, ré-ancrées par segment.
+    ///
+    /// Contrairement aux forges du nullifier, celles-ci changent la feuille injectée
+    /// dans l'arbre. Le constructeur REBÂTIT donc l'arbre sur les feuilles
+    /// réellement injectées, pour que les deux entrées restent sur la MÊME racine :
+    /// sans ça, `root_in` mordrait à la place de la liaison visée et le verdict
+    /// négatif ne prouverait rien sur la liaison testée.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
+    fn forges_liaisons_commitment_feuille_rejetees() {
+        use crate::monolith::seg_trace::SegForge;
+        use proved_hash::digest::Digest;
+        use proved_hash::felt::Felt;
+
+        let dg = |seed: u64| {
+            Digest(core::array::from_fn(|i| {
+                Felt::from_canonical_u64(seed + i as u64).unwrap()
+            }))
+        };
+
+        // owner consommé dans le commitment ≠ owner produit par la clé : dépense
+        // d'une note dont le prouveur n'est PAS propriétaire.
+        assert!(
+            !verdict_forge(SegForge::OwnerConsomme(0, dg(8080))),
+            "liaison OWNER doit mordre (sinon dépense du bien d'autrui)"
+        );
+        // rho consommé côté COMMITMENT (cellules disjointes du côté nullifier).
+        assert!(
+            !verdict_forge(SegForge::RhoCommitment(1, dg(8181))),
+            "liaison RHO (côté commitment) doit mordre"
+        );
+        // cm consommé dans la feuille ≠ cm produit par le commitment.
+        assert!(
+            !verdict_forge(SegForge::CmFeuille(0, dg(8282))),
+            "liaison CM (côté feuille) doit mordre"
+        );
+        // feuille injectée dans le chemin ≠ feuille produite par l'éponge.
+        assert!(
+            !verdict_forge(SegForge::LeafChemin(1, dg(8383))),
+            "liaison FEUILLE↔CHEMIN doit mordre"
+        );
+    }
+
     /// ORACLE DE PARITÉ — le test que la construction côte à côte rend possible :
     /// le MÊME témoin doit produire les MÊMES publics par les deux monolithes.
     ///

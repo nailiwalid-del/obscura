@@ -515,7 +515,7 @@ pub(crate) enum Forge {
 /// deux feuilles muettes), miroir de `build_tree` mais sans re-hacher les cm — utilisé
 /// par la forge pour reconstruire un arbre cohérent après réécriture d'une feuille.
 #[cfg(test)]
-fn build_tree_from_leaves(leaf0: &Digest, leaf1: &Digest) -> (Digest, Vec<Digest>, Vec<Digest>) {
+pub(crate) fn build_tree_from_leaves(leaf0: &Digest, leaf1: &Digest) -> (Digest, Vec<Digest>, Vec<Digest>) {
     use proved_hash::merkle;
     let l0 = *leaf0;
     let l1 = merkle::leaf(&digest(9001));
