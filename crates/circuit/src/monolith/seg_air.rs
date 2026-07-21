@@ -1,11 +1,15 @@
-//! AIR du monolithe SEGMENTÉ (3z-c1, tâche T3) — **étape 1 : les sélecteurs**.
+//! AIR du monolithe SEGMENTÉ (3z-c1, tâche T3) — **sélecteurs et inventaire
+//! périodique** (étapes 1 et 2a).
 //!
-//! Ce module porte les colonnes périodiques « pleine longueur » de la disposition
-//! segmentée. Elles sont écrites comme des FONCTIONS PURES, testables sans faire
-//! tourner le moindre prouveur : une erreur de sélecteur se traduirait sinon par
-//! un échec de preuve illisible en `--release`, le pire mode de débogage sur un
-//! circuit. L'implémentation du trait `winterfell::Air` (transitions, assertions,
-//! degrés) est l'étape 2.
+//! Ce module porte les colonnes périodiques de la disposition segmentée, écrites
+//! comme des FONCTIONS PURES et testables sans faire tourner le moindre prouveur :
+//! une erreur de sélecteur se traduirait sinon par un échec de preuve illisible en
+//! `--release`, le pire mode de débogage sur un circuit.
+//!
+//! Il expose ensuite `build_periodic`, qui construit TOUTES les colonnes **et leurs
+//! index nommés en un seul passage** (`PeriodicIdx`). L'implémentation du trait
+//! `winterfell::Air` (transitions, assertions, degrés) est l'étape 2b et lira ces
+//! champs nommés — jamais des indices en dur.
 //!
 //! # Le renversement par rapport au côte-à-côte
 //!
@@ -196,6 +200,196 @@ pub(crate) fn blind_off(depth: usize, l: usize) -> Vec<BaseElement> {
             }
         })
         .collect()
+}
+
+// ================================================================================================
+// INVENTAIRE NOMMÉ DES COLONNES PÉRIODIQUES
+// ================================================================================================
+//
+// Le côte-à-côte indexe ses 49 colonnes périodiques EN DUR (`pv[37]`, `pv[38]`, …
+// `pv[48]`). La disposition segmentée en compte ~59 — parce que chaque liaison a
+// besoin de son propre sélecteur mono-ligne ancré à SON segment (là où le
+// côte-à-côte partageait un sélecteur de ligne et distinguait par la colonne).
+//
+// À cette échelle, l'indexation brute est un piège : une contrainte lisant le
+// mauvais `pv[..]` produit une AIR silencieusement fausse — pas une erreur de
+// compilation, pas un test rouge, juste une soundness perdue. On construit donc
+// les colonnes ET leurs index dans le MÊME passage, et `evaluate_transition`
+// (étape 2b) lira des champs nommés.
+
+/// Ancres LOCALES d'un segment d'entrée (lignes relatives au début du segment),
+/// dans l'ordre de `PeriodicIdx::anc_in`. Identiques au côte-à-côte : ce sont des
+/// positions DANS la pile d'éponge, que la segmentation ne déplace pas — seule
+/// leur adresse absolue change (`seg_start(i) + ancre`).
+pub(crate) const ANCRES_IN: [usize; 7] = [0, 7, 31, 32, 39, 40, 47];
+
+// Index symboliques dans `ANCRES_IN` / `anc_in[i]`.
+pub(crate) const A_S0: usize = 0; // owner conso, feuille conso (chemin), vin prod
+pub(crate) const A_S7: usize = 1; // rho conso (préambule commitment)
+pub(crate) const A_S31: usize = 2; // cm prod (digest commitment)
+pub(crate) const A_S32: usize = 3; // cm conso (préambule feuille)
+pub(crate) const A_S39: usize = 4; // feuille prod (digest feuille)
+pub(crate) const A_S40: usize = 5; // nk + rho0 conso (préambule nullifier)
+pub(crate) const A_S47: usize = 6; // rho1..3 + cm conso (nullifier)
+
+/// Index (dans le vecteur rendu par `build_periodic`) de chaque colonne périodique.
+/// Remplace les `pv[37]` magiques du côte-à-côte.
+#[derive(Debug, Clone)]
+pub(crate) struct PeriodicIdx {
+    // --- cycliques (inchangées : l'alignement 16 des seg_start les rend valides) ---
+    pub round_flag_s: usize,
+    /// Début des 12 colonnes ARK1 (les 12 suivantes sont ARK2).
+    pub ark1: usize,
+    pub ark2: usize,
+    pub round_flag_m: usize,
+    pub init0: usize,
+    pub init7: usize,
+    pub chain: usize,
+    // --- pleine longueur, bâties par segment ---
+    pub sel_key: usize,
+    pub sel_sponge: usize,
+    pub sel_m: usize,
+    pub sel_bal: usize,
+    pub signe: usize,
+    pub pow: usize,
+    pub endblk: usize,
+    pub blind_off: usize,
+    // --- ancres de liaison, une par (segment, ancre) ---
+    /// Ligne 0 du segment KEY : liaison secret owner↔nk.
+    pub s0_key: usize,
+    /// Ligne 7 du segment KEY : production owner et nk.
+    pub s7_key: usize,
+    /// `anc_in[i][A_*]` : ancre `ANCRES_IN[A_*]` du i-ème segment d'ENTRÉE.
+    pub anc_in: [[usize; ANCRES_IN.len()]; 2],
+    /// Ligne `RANGE_BITS` du i-ème segment d'entrée : consommation VACC (montant plein).
+    pub vacc_in: [usize; 2],
+    /// Ligne 0 du j-ème segment de SORTIE : production vout.
+    pub s0_out: [usize; 2],
+    /// Ligne `RANGE_BITS` du j-ème segment de sortie : consommation VACC.
+    pub vacc_out: [usize; 2],
+    /// Nombre total de colonnes périodiques.
+    pub total: usize,
+}
+
+/// Construit TOUTES les colonnes périodiques et leurs index, en un seul passage.
+///
+/// L'unicité du passage est ce qui garantit la cohérence : un index ne peut pas
+/// désigner une autre colonne que celle qui vient d'être poussée.
+pub(crate) fn build_periodic(depth: usize, l: usize) -> (PeriodicIdx, Vec<Vec<BaseElement>>) {
+    let mut cols: Vec<Vec<BaseElement>> = Vec::new();
+    let z = BaseElement::ZERO;
+    let o = BaseElement::ONE;
+
+    let push = |cols: &mut Vec<Vec<BaseElement>>, c: Vec<BaseElement>| -> usize {
+        cols.push(c);
+        cols.len() - 1
+    };
+
+    // --- Cycliques (identiques au côte-à-côte). ---
+    let mut rf_s = vec![o; 8];
+    rf_s[7] = z;
+    let round_flag_s = push(&mut cols, rf_s);
+
+    let ark = crate::rescue_round::periodic_ark_columns();
+    let ark1 = cols.len();
+    for c in ark {
+        cols.push(c);
+    }
+    let ark2 = ark1 + crate::rescue_round::STATE_WIDTH;
+
+    let round_flag_m = push(
+        &mut cols,
+        (0..MERKLE_LEVEL_ROWS)
+            .map(|p| if p == 7 || p == 15 { z } else { o })
+            .collect(),
+    );
+    let init0 = push(
+        &mut cols,
+        (0..MERKLE_LEVEL_ROWS).map(|p| if p == 0 { o } else { z }).collect(),
+    );
+    let init7 = push(
+        &mut cols,
+        (0..MERKLE_LEVEL_ROWS).map(|p| if p == 7 { o } else { z }).collect(),
+    );
+    let chain = push(
+        &mut cols,
+        (0..MERKLE_LEVEL_ROWS).map(|p| if p == 15 { o } else { z }).collect(),
+    );
+
+    // --- Pleine longueur (étape 1). ---
+    let sel_key = push(&mut cols, self::sel_key(depth, l));
+    let sel_sponge = push(&mut cols, self::sel_sponge(depth, l));
+    let sel_m = push(&mut cols, self::sel_m(depth, l));
+    let sel_bal = push(&mut cols, self::sel_bal(depth, l));
+    let signe = push(&mut cols, self::signe(depth, l));
+    let pow = push(&mut cols, self::pow(depth, l));
+    let endblk = push(&mut cols, self::endblk(depth, l));
+    let blind_off = push(&mut cols, self::blind_off(depth, l));
+
+    // --- Ancres de liaison, adressées `seg_start(i) + ancre_locale`. ---
+    let schedule = schedule_2in2out();
+    let idx_de = |voulu: SegKind| -> Vec<usize> {
+        schedule
+            .iter()
+            .enumerate()
+            .filter(|(_, k)| **k == voulu)
+            .map(|(i, _)| i)
+            .collect()
+    };
+    let ins = idx_de(SegKind::Input);
+    let outs = idx_de(SegKind::Output);
+    debug_assert_eq!((ins.len(), outs.len()), (2, 2));
+
+    let key_start = seg_start(0, depth);
+    let s0_key = push(&mut cols, at_abs(l, key_start));
+    let s7_key = push(&mut cols, at_abs(l, key_start + 7));
+
+    let mut anc_in = [[0usize; ANCRES_IN.len()]; 2];
+    let mut vacc_in = [0usize; 2];
+    for (n, &i) in ins.iter().enumerate() {
+        let s = seg_start(i, depth);
+        for (a, &ancre) in ANCRES_IN.iter().enumerate() {
+            anc_in[n][a] = push(&mut cols, at_abs(l, s + ancre));
+        }
+        vacc_in[n] = push(&mut cols, at_abs(l, s + crate::range_check::RANGE_BITS));
+    }
+
+    let mut s0_out = [0usize; 2];
+    let mut vacc_out = [0usize; 2];
+    for (n, &j) in outs.iter().enumerate() {
+        let s = seg_start(j, depth);
+        s0_out[n] = push(&mut cols, at_abs(l, s));
+        vacc_out[n] = push(&mut cols, at_abs(l, s + crate::range_check::RANGE_BITS));
+    }
+
+    let total = cols.len();
+    (
+        PeriodicIdx {
+            round_flag_s,
+            ark1,
+            ark2,
+            round_flag_m,
+            init0,
+            init7,
+            chain,
+            sel_key,
+            sel_sponge,
+            sel_m,
+            sel_bal,
+            signe,
+            pow,
+            endblk,
+            blind_off,
+            s0_key,
+            s7_key,
+            anc_in,
+            vacc_in,
+            s0_out,
+            vacc_out,
+            total,
+        },
+        cols,
+    )
 }
 
 #[cfg(test)]
@@ -411,6 +605,137 @@ mod tests {
         assert_eq!(indices_non_nuls(&col), vec![42]);
         // Hors bornes : colonne nulle (pas de panique).
         assert!(indices_non_nuls(&at_abs(l, l + 10)).is_empty());
+    }
+
+    // ---- Inventaire des colonnes périodiques ----
+
+    /// Chaque index nommé désigne bien la colonne attendue : on vérifie le CONTENU
+    /// pointé, pas seulement la cohérence des nombres. C'est la garantie qui
+    /// remplace les `pv[37]` en dur du côte-à-côte.
+    #[test]
+    fn inventaire_periodique_index_pointent_les_bonnes_colonnes() {
+        for depth in DEPTHS {
+            let l = trace_len(depth);
+            let (ix, cols) = build_periodic(depth, l);
+
+            assert_eq!(cols.len(), ix.total);
+            assert!(ix.total > 0);
+
+            // Cycliques : longueurs de cycle attendues.
+            assert_eq!(cols[ix.round_flag_s].len(), 8, "éponge : cycle 8");
+            assert_eq!(cols[ix.round_flag_m].len(), MERKLE_LEVEL_ROWS, "Merkle : cycle 16");
+            assert_eq!(cols[ix.init0].len(), MERKLE_LEVEL_ROWS);
+            assert_eq!(indices_non_nuls(&cols[ix.init0]), vec![0]);
+            assert_eq!(indices_non_nuls(&cols[ix.init7]), vec![7]);
+            assert_eq!(indices_non_nuls(&cols[ix.chain]), vec![15]);
+            // ARK : 2 × STATE_WIDTH colonnes contiguës, ark2 juste après ark1.
+            let sw = crate::rescue_round::STATE_WIDTH;
+            assert_eq!(ix.ark2, ix.ark1 + sw);
+            assert!(ix.ark2 + sw <= ix.total);
+
+            // Pleine longueur : le contenu doit coïncider avec les fonctions de l'étape 1.
+            assert_eq!(cols[ix.sel_key], sel_key(depth, l));
+            assert_eq!(cols[ix.sel_sponge], sel_sponge(depth, l));
+            assert_eq!(cols[ix.sel_m], sel_m(depth, l));
+            assert_eq!(cols[ix.sel_bal], sel_bal(depth, l));
+            assert_eq!(cols[ix.signe], signe(depth, l));
+            assert_eq!(cols[ix.pow], pow(depth, l));
+            assert_eq!(cols[ix.endblk], endblk(depth, l));
+            assert_eq!(cols[ix.blind_off], blind_off(depth, l));
+        }
+    }
+
+    /// Les ancres pointent la BONNE ligne absolue : `seg_start(segment) + ancre
+    /// locale`. C'est ici que se joue le renversement colonne→ligne : une ancre qui
+    /// désignerait le segment voisin lierait la porteuse de l'entrée 0 aux cellules
+    /// de l'entrée 1 — soundness perdue, silencieusement.
+    #[test]
+    fn ancres_pointent_la_ligne_absolue_de_leur_segment() {
+        for depth in DEPTHS {
+            let l = trace_len(depth);
+            let (ix, cols) = build_periodic(depth, l);
+            let schedule = schedule_2in2out();
+
+            // Segment KEY.
+            let ks = seg_start(0, depth);
+            assert_eq!(indices_non_nuls(&cols[ix.s0_key]), vec![ks]);
+            assert_eq!(indices_non_nuls(&cols[ix.s7_key]), vec![ks + 7]);
+
+            // Segments d'ENTRÉE : chaque ancre à sa ligne, dans SON segment.
+            let ins: Vec<usize> = segments_de(SegKind::Input);
+            for (n, &i) in ins.iter().enumerate() {
+                let s = seg_start(i, depth);
+                for (a, &ancre) in ANCRES_IN.iter().enumerate() {
+                    assert_eq!(
+                        indices_non_nuls(&cols[ix.anc_in[n][a]]),
+                        vec![s + ancre],
+                        "ancre {ancre} de l'entrée {n} (segment {i}) @ depth {depth}"
+                    );
+                }
+                assert_eq!(
+                    indices_non_nuls(&cols[ix.vacc_in[n]]),
+                    vec![s + crate::range_check::RANGE_BITS]
+                );
+            }
+
+            // Segments de SORTIE.
+            let outs: Vec<usize> = segments_de(SegKind::Output);
+            for (n, &j) in outs.iter().enumerate() {
+                let s = seg_start(j, depth);
+                assert_eq!(indices_non_nuls(&cols[ix.s0_out[n]]), vec![s]);
+                assert_eq!(
+                    indices_non_nuls(&cols[ix.vacc_out[n]]),
+                    vec![s + crate::range_check::RANGE_BITS]
+                );
+            }
+
+            // Les ancres des DEUX entrées sont distinctes deux à deux : c'est
+            // exactement ce qui remplace la distinction par colonne du côte-à-côte.
+            for a in 0..ANCRES_IN.len() {
+                let r0 = indices_non_nuls(&cols[ix.anc_in[0][a]]);
+                let r1 = indices_non_nuls(&cols[ix.anc_in[1][a]]);
+                assert_ne!(r0, r1, "les ancres {a} des 2 entrées doivent différer");
+            }
+            let _ = schedule;
+        }
+    }
+
+    /// Aucun index nommé ne doit désigner deux fois la même colonne (hors ARK, qui
+    /// est une plage), ni sortir du vecteur.
+    #[test]
+    fn inventaire_periodique_sans_collision() {
+        for depth in DEPTHS {
+            let l = trace_len(depth);
+            let (ix, cols) = build_periodic(depth, l);
+            let mut vus = vec![
+                ix.round_flag_s,
+                ix.round_flag_m,
+                ix.init0,
+                ix.init7,
+                ix.chain,
+                ix.sel_key,
+                ix.sel_sponge,
+                ix.sel_m,
+                ix.sel_bal,
+                ix.signe,
+                ix.pow,
+                ix.endblk,
+                ix.blind_off,
+                ix.s0_key,
+                ix.s7_key,
+            ];
+            for n in 0..2 {
+                vus.extend_from_slice(&ix.anc_in[n]);
+                vus.push(ix.vacc_in[n]);
+                vus.push(ix.s0_out[n]);
+                vus.push(ix.vacc_out[n]);
+            }
+            assert!(vus.iter().all(|i| *i < cols.len()), "index hors bornes");
+            let avant = vus.len();
+            vus.sort_unstable();
+            vus.dedup();
+            assert_eq!(avant, vus.len(), "deux index nommés désignent la même colonne");
+        }
     }
 
     /// Les ancres de liaison, une fois décalées par segment, tombent bien DANS leur
