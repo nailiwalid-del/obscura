@@ -1068,6 +1068,147 @@ mod tests {
         falsifie(&|p| p.fee += 1);
     }
 
+    /// FORGE SPÉCIFIQUE AU SEGMENTÉ (RED) : les deux entrées prouvent leur
+    /// appartenance contre des racines DIFFÉRENTES.
+    ///
+    /// En côte-à-côte cette forge n'avait pas de sens : `root` était assertée
+    /// PUBLIQUEMENT sur chaque chemin `M_i`, donc deux racines distinctes étaient
+    /// structurellement impossibles. La mutualisation change cela — `root` devient
+    /// une porteuse assertée UNE SEULE FOIS — et c'est la liaison `root_in[i]`
+    /// (ajoutée en T3) qui doit mordre.
+    ///
+    /// Sans elle, un prouveur dépenserait une note appartenant à un arbre et une
+    /// note appartenant à un AUTRE arbre dans la même transaction, chaque chemin
+    /// étant valide isolément. C'est un trou d'inflation créé par la refonte
+    /// elle-même : ce test est donc la contrepartie obligatoire du gain de slots.
+    ///
+    /// La forge est faite au niveau du TÉMOIN (chemin de l'entrée 1 pris dans un
+    /// second arbre), sans constructeur de trace dédié.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
+    fn racines_differentes_rejetees() {
+        use crate::spend::SpendNote;
+        use crate::tx::ProvedInput;
+        use proved_hash::digest::{Digest, ShieldedSecret};
+        use proved_hash::felt::Felt;
+        use proved_hash::{merkle, rescue};
+
+        let dg = |seed: u64| {
+            Digest(core::array::from_fn(|i| {
+                Felt::from_canonical_u64(seed + i as u64).unwrap()
+            }))
+        };
+        let secret = ShieldedSecret::from_felts(core::array::from_fn(|i| {
+            Felt::from_canonical_u64(700 + i as u64).unwrap()
+        }));
+        let owner = rescue::hash(Domain::Owner, secret.as_felts());
+
+        let n0 = SpendNote { value: 1_000, owner, rho: dg(20), r: dg(30) };
+        let n1 = SpendNote { value: 500, owner, rho: dg(40), r: dg(50) };
+        let cm0 = rescue::note_commitment(n0.value, &n0.owner, &n0.rho, &n0.r);
+        let cm1 = rescue::note_commitment(n1.value, &n1.owner, &n1.rho, &n1.r);
+
+        // Arbre A (profondeur 2) : contient cm0 en index 0.
+        let l0 = merkle::leaf(&cm0);
+        let a1 = merkle::leaf(&dg(9001));
+        let a_gauche = merkle::node(&l0, &a1);
+        let a_droite = merkle::node(&merkle::leaf(&dg(9002)), &merkle::leaf(&dg(9003)));
+        let path0 = vec![a1, a_droite];
+
+        // Arbre B, DIFFÉRENT (feuilles muettes distinctes) : contient cm1 en index 3.
+        let l1 = merkle::leaf(&cm1);
+        let b2 = merkle::leaf(&dg(7002));
+        let b_gauche = merkle::node(&merkle::leaf(&dg(7000)), &merkle::leaf(&dg(7001)));
+        let path1 = vec![b2, b_gauche];
+
+        // Les deux chemins sont individuellement COHÉRENTS, mais avec des racines
+        // distinctes — c'est exactement ce que la liaison de racine doit interdire.
+        let root_a = merkle::node(&a_gauche, &a_droite);
+        let root_b = merkle::node(&b_gauche, &merkle::node(&b2, &l1));
+        assert_ne!(root_a, root_b, "les deux arbres doivent différer");
+
+        let w = MonolithWitness {
+            secret,
+            inputs: [
+                ProvedInput { note: n0, path: path0, index: 0 },
+                ProvedInput { note: n1, path: path1, index: 3 },
+            ],
+            outputs: [
+                SpendNote { value: 900, owner: dg(60), rho: dg(61), r: dg(62) },
+                SpendNote { value: 580, owner: dg(70), rho: dg(71), r: dg(72) },
+            ],
+            fee: 20,
+        };
+
+        let (pi, proof) = prove_seg_monolith(&w);
+        assert!(
+            !verify_seg_monolith(&pi, pi.depth, &proof),
+            "deux entrées contre des racines DIFFÉRENTES doivent être rejetées \
+             (liaison root_in) — sinon inflation inter-arbres"
+        );
+    }
+
+    /// FORGE (RED) : ancrage `VACC` du PREMIER segment d'unité.
+    ///
+    /// Le segment KEY ne produit pas d'`endblk`, donc le `VACC` de la première ligne
+    /// du premier segment d'ENTRÉE n'est remis à zéro par aucune transition — c'est
+    /// un témoin LIBRE. Un prouveur y met `−k` et décompose `valeur₀ + k` : `VACC` à
+    /// la ligne d'ancrage vaut toujours `valeur₀` (donc la liaison VIN reste
+    /// honnête), mais `S` a encaissé `valeur₀ + k` → `k` unités créées.
+    ///
+    /// L'assertion `VACC[seg_start(premier IN)] = 0` ferme le trou. Même mécanisme
+    /// qu'en côte-à-côte, mais l'ancrage a CHANGÉ D'ADRESSE avec la segmentation —
+    /// d'où ce test dédié : il vérifie que la NOUVELLE adresse est bien contrainte.
+    ///
+    /// ⚠️ Portée exacte : c'est une forge GROSSIÈRE (écrasement direct de la cellule),
+    /// donc elle mord à la fois par l'assertion d'ancrage ET par la contrainte de
+    /// transition `VACC`. Elle établit que la ligne d'ancrage est contrainte, PAS que
+    /// l'assertion seule suffirait. La forge fine — bits recomposés en cascade
+    /// cohérente pour n'exercer QUE l'ancrage, miroir de `Forge::VaccInitial` du
+    /// côte-à-côte — reste à porter avec le reste de la suite de forges.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
+    fn vacc_initial_non_nul_rejete() {
+        let (w, _root) = witness_de_test();
+        let depth = w.inputs[0].path.len();
+        let premier_in = schedule_2in2out()
+            .iter()
+            .position(|k| *k == SegKind::Input)
+            .expect("un segment d'entrée");
+        let ligne = seg_start(premier_in, depth);
+
+        // Trace honnête, puis VACC de la ligne d'ancrage forcé à une valeur ≠ 0.
+        let mut trace = build_seg_trace(&w);
+        let vacc_col = SEG_BALBIT_OFF + SEG_BAL_VACC;
+        let mut ligne_forgee: Vec<BaseElement> = (0..WIDTH).map(|c| trace.get(c, ligne)).collect();
+        ligne_forgee[vacc_col] = BaseElement::new(7);
+        trace.update_row(ligne, &ligne_forgee);
+
+        // Publics relus de la trace forgée (self-consistants).
+        let pi = MonolithPublicInputs {
+            root: read4(&trace, ROOT_C, 0),
+            nullifiers: [
+                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(1, depth) + NF_ROWS_END - 1),
+                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(2, depth) + NF_ROWS_END - 1),
+            ],
+            output_commitments: [
+                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(3, depth) + CM_ROWS_END - 1),
+                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(4, depth) + CM_ROWS_END - 1),
+            ],
+            fee: w.fee,
+            depth,
+        };
+        let prover = SegMonolithProver {
+            options: crate::proof_options_hi(),
+            pi: pi.clone(),
+        };
+        let proof = ValidityProof(prover.prove(trace).expect("génération"));
+        assert!(
+            !verify_seg_monolith(&pi, depth, &proof),
+            "VACC initial non nul doit être rejeté (ancrage anti-inflation)"
+        );
+    }
+
     /// ORACLE DE PARITÉ — le test que la construction côte à côte rend possible :
     /// le MÊME témoin doit produire les MÊMES publics par les deux monolithes.
     ///
