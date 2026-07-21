@@ -129,6 +129,18 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   d'un retard ; seule une tx invalide dans un bloc bien chaîné pénalise).
   `obscura-node --sceller <ms>`, **OFF par défaut** : produire des blocs est une
   décision d'opérateur. ⚠️ Aucune élection de producteur — ordre CONVENU, pas DÉFENDU.
+  **Corrections issues de la revue adversariale** (détail : docs/THREAT_MODEL.md,
+  « Défauts trouvés par revue adversariale ») : `sceller` PLAFONNE à MAX_TX_PAR_BLOC
+  (une borne de `from_bytes` doit exister aussi dans le CONSTRUCTEUR, sinon elle ne
+  protège que l'entrant) ; `RECENT_ROOTS_WINDOW` = 4 blocs pleins + assertion de
+  compilation (à 100, un bloc chargé purgeait toutes les ancres → transactions en vol
+  refusées, et censure à coût nul par un scelleur adverse) ; une VERSION inconnue ne
+  pénalise plus (sinon une mise à jour bannit les nœuds en arrière et effondre
+  l'anti-eclipse) ; échéances lecture/écriture sur chaque socket AVANT le handshake
+  (⚠️ une échéance de LECTURE = pair silencieux, PAS lien mort — la confondre couperait
+  tous les liens toutes les 20 s) ; `blocs_desaccordes` rend visible un nœud figé.
+  ⚠️ Restent : `executer` tient le verrou pendant l'écriture ; **aucun rattrapage de
+  bloc** (un nœud qui manque un bloc ne peut pas le redemander).
 - `docs/PROTOCOL.md`, `docs/THREAT_MODEL.md` et `docs/STARK_STATEMENT.md` : spécification de référence
 - `cargo test --all-features --release` : suite verte (crypto/net/ledger/circuit/wallet/node)
 
