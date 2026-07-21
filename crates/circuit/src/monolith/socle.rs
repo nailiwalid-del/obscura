@@ -231,10 +231,35 @@ fn digest(seed: u64) -> Digest {
     }))
 }
 
-/// Arbre de profondeur 2 (4 feuilles) : `cm0` en index 0, `cm1` en index 3, deux
-/// feuilles muettes. Recopie de `tx.rs::tests::build_tree`.
+/// Prolonge un cœur d'arbre de profondeur 2 jusqu'à `depth` : les deux entrées
+/// vivent aux index 0 et 3, donc dans le sous-arbre le plus à GAUCHE de chaque
+/// niveau supérieur — le nœud courant est enfant gauche partout, et chaque niveau
+/// ajoute UN frère muet (le même pour les deux chemins). C'est ce qui permet aux
+/// forges à reconstruction de tourner à la profondeur CONSENSUS (dette D8) sans
+/// matérialiser 2^32 feuilles.
 #[cfg(test)]
-fn build_tree(cm0: &Digest, cm1: &Digest) -> (Digest, Vec<Digest>, Vec<Digest>) {
+fn prolonger(
+    mut root: Digest,
+    mut path0: Vec<Digest>,
+    mut path1: Vec<Digest>,
+    depth: usize,
+) -> (Digest, Vec<Digest>, Vec<Digest>) {
+    use proved_hash::merkle;
+    assert!(depth >= 2, "l'arbre synthétique commence à la profondeur 2");
+    for niveau in 2..depth {
+        let frere = merkle::leaf(&digest(9100 + niveau as u64));
+        path0.push(frere);
+        path1.push(frere);
+        root = merkle::node(&root, &frere);
+    }
+    (root, path0, path1)
+}
+
+/// Arbre synthétique de profondeur `depth` (≥ 2) : `cm0` en index 0, `cm1` en
+/// index 3, deux feuilles muettes au bas, un frère muet par niveau au-dessus.
+/// Recopie généralisée de `tx.rs::tests::build_tree` (profondeur 2 historique).
+#[cfg(test)]
+fn build_tree(cm0: &Digest, cm1: &Digest, depth: usize) -> (Digest, Vec<Digest>, Vec<Digest>) {
     use proved_hash::merkle;
     let l0 = merkle::leaf(cm0);
     let l1 = merkle::leaf(&digest(9001));
@@ -245,14 +270,19 @@ fn build_tree(cm0: &Digest, cm1: &Digest) -> (Digest, Vec<Digest>, Vec<Digest>) 
     let root = merkle::node(&n_left, &n_right);
     let path0 = vec![l1, n_right];
     let path1 = vec![l2, n_left];
-    (root, path0, path1)
+    prolonger(root, path0, path1, depth)
 }
 
-/// Arbre de profondeur 2 à partir des FEUILLES injectées directement (idx 0 et 3,
-/// deux feuilles muettes), miroir de `build_tree` mais sans re-hacher les cm — utilisé
-/// par la forge pour reconstruire un arbre cohérent après réécriture d'une feuille.
+/// Arbre de profondeur `depth` à partir des FEUILLES injectées directement (idx 0
+/// et 3, feuilles muettes ailleurs), miroir de `build_tree` mais sans re-hacher
+/// les cm — utilisé par la forge pour reconstruire un arbre cohérent après
+/// réécriture d'une feuille.
 #[cfg(test)]
-pub(crate) fn build_tree_from_leaves(leaf0: &Digest, leaf1: &Digest) -> (Digest, Vec<Digest>, Vec<Digest>) {
+pub(crate) fn build_tree_from_leaves(
+    leaf0: &Digest,
+    leaf1: &Digest,
+    depth: usize,
+) -> (Digest, Vec<Digest>, Vec<Digest>) {
     use proved_hash::merkle;
     let l0 = *leaf0;
     let l1 = merkle::leaf(&digest(9001));
@@ -261,13 +291,23 @@ pub(crate) fn build_tree_from_leaves(leaf0: &Digest, leaf1: &Digest) -> (Digest,
     let n_left = merkle::node(&l0, &l1);
     let n_right = merkle::node(&l2, &l3);
     let root = merkle::node(&n_left, &n_right);
-    (root, vec![l1, n_right], vec![l2, n_left])
+    prolonger(root, vec![l1, n_right], vec![l2, n_left], depth)
 }
 
 /// Témoin de test : deux entrées (1000/500, même `owner`) équilibrées avec deux
 /// sorties (900/580) + fee 20, arbre de profondeur 2.
 #[cfg(test)]
 pub(crate) fn witness_de_test() -> (MonolithWitness, Digest) {
+    witness_de_test_profondeur(2)
+}
+
+/// Le même témoin, sur un arbre SYNTHÉTIQUE de profondeur `depth` (index 0 et 3,
+/// frères muets au-dessus). C'est ce qui permet de rejouer les forges à
+/// reconstruction d'arbre à la profondeur CONSENSUS (dette D8) — contrairement à
+/// `witness_de_test_profondeur_consensus`, dont l'arbre `ProvedMerkleTree` réel
+/// place ses feuilles aux index 0 et 1 (la reconstruction, elle, suppose 0 et 3).
+#[cfg(test)]
+pub(crate) fn witness_de_test_profondeur(depth: usize) -> (MonolithWitness, Digest) {
     use proved_hash::rescue;
 
     let secret = ShieldedSecret::from_felts(core::array::from_fn(|i| {
@@ -279,7 +319,7 @@ pub(crate) fn witness_de_test() -> (MonolithWitness, Digest) {
     let n1 = SpendNote { value: 500, owner, rho: digest(40), r: digest(50) };
     let cm0 = rescue::note_commitment(n0.value, &n0.owner, &n0.rho, &n0.r);
     let cm1 = rescue::note_commitment(n1.value, &n1.owner, &n1.rho, &n1.r);
-    let (root, path0, path1) = build_tree(&cm0, &cm1);
+    let (root, path0, path1) = build_tree(&cm0, &cm1, depth);
 
     // Sorties : 900 + 580 + fee 20 = 1500 = 1000 + 500.
     let o0 = SpendNote { value: 900, owner: digest(60), rho: digest(61), r: digest(62) };

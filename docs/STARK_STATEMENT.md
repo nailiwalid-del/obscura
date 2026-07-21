@@ -344,8 +344,16 @@
 > `forme_2_2_identique_aux_constantes` interdit à un refactor de `Forme` d'en
 > déplacer un offset en silence.
 >
-> ⚠️ **Reste** : les forges à reconstruction d'arbre restent à profondeur 2
-> (`build_tree_from_leaves` câblé) — dette D8.
+> **D8 — forges à reconstruction d'arbre à la profondeur CONSENSUS (soldée)** :
+> `build_tree_from_leaves` est généralisé en profondeur (cœur de 4 feuilles aux
+> index 0/3, un frère muet par niveau au-dessus — pas besoin de matérialiser
+> 2^32 feuilles), et les cinq forges à reconstruction (OwnerConsomme,
+> RhoCommitment, CmFeuille, LeafChemin, PaddingCommitment) sont rejouées RED à
+> la profondeur 32 (`forges_a_reconstruction_rejetees_a_la_profondeur_consensus`,
+> avec contrôle honnête sur le même témoin). C'est à cette profondeur que le
+> chemin de Merkle domine la trace (512 lignes par entrée sur 1168) — une liaison
+> qui n'aurait mordu qu'aux petites profondeurs était invisible de tous les tests.
+> Les forges restent 2/2 en FORME (assertion explicite, pas un silence).
 
 **Ce statement EST la règle de consensus d'une dépense valide.** Tout le reste du
 protocole s'organise autour de lui. Le mode transparent actuel (`apply_transparent`)

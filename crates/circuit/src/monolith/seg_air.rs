@@ -1646,6 +1646,52 @@ mod tests {
         );
     }
 
+    /// FORGES À RECONSTRUCTION D'ARBRE à la PROFONDEUR CONSENSUS (32) — dette D8.
+    ///
+    /// Les mêmes forges que ci-dessus tournaient jusqu'ici en profondeur 2 : la
+    /// reconstruction (`build_tree_from_leaves`) était câblée sur un arbre de
+    /// 4 feuilles. Or c'est à la profondeur RÉELLE que le chemin de Merkle domine
+    /// la trace (512 lignes par entrée sur 1168) — une liaison qui ne mordrait
+    /// qu'aux petites profondeurs serait invisible de tous les tests. L'arbre
+    /// synthétique (frères muets au-dessus du cœur de 4 feuilles) ferme l'écart.
+    ///
+    /// Le contrôle honnête (`Aucune`) sur le MÊME témoin garantit que les rejets
+    /// viennent de la liaison forgée, pas d'un témoin profond mal construit.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
+    fn forges_a_reconstruction_rejetees_a_la_profondeur_consensus() {
+        use crate::monolith::seg_trace::SegForge;
+        use crate::monolith::socle::witness_de_test_profondeur;
+        use proved_hash::digest::Digest;
+        use proved_hash::felt::Felt;
+
+        let dg = |seed: u64| {
+            Digest(core::array::from_fn(|i| {
+                Felt::from_canonical_u64(seed + i as u64).unwrap()
+            }))
+        };
+
+        let (w, _root) = witness_de_test_profondeur(32);
+        assert_eq!(w.inputs[0].path.len(), 32, "profondeur consensus");
+
+        assert!(
+            verdict_forge_sur(&w, SegForge::Aucune),
+            "contrôle : le témoin profond honnête doit être accepté"
+        );
+        for (nom, forge) in [
+            ("OWNER", SegForge::OwnerConsomme(0, dg(8080))),
+            ("RHO (commitment)", SegForge::RhoCommitment(1, dg(8181))),
+            ("CM (feuille)", SegForge::CmFeuille(0, dg(8282))),
+            ("FEUILLE↔CHEMIN", SegForge::LeafChemin(1, dg(8383))),
+            ("PAD_ZERO (commitment)", SegForge::PaddingCommitment(9)),
+        ] {
+            assert!(
+                !verdict_forge_sur(&w, forge),
+                "liaison {nom} doit mordre aussi à la profondeur 32"
+            );
+        }
+    }
+
     /// FORGES (RED) des MONTANTS, et test d'INERTIE du blinding.
     ///
     /// Les forges de valeur sont COMPENSÉES entre deux segments de même signe :
@@ -2026,13 +2072,10 @@ mod tests {
         );
 
         // (b) TOUTES les forges qui n'exigent PAS de reconstruction d'arbre,
-        // rejouées à la profondeur consensus.
-        //
-        // ⚠️ Les forges à reconstruction (OwnerConsomme, RhoCommitment, CmFeuille,
-        // LeafChemin, PaddingCommitment) restent à la profondeur 2 : le helper
-        // `build_tree_from_leaves` est câblé en dur sur un arbre de profondeur 2.
-        // Les couvrir au consensus demanderait un constructeur d'arbre générique en
-        // profondeur — limite résiduelle assumée, consignée dans la PR.
+        // rejouées à la profondeur consensus. (Les forges À reconstruction y
+        // tournent aussi depuis D8 — voir
+        // `forges_a_reconstruction_rejetees_a_la_profondeur_consensus`, sur
+        // l'arbre synthétique d'index 0/3.)
         let faux = Digest(core::array::from_fn(|i| {
             Felt::from_canonical_u64(9999 + i as u64).unwrap()
         }));

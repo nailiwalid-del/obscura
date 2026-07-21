@@ -118,7 +118,8 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   géométrie 2/2 reste ÉPINGLÉE par des constantes `#[cfg(test)]` de `seg_layout`
   (`forme_2_2_identique_aux_constantes` : un refactor de `Forme` ne peut pas
   déplacer un offset 2/2 en silence — la 2/2 est du consensus). Forges à
-  reconstruction d'arbre encore en profondeur 2 (dette D8).
+  reconstruction d'arbre rejouées à la profondeur CONSENSUS (D8 soldée : arbre
+  synthétique index 0/3 + frères muets, RED × 5 forges à prof. 32).
   Caveat : honnête-vérifieur, prototype non audité (voir docs/STARK_STATEMENT.md,
   « Argument HVZK »). Les gadgets autonomes du crate restent validity-only.
   `ProvedTx` v4 porte les `enc_notes` (enveloppes chiffrées des sorties, une par
@@ -313,11 +314,11 @@ dans un nœud réel, testnet local validé, binaires) — voir « État » ci-de
 pour le circuit, le journal de tête de docs/STARK_STATEMENT.md est LA référence.
 Cap actuel (décision utilisateur) : **complétude/cohérence protocole avant
 sophistication crypto**. Reste :
-1. **3z-c2 — variabilité M-in/N-out ≤ MAX — LIVRÉE (C2-T1..T8)** : circuit,
-   trace, AIR, soundness, masquage, ProvedTx v4, wallet (note unique paie,
-   `consolider`, défaut 2/2), et la SUPPRESSION du côte-à-côte (C2-T8, helpers
-   extraits dans `monolith/socle.rs`). Reste : les forges à reconstruction
-   d'arbre en profondeur 32 (dette D8, `build_tree_from_leaves` câblé prof. 2).
+1. **3z-c2 — variabilité M-in/N-out ≤ MAX — LIVRÉE ET SOLDÉE (C2-T1..T8 + D8)** :
+   circuit, trace, AIR, soundness, masquage, ProvedTx v4, wallet (note unique paie,
+   `consolider`, défaut 2/2), la SUPPRESSION du côte-à-côte (C2-T8, helpers
+   extraits dans `monolith/socle.rs`) et les forges à reconstruction d'arbre
+   rejouées à la profondeur consensus (D8).
    ⚠️ Piège identifié à ne pas rejouer : mutualiser des colonnes peut SUPPRIMER
    une garantie que la redondance offrait gratuitement (cf. « Liaison de racine »
    dans STARK_STATEMENT.md) — auditer chaque fusion sous cet angle.

@@ -131,10 +131,10 @@ fn set_carrier_scalar(rows: &mut [[BaseElement; WIDTH_MAX]], col: usize, v: u64)
 /// maintenance : une correction sur l'un peut manquer l'autre — la forge est ici
 /// un PARAMÈTRE du constructeur unique.
 ///
-/// Ne figurent ici que les forges SANS reconstruction d'arbre : celles qui
-/// altèrent le commitment ou la feuille changent la racine, ce qui ferait mordre
-/// la liaison `root_in` au lieu de la liaison visée — il faut alors rebâtir
-/// l'arbre pour que les deux entrées restent sur la MÊME racine. Reste à porter.
+/// Les forges qui altèrent le commitment ou la feuille changent la racine, ce qui
+/// ferait mordre la liaison `root_in` au lieu de la liaison visée — le
+/// constructeur REBÂTIT alors l'arbre (cf. `rebatit_arbre`) pour que les deux
+/// entrées restent sur la MÊME racine, à la profondeur du témoin (D8).
 // Machinerie de forge : utilisée UNIQUEMENT par les tests de soundness, mais le
 // type doit exister hors tests car il paramètre `build_seg_trace_interne` (chemin
 // de code UNIQUE pour l'honnête et le forgé — cf. doc ci-dessus).
@@ -454,13 +454,15 @@ fn build_seg_trace_interne(
     };
     #[cfg(test)]
     let chemins: Vec<Vec<Digest>> = if forge.rebatit_arbre() {
-        // Les forges à reconstruction restent 2/2 jusqu'à C2-T4 (le helper
+        // Les forges à reconstruction restent 2/2 en FORME (le helper
         // `build_tree_from_leaves` est câblé sur deux feuilles) : asserté, pas
-        // silencieusement faux sur une autre forme.
-        assert_eq!(f, Forme::F22, "forge à reconstruction d'arbre : 2/2 seulement (C2-T4)");
+        // silencieusement faux sur une autre forme. La PROFONDEUR, elle, est
+        // libre depuis D8 (arbre synthétique prolongé par frères muets) — elles
+        // tournent donc aussi à la profondeur consensus.
+        assert_eq!(f, Forme::F22, "forge à reconstruction d'arbre : 2/2 seulement");
         let f0 = feuille_injectee(w, 0, forge);
         let f1 = feuille_injectee(w, 1, forge);
-        let (_root, p0, p1) = super::socle::build_tree_from_leaves(&f0, &f1);
+        let (_root, p0, p1) = super::socle::build_tree_from_leaves(&f0, &f1, depth);
         vec![p0, p1]
     } else {
         chemins_temoin()
