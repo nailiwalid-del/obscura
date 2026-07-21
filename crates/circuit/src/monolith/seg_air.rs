@@ -62,18 +62,20 @@ type Blake3 = Blake3_256<BaseElement>;
 /// segmenté vers les sélecteurs : toute colonne pleine longueur se bâtit ainsi,
 /// ce qui garantit qu'aucune n'oublie un segment ni ne déborde du sien.
 pub(crate) fn par_segment(
+    forme: Forme,
     depth: usize,
     l: usize,
     f: impl Fn(SegKind, usize, usize) -> BaseElement,
 ) -> Vec<BaseElement> {
     let mut col = vec![BaseElement::ZERO; l];
-    for (i, kind) in schedule_2in2out().iter().enumerate() {
-        let start = seg_start(i, depth);
-        let n = seg_len(*kind, depth);
+    for i in 0..forme.n_segments() {
+        let kind = forme.seg_kind(i);
+        let start = forme.seg_start(i, depth);
+        let n = seg_len(kind, depth);
         for local in 0..n {
             let row = start + local;
             if row < l {
-                col[row] = f(*kind, i, local);
+                col[row] = f(kind, i, local);
             }
         }
     }
@@ -103,8 +105,8 @@ const fn est_unite(kind: SegKind) -> bool {
 /// ⚠️ `KEY_USED_ROWS` (8), PAS `KEY_LEN` (16) : le segment réserve 16 lignes pour
 /// l'alignement sur le cycle de Merkle, mais le calcul de clé n'en occupe que 8 —
 /// les 8 dernières doivent rester INACTIVES.
-pub(crate) fn sel_key(depth: usize, l: usize) -> Vec<BaseElement> {
-    par_segment(depth, l, |kind, _, local| {
+pub(crate) fn sel_key(forme: Forme, depth: usize, l: usize) -> Vec<BaseElement> {
+    par_segment(forme, depth, l, |kind, _, local| {
         if kind == SegKind::Key && local + 1 < KEY_USED_ROWS {
             BaseElement::ONE
         } else {
@@ -119,8 +121,8 @@ pub(crate) fn sel_key(depth: usize, l: usize) -> Vec<BaseElement> {
 /// - segment `Input` : pile cm→feuille→nullifier, active sur `local < NF_ROWS_END`
 ///   SAUF les frontières de bloc 31/39/55 (absorption, pas de ronde) ;
 /// - segment `Output` : commitment seul, actif sur `local < CM_ROWS_END − 1`.
-pub(crate) fn sel_sponge(depth: usize, l: usize) -> Vec<BaseElement> {
-    par_segment(depth, l, |kind, _, local| {
+pub(crate) fn sel_sponge(forme: Forme, depth: usize, l: usize) -> Vec<BaseElement> {
+    par_segment(forme, depth, l, |kind, _, local| {
         let actif = match kind {
             SegKind::Input => {
                 local < NF_ROWS_END
@@ -142,9 +144,9 @@ pub(crate) fn sel_sponge(depth: usize, l: usize) -> Vec<BaseElement> {
 /// `sel_m` : chemin de Merkle, actif sur les segments `Input` uniquement, sur
 /// `local < MERKLE_LEVEL_ROWS·depth − 1` (au-delà, le segment est idle : `in_len`
 /// vaut `max(64, 16·depth)`, donc à faible profondeur il reste des lignes libres).
-pub(crate) fn sel_m(depth: usize, l: usize) -> Vec<BaseElement> {
+pub(crate) fn sel_m(forme: Forme, depth: usize, l: usize) -> Vec<BaseElement> {
     let last = MERKLE_LEVEL_ROWS * depth - 1;
-    par_segment(depth, l, |kind, _, local| {
+    par_segment(forme, depth, l, |kind, _, local| {
         if kind == SegKind::Input && local < last {
             BaseElement::ONE
         } else {
@@ -154,8 +156,8 @@ pub(crate) fn sel_m(depth: usize, l: usize) -> Vec<BaseElement> {
 }
 
 /// `sel_bal` : équilibre actif sur tout segment `Input`/`Output`.
-pub(crate) fn sel_bal(depth: usize, l: usize) -> Vec<BaseElement> {
-    par_segment(depth, l, |kind, _, _| {
+pub(crate) fn sel_bal(forme: Forme, depth: usize, l: usize) -> Vec<BaseElement> {
+    par_segment(forme, depth, l, |kind, _, _| {
         if est_unite(kind) {
             BaseElement::ONE
         } else {
@@ -169,8 +171,8 @@ pub(crate) fn sel_bal(depth: usize, l: usize) -> Vec<BaseElement> {
 ///
 /// C'est ce zéro qui tient `S` CONSTANT là où il ne doit pas bouger (segment de
 /// clé, traîne idle) sans gating supplémentaire — même astuce qu'en côte-à-côte.
-pub(crate) fn signe(depth: usize, l: usize) -> Vec<BaseElement> {
-    par_segment(depth, l, |kind, _, _| match kind {
+pub(crate) fn signe(forme: Forme, depth: usize, l: usize) -> Vec<BaseElement> {
+    par_segment(forme, depth, l, |kind, _, _| match kind {
         SegKind::Input => BaseElement::ONE,
         SegKind::Output => -BaseElement::ONE,
         SegKind::Key => BaseElement::ZERO,
@@ -183,8 +185,8 @@ pub(crate) fn signe(depth: usize, l: usize) -> Vec<BaseElement> {
 /// ⚠️ Le poids est RELATIF au segment. Un poids global (`2^row`) permettrait de
 /// décomposer un montant avec les poids d'un autre segment — c'est l'une des cinq
 /// vérifications de soundness de l'équilibre chaîné.
-pub(crate) fn pow(depth: usize, l: usize) -> Vec<BaseElement> {
-    par_segment(depth, l, |kind, _, local| {
+pub(crate) fn pow(forme: Forme, depth: usize, l: usize) -> Vec<BaseElement> {
+    par_segment(forme, depth, l, |kind, _, local| {
         if est_unite(kind) && local < crate::range_check::RANGE_BITS {
             BaseElement::new(1u64 << local)
         } else {
@@ -195,9 +197,9 @@ pub(crate) fn pow(depth: usize, l: usize) -> Vec<BaseElement> {
 
 /// `endblk` : 1 sur la DERNIÈRE ligne de chaque segment `Input`/`Output` — c'est
 /// elle qui remet `VACC` à zéro pour le segment suivant.
-pub(crate) fn endblk(depth: usize, l: usize) -> Vec<BaseElement> {
-    par_segment(depth, l, |kind, i, local| {
-        if est_unite(kind) && local + 1 == seg_len(schedule_2in2out()[i], depth) {
+pub(crate) fn endblk(forme: Forme, depth: usize, l: usize) -> Vec<BaseElement> {
+    par_segment(forme, depth, l, |kind, _, local| {
+        if est_unite(kind) && local + 1 == seg_len(kind, depth) {
             BaseElement::ONE
         } else {
             BaseElement::ZERO
@@ -208,8 +210,8 @@ pub(crate) fn endblk(depth: usize, l: usize) -> Vec<BaseElement> {
 /// `blind_off` (witness-hiding 3z-b1) : 1 ssi la transition `r → r+1` reste DANS la
 /// région utile. Éteint toutes les familles sur le saut vers l'aléa et sur la
 /// région de blinding. Identique au côte-à-côte.
-pub(crate) fn blind_off(depth: usize, l: usize) -> Vec<BaseElement> {
-    let used = used_rows(depth);
+pub(crate) fn blind_off(forme: Forme, depth: usize, l: usize) -> Vec<BaseElement> {
+    let used = forme.used_rows(depth);
     (0..l)
         .map(|r| {
             if r + 1 < used {
@@ -279,20 +281,20 @@ pub(crate) struct PeriodicIdx {
     /// Ligne 7 du segment KEY : production owner et nk.
     pub s7_key: usize,
     /// `anc_in[i][A_*]` : ancre `ANCRES_IN[A_*]` du i-ème segment d'ENTRÉE.
-    pub anc_in: [[usize; ANCRES_IN.len()]; 2],
+    pub anc_in: Vec<[usize; ANCRES_IN.len()]>,
     /// Ligne `RANGE_BITS` du i-ème segment d'entrée : consommation VACC (montant plein).
-    pub vacc_in: [usize; 2],
+    pub vacc_in: Vec<usize>,
     /// Dernière ligne du chemin de Merkle du i-ème segment d'entrée
     /// (`16·depth − 1`) : liaison « racine repliée == porteuse `ROOT_C` ».
     ///
     /// NOUVEAU en segmenté : le côte-à-côte assertait `root` publiquement sur
     /// CHAQUE `M_i` ; ici `root` est assertée une seule fois sur la porteuse, et
     /// chaque entrée s'y raccroche par cette liaison.
-    pub root_in: [usize; 2],
+    pub root_in: Vec<usize>,
     /// Ligne 0 du j-ème segment de SORTIE : production vout.
-    pub s0_out: [usize; 2],
+    pub s0_out: Vec<usize>,
     /// Ligne `RANGE_BITS` du j-ème segment de sortie : consommation VACC.
-    pub vacc_out: [usize; 2],
+    pub vacc_out: Vec<usize>,
     /// Nombre total de colonnes périodiques (vérifié par les tests d'inventaire).
     #[cfg_attr(not(test), allow(dead_code))]
     pub total: usize,
@@ -302,7 +304,11 @@ pub(crate) struct PeriodicIdx {
 ///
 /// L'unicité du passage est ce qui garantit la cohérence : un index ne peut pas
 /// désigner une autre colonne que celle qui vient d'être poussée.
-pub(crate) fn build_periodic(depth: usize, l: usize) -> (PeriodicIdx, Vec<Vec<BaseElement>>) {
+pub(crate) fn build_periodic(
+    forme: Forme,
+    depth: usize,
+    l: usize,
+) -> (PeriodicIdx, Vec<Vec<BaseElement>>) {
     let mut cols: Vec<Vec<BaseElement>> = Vec::new();
     let z = BaseElement::ZERO;
     let o = BaseElement::ONE;
@@ -344,52 +350,47 @@ pub(crate) fn build_periodic(depth: usize, l: usize) -> (PeriodicIdx, Vec<Vec<Ba
     );
 
     // --- Pleine longueur (étape 1). ---
-    let sel_key = push(&mut cols, self::sel_key(depth, l));
-    let sel_sponge = push(&mut cols, self::sel_sponge(depth, l));
-    let sel_m = push(&mut cols, self::sel_m(depth, l));
-    let sel_bal = push(&mut cols, self::sel_bal(depth, l));
-    let signe = push(&mut cols, self::signe(depth, l));
-    let pow = push(&mut cols, self::pow(depth, l));
-    let endblk = push(&mut cols, self::endblk(depth, l));
-    let blind_off = push(&mut cols, self::blind_off(depth, l));
+    let sel_key = push(&mut cols, self::sel_key(forme, depth, l));
+    let sel_sponge = push(&mut cols, self::sel_sponge(forme, depth, l));
+    let sel_m = push(&mut cols, self::sel_m(forme, depth, l));
+    let sel_bal = push(&mut cols, self::sel_bal(forme, depth, l));
+    let signe = push(&mut cols, self::signe(forme, depth, l));
+    let pow = push(&mut cols, self::pow(forme, depth, l));
+    let endblk = push(&mut cols, self::endblk(forme, depth, l));
+    let blind_off = push(&mut cols, self::blind_off(forme, depth, l));
 
-    // --- Ancres de liaison, adressées `seg_start(i) + ancre_locale`. ---
-    let schedule = schedule_2in2out();
-    let idx_de = |voulu: SegKind| -> Vec<usize> {
-        schedule
-            .iter()
-            .enumerate()
-            .filter(|(_, k)| **k == voulu)
-            .map(|(i, _)| i)
-            .collect()
-    };
-    let ins = idx_de(SegKind::Input);
-    let outs = idx_de(SegKind::Output);
-    debug_assert_eq!((ins.len(), outs.len()), (2, 2));
-
-    let key_start = seg_start(0, depth);
+    // --- Ancres de liaison, adressées `forme.seg_start(i) + ancre_locale`. ---
+    // L'ORDRE du schedule est normatif ([KEY][IN×m][OUT×n], cf. Forme::seg_kind) :
+    // le i-ème segment d'entrée est le segment 1+i, le j-ième de sortie le
+    // segment 1+m+j. C'est ce qui lie chaque nullifier public à SON segment,
+    // position par position (spec D7.3).
+    let key_start = forme.seg_start(0, depth);
     let s0_key = push(&mut cols, at_abs(l, key_start));
     let s7_key = push(&mut cols, at_abs(l, key_start + 7));
 
-    let mut anc_in = [[0usize; ANCRES_IN.len()]; 2];
-    let mut vacc_in = [0usize; 2];
-    let mut root_in = [0usize; 2];
-    for (n, &i) in ins.iter().enumerate() {
-        let s = seg_start(i, depth);
+    let mut anc_in = Vec::with_capacity(forme.m());
+    let mut vacc_in = Vec::with_capacity(forme.m());
+    let mut root_in = Vec::with_capacity(forme.m());
+    for n in 0..forme.m() {
+        let s = forme.seg_start(1 + n, depth);
+        debug_assert_eq!(forme.seg_kind(1 + n), SegKind::Input);
+        let mut ancres = [0usize; ANCRES_IN.len()];
         for (a, &ancre) in ANCRES_IN.iter().enumerate() {
-            anc_in[n][a] = push(&mut cols, at_abs(l, s + ancre));
+            ancres[a] = push(&mut cols, at_abs(l, s + ancre));
         }
-        vacc_in[n] = push(&mut cols, at_abs(l, s + crate::range_check::RANGE_BITS));
+        anc_in.push(ancres);
+        vacc_in.push(push(&mut cols, at_abs(l, s + crate::range_check::RANGE_BITS)));
         // Dernière ligne du chemin : racine repliée == porteuse ROOT_C.
-        root_in[n] = push(&mut cols, at_abs(l, s + MERKLE_LEVEL_ROWS * depth - 1));
+        root_in.push(push(&mut cols, at_abs(l, s + MERKLE_LEVEL_ROWS * depth - 1)));
     }
 
-    let mut s0_out = [0usize; 2];
-    let mut vacc_out = [0usize; 2];
-    for (n, &j) in outs.iter().enumerate() {
-        let s = seg_start(j, depth);
-        s0_out[n] = push(&mut cols, at_abs(l, s));
-        vacc_out[n] = push(&mut cols, at_abs(l, s + crate::range_check::RANGE_BITS));
+    let mut s0_out = Vec::with_capacity(forme.n());
+    let mut vacc_out = Vec::with_capacity(forme.n());
+    for n in 0..forme.n() {
+        let s = forme.seg_start(1 + forme.m() + n, depth);
+        debug_assert_eq!(forme.seg_kind(1 + forme.m() + n), SegKind::Output);
+        s0_out.push(push(&mut cols, at_abs(l, s)));
+        vacc_out.push(push(&mut cols, at_abs(l, s + crate::range_check::RANGE_BITS)));
     }
 
     let total = cols.len();
@@ -475,6 +476,11 @@ pub(crate) struct SegMonolithAir {
     pi: MonolithPublicInputs,
     l: usize,
     depth: usize,
+    /// Forme (m, n) DÉRIVÉE des publics — les longueurs des Vec. C'est elle qui
+    /// pilote schedule, sélecteurs, ancres et assertions : une trace dont le
+    /// nombre de segments ne correspond pas aux publics déclarés est contrainte
+    /// contre le MAUVAIS schedule et échoue (cf. spec D7.1).
+    forme: Forme,
     /// Index NOMMÉS des colonnes périodiques, calculés une fois à la construction.
     /// `evaluate_transition` les lit par nom — jamais d'indice en dur.
     ix: PeriodicIdx,
@@ -494,9 +500,15 @@ impl winterfell::Air for SegMonolithAir {
         );
         let l = trace_info.length();
         let depth = pi.depth;
-        let (ix, _) = build_periodic(depth, l);
+        // Forme depuis les publics. `expect` et non propagation : les publics
+        // arrivent ici par `verify_tx`, dont le décodage wire (`from_bytes`)
+        // borne déjà les comptes — une forme invalide ici est un bug interne,
+        // pas une entrée hostile.
+        let forme = Forme::new(pi.m(), pi.n())
+            .expect("forme hors bornes : verify_tx doit borner avant l'AIR");
+        let (ix, _) = build_periodic(forme, depth, l);
         let context = AirContext::new(trace_info, degrees(l), num_assertions(depth), options);
-        SegMonolithAir { context, pi, l, depth, ix }
+        SegMonolithAir { context, pi, l, depth, forme, ix }
     }
 
     fn evaluate_transition<E: FieldElement + From<Self::BaseField>>(
@@ -840,7 +852,7 @@ impl winterfell::Air for SegMonolithAir {
     }
 
     fn get_periodic_column_values(&self) -> Vec<Vec<Self::BaseField>> {
-        build_periodic(self.depth, self.l).1
+        build_periodic(self.forme, self.depth, self.l).1
     }
 
     fn context(&self) -> &AirContext<Self::BaseField> {
@@ -1794,7 +1806,7 @@ mod tests {
     fn par_segment_couvre_exactement_les_segments() {
         for depth in DEPTHS {
             let l = trace_len(depth);
-            let col = par_segment(depth, l, |_, _, _| BaseElement::ONE);
+            let col = par_segment(Forme::F22, depth, l, |_, _, _| BaseElement::ONE);
             let allumes = indices_non_nuls(&col);
             let used = used_rows(depth);
             assert_eq!(
@@ -1812,7 +1824,7 @@ mod tests {
     fn sel_key_ignore_le_bourrage_du_segment() {
         for depth in DEPTHS {
             let l = trace_len(depth);
-            let allumes = indices_non_nuls(&sel_key(depth, l));
+            let allumes = indices_non_nuls(&sel_key(Forme::F22, depth, l));
             let start = seg_start(0, depth);
             assert_eq!(
                 allumes,
@@ -1830,7 +1842,7 @@ mod tests {
     fn sel_sponge_mutualise_in_et_out() {
         for depth in DEPTHS {
             let l = trace_len(depth);
-            let col = sel_sponge(depth, l);
+            let col = sel_sponge(Forme::F22, depth, l);
             for i in segments_de(SegKind::Input) {
                 let s = seg_start(i, depth);
                 for frontiere in [CM_ROWS_END - 1, LEAF_ROWS_END - 1, NF_ROWS_END - 1] {
@@ -1868,7 +1880,7 @@ mod tests {
     fn sel_m_seulement_sur_les_entrees() {
         for depth in DEPTHS {
             let l = trace_len(depth);
-            let col = sel_m(depth, l);
+            let col = sel_m(Forme::F22, depth, l);
             let attendus: Vec<usize> = segments_de(SegKind::Input)
                 .into_iter()
                 .flat_map(|i| {
@@ -1886,7 +1898,7 @@ mod tests {
     fn signe_plus_un_moins_un_zero() {
         for depth in DEPTHS {
             let l = trace_len(depth);
-            let col = signe(depth, l);
+            let col = signe(Forme::F22, depth, l);
             for i in segments_de(SegKind::Input) {
                 let s = seg_start(i, depth);
                 assert_eq!(col[s], BaseElement::ONE);
@@ -1914,7 +1926,7 @@ mod tests {
     fn pow_est_relatif_au_segment() {
         for depth in DEPTHS {
             let l = trace_len(depth);
-            let col = pow(depth, l);
+            let col = pow(Forme::F22, depth, l);
             for i in segments_de(SegKind::Input)
                 .into_iter()
                 .chain(segments_de(SegKind::Output))
@@ -1946,7 +1958,7 @@ mod tests {
                 .filter(|(_, k)| matches!(k, SegKind::Input | SegKind::Output))
                 .map(|(i, k)| seg_start(i, depth) + seg_len(*k, depth) - 1)
                 .collect();
-            assert_eq!(indices_non_nuls(&endblk(depth, l)), attendus, "@ depth {depth}");
+            assert_eq!(indices_non_nuls(&endblk(Forme::F22, depth, l)), attendus, "@ depth {depth}");
         }
     }
 
@@ -1956,7 +1968,7 @@ mod tests {
     fn blind_off_eteint_la_region_de_blinding() {
         for depth in DEPTHS {
             let l = trace_len(depth);
-            let col = blind_off(depth, l);
+            let col = blind_off(Forme::F22, depth, l);
             let used = used_rows(depth);
             assert_eq!(col[used - 2], BaseElement::ONE);
             assert_eq!(
@@ -1988,7 +2000,7 @@ mod tests {
     fn inventaire_periodique_index_pointent_les_bonnes_colonnes() {
         for depth in DEPTHS {
             let l = trace_len(depth);
-            let (ix, cols) = build_periodic(depth, l);
+            let (ix, cols) = build_periodic(Forme::F22, depth, l);
 
             assert_eq!(cols.len(), ix.total);
             assert!(ix.total > 0);
@@ -2006,14 +2018,14 @@ mod tests {
             assert!(ix.ark2 + sw <= ix.total);
 
             // Pleine longueur : le contenu doit coïncider avec les fonctions de l'étape 1.
-            assert_eq!(cols[ix.sel_key], sel_key(depth, l));
-            assert_eq!(cols[ix.sel_sponge], sel_sponge(depth, l));
-            assert_eq!(cols[ix.sel_m], sel_m(depth, l));
-            assert_eq!(cols[ix.sel_bal], sel_bal(depth, l));
-            assert_eq!(cols[ix.signe], signe(depth, l));
-            assert_eq!(cols[ix.pow], pow(depth, l));
-            assert_eq!(cols[ix.endblk], endblk(depth, l));
-            assert_eq!(cols[ix.blind_off], blind_off(depth, l));
+            assert_eq!(cols[ix.sel_key], sel_key(Forme::F22, depth, l));
+            assert_eq!(cols[ix.sel_sponge], sel_sponge(Forme::F22, depth, l));
+            assert_eq!(cols[ix.sel_m], sel_m(Forme::F22, depth, l));
+            assert_eq!(cols[ix.sel_bal], sel_bal(Forme::F22, depth, l));
+            assert_eq!(cols[ix.signe], signe(Forme::F22, depth, l));
+            assert_eq!(cols[ix.pow], pow(Forme::F22, depth, l));
+            assert_eq!(cols[ix.endblk], endblk(Forme::F22, depth, l));
+            assert_eq!(cols[ix.blind_off], blind_off(Forme::F22, depth, l));
         }
     }
 
@@ -2025,7 +2037,7 @@ mod tests {
     fn ancres_pointent_la_ligne_absolue_de_leur_segment() {
         for depth in DEPTHS {
             let l = trace_len(depth);
-            let (ix, cols) = build_periodic(depth, l);
+            let (ix, cols) = build_periodic(Forme::F22, depth, l);
             let schedule = schedule_2in2out();
 
             // Segment KEY.
@@ -2084,7 +2096,7 @@ mod tests {
     fn inventaire_periodique_sans_collision() {
         for depth in DEPTHS {
             let l = trace_len(depth);
-            let (ix, cols) = build_periodic(depth, l);
+            let (ix, cols) = build_periodic(Forme::F22, depth, l);
             let mut vus = vec![
                 ix.round_flag_s,
                 ix.round_flag_m,
