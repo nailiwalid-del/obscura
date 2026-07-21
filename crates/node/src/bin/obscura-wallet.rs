@@ -53,6 +53,48 @@ const DELAI_ECRITURE: Duration = Duration::from_secs(20);
 /// client (aucun champ sur le fil ne le porte).
 const CADENCE_DEMANDES: Duration = Duration::from_millis(50);
 
+
+/// Protection du fichier de wallet, résolue SANS valeur par défaut silencieuse.
+///
+/// 1. `OBSCURA_WALLET_PHRASE` si définie (voie scriptable / CI) ;
+/// 2. sinon `OBSCURA_WALLET_SANS_CHIFFREMENT=1` pour écrire EN CLAIR — choix qui doit
+///    être posé explicitement, jamais subi ;
+/// 3. sinon saisie sur l'entrée standard.
+///
+/// ⚠️ La saisie est ÉCHOÏQUE : masquer la frappe demande un accès TTY (crate dédiée),
+/// volontairement non introduit ici. Sur un poste partagé, préférer la variable.
+///
+/// Sort du processus plutôt que de propager : sans protection résolue, aucune commande
+/// de wallet n'a de sens, et un `Result` remonté ici n'ajouterait qu'du bruit.
+fn protection() -> wallet::persistance::Protection {
+    use wallet::persistance::Protection;
+    if let Ok(p) = std::env::var("OBSCURA_WALLET_PHRASE") {
+        if !p.is_empty() {
+            return Protection::Phrase(p);
+        }
+    }
+    if std::env::var("OBSCURA_WALLET_SANS_CHIFFREMENT").as_deref() == Ok("1") {
+        eprintln!("⚠️  wallet NON chiffré au repos (OBSCURA_WALLET_SANS_CHIFFREMENT=1)");
+        return Protection::Aucune;
+    }
+    eprint!("phrase de passe du wallet (la frappe est visible) : ");
+    use std::io::Write;
+    std::io::stderr().flush().ok();
+    let mut ligne = String::new();
+    if std::io::stdin().read_line(&mut ligne).is_err() {
+        eprintln!("erreur : lecture de la phrase de passe impossible");
+        std::process::exit(2);
+    }
+    let phrase = ligne.trim().to_string();
+    if phrase.is_empty() {
+        eprintln!(
+            "erreur : phrase vide. Définissez OBSCURA_WALLET_PHRASE, ou              OBSCURA_WALLET_SANS_CHIFFREMENT=1 pour écrire en clair."
+        );
+        std::process::exit(2);
+    }
+    Protection::Phrase(phrase)
+}
+
 fn usage() -> ! {
     eprintln!("usage : obscura-wallet <commande> [options]");
     eprintln!();
@@ -133,7 +175,7 @@ fn lire_options(args: &[String]) -> Options {
 }
 
 fn charger(chemin: &Path) -> Wallet {
-    Wallet::charger(chemin).unwrap_or_else(|e| {
+    Wallet::charger(chemin, &protection()).unwrap_or_else(|e| {
         abandon(&format!(
             "wallet illisible ({}) : {e}\n\
              \x20        Ce fichier n'est PAS remplacé automatiquement : un wallet écrasé\n\
@@ -178,7 +220,7 @@ fn creer(fichier: &Path) {
         ));
     }
     let w = Wallet::nouveau(CONSENSUS_DEPTH);
-    if let Err(e) = w.enregistrer(fichier) {
+    if let Err(e) = w.enregistrer(fichier, &protection()) {
         abandon(&format!("écriture impossible : {e}"));
     }
     println!("wallet créé : {}", fichier.display());
@@ -244,7 +286,7 @@ fn synchroniser(fichier: &Path, o: &Options) {
         // Enregistrement APRÈS chaque bloc rejoué : la position est dans le fichier, et
         // un crash entre deux blocs doit laisser le wallet exactement à son dernier bloc,
         // jamais en avance sur le disque.
-        w.enregistrer(fichier).map_err(|e| e.to_string())?;
+        w.enregistrer(fichier, &protection()).map_err(|e| e.to_string())?;
         if p.entrees > 0 || p.notes_recues > 0 {
             println!(
                 "  bloc {} : {} sorties, {} pour vous — solde {}",
@@ -318,7 +360,7 @@ fn envoyer(fichier: &Path, o: &Options) {
         let depart = w.prochaine_hauteur();
         let resume =
             synchroniser_par_connexion(&mut connexion, &mut w, CADENCE_DEMANDES, |_, w| {
-                w.enregistrer(fichier).map_err(|e| e.to_string())
+                w.enregistrer(fichier, &protection()).map_err(|e| e.to_string())
             });
         rapporter_synchro(&w, &resume, depart);
     }
@@ -381,7 +423,7 @@ fn envoyer(fichier: &Path, o: &Options) {
         _ => abandon("réencodage de la transaction impossible (bug interne)"),
     };
     let consommees = w.oublier_depensees(&tx);
-    if let Err(e) = w.enregistrer(fichier) {
+    if let Err(e) = w.enregistrer(fichier, &protection()) {
         abandon(&format!(
             "transaction ENVOYÉE mais wallet non enregistré : {e}\n\
              \x20        Relancer `envoyer` retenterait les mêmes notes."
@@ -437,7 +479,7 @@ fn consolider(fichier: &Path, o: &Options) {
         _ => abandon("réencodage impossible (bug interne)"),
     };
     let consommees = w.oublier_depensees(&tx);
-    if let Err(e) = w.enregistrer(fichier) {
+    if let Err(e) = w.enregistrer(fichier, &protection()) {
         abandon(&format!("transaction ENVOYÉE mais wallet non enregistré : {e}"));
     }
     println!("{consommees} notes regroupées — solde connu : {}", w.solde());

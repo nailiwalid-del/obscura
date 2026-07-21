@@ -90,11 +90,15 @@ autorité pour sceller »). **Testnet local uniquement.**
   geste VOLONTAIRE, distinctif, dont l'alternative — ne pas pouvoir dépenser — est
   pire. C'est le même arbitrage que Zcash Sapling, qui expose aussi son nombre de
   spends/outputs. Uniformiser (bourrer tout à 4/4) coûterait ×2 de preuve à tous.
-- **Le fichier de wallet n'est pas chiffré au repos.** Il contient l'autorité de
-  DÉPENSE en clair ; sa confidentialité repose entièrement sur les permissions du
-  système de fichiers (`0600` sur Unix, posé avant écriture ; rien sur les plateformes
-  sans permissions POSIX). Une phrase de passe supposerait Argon2 + saisie
-  interactive — à faire correctement plutôt qu'à moitié.
+- **Le fichier de wallet est CHIFFRABLE au repos, et le choix est explicite.**
+  `Protection::Phrase` chiffre par Argon2id (19 Mio, 2 passes) + cascade AEAD, sel et
+  paramètres authentifiés en AAD (un coût mémoire abaissé pour accélérer un crible
+  invalide le fichier). `Protection::Aucune` laisse l'autorité de DÉPENSE en clair —
+  l'API n'a aucune valeur par défaut, ce choix se lit donc chez l'appelant. Cela
+  compte surtout hors Unix : les permissions `0600` n'existent pas sur Windows, où le
+  chiffrement est la SEULE protection. Réserve : la saisie CLI est ÉCHOÏQUE (masquer
+  la frappe demande un accès TTY, non introduit) — préférer `OBSCURA_WALLET_PHRASE`
+  sur un poste partagé.
 - **Le nœud d'entrée sait que la transaction vient de nous** (niveau IP). Dandelion++
   protège la propagation, pas le premier saut : le pair auquel on soumet observe
   directement l'origine. Se connecter à son propre nœud, ou via un réseau anonymisant,

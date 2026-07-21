@@ -22,17 +22,21 @@
 //!    pourquoi. Le fichier porte donc une empreinte à domaine séparé, NON tronquée,
 //!    vérifiée avant toute interprétation.
 //!
-//! ## ⚠️ Limite assumée : le fichier n'est PAS chiffré au repos
+//! ## Chiffrement au repos (0x03)
 //!
-//! Quiconque lit ce fichier peut vider le wallet. Le protéger par une phrase de
-//! passe demanderait une dérivation à mémoire dure (Argon2) et une saisie
-//! interactive — hors périmètre de ce prototype, et à faire correctement plutôt
-//! qu'à moitié. C'est écrit ici plutôt que laissé à supposer : à ce stade, la
-//! confidentialité du wallet repose ENTIÈREMENT sur les permissions du système de
-//! fichiers.
+//! Quiconque lit ce fichier en clair peut vider le wallet. Il est donc chiffrable par
+//! une phrase de passe : dérivation à MÉMOIRE DURE (Argon2id, qui rend le crible par
+//! GPU coûteux) puis cascade AEAD `XChaCha20-Poly1305 ∘ AES-256-GCM`. Le sel ET les
+//! paramètres Argon2 entrent dans l'AAD : un attaquant ne peut pas rejouer le fichier
+//! avec un coût mémoire abaissé pour accélérer sa recherche.
 //!
-//! Sur les plateformes sans permissions POSIX (Windows), même cette protection-là
-//! n'est pas posée par le code : le répertoire doit être protégé par l'utilisateur.
+//! Le choix est EXPLICITE ([`Protection`]) : aucune valeur par défaut ne décide à la
+//! place de l'appelant. Écrire en clair reste possible — c'est ce dont les tests ont
+//! besoin — mais cela se lit dans le code appelant, au lieu de se produire par
+//! omission.
+//!
+//! Cela compte particulièrement hors Unix : les permissions `0o600` posées ci-dessous
+//! n'existent pas sur Windows, où le chiffrement est alors la SEULE protection.
 //!
 //! # La POSITION DE SYNCHRONISATION est dans le fichier (0x02)
 //!
@@ -67,6 +71,56 @@ pub const VERSION_FICHIER: u8 = 0x02;
 /// séparément : voir [`WalletFichierError::VersionSansPosition`].
 pub const VERSION_SANS_POSITION: u8 = 0x01;
 
+/// Enveloppe CHIFFRÉE : `0x03 ‖ sel(16) ‖ m_cost ‖ t_cost ‖ p_cost ‖ cascade AEAD`.
+/// Le clair ainsi protégé est exactement un fichier `VERSION_FICHIER`.
+pub const VERSION_CHIFFRE: u8 = 0x03;
+
+const SEL_LEN: usize = 16;
+/// Paramètres Argon2id (recommandation OWASP) : 19 Mio, 2 passes, 1 voie.
+const ARGON_M_COST: u32 = 19_456;
+const ARGON_T_COST: u32 = 2;
+const ARGON_P_COST: u32 = 1;
+
+/// Comment le fichier est protégé au repos. **Sans valeur par défaut** : l'appelant
+/// choisit, et le choix de ne pas chiffrer se voit dans son code.
+pub enum Protection {
+    /// Chiffre par phrase de passe (Argon2id + cascade AEAD).
+    Phrase(String),
+    /// N'chiffre PAS : l'autorité de dépense reste en clair sur le disque. Réservé
+    /// aux tests et aux environnements où le fichier est protégé autrement.
+    Aucune,
+}
+
+/// Dérive la clé de fichier depuis la phrase. Coûteuse à dessein : c'est ce coût,
+/// payé une fois par l'utilisateur légitime, qui se multiplie par la taille du
+/// dictionnaire pour l'attaquant.
+fn deriver_cle(
+    phrase: &str,
+    sel: &[u8],
+    m: u32,
+    t: u32,
+    p: u32,
+) -> Result<[u8; 32], WalletFichierError> {
+    let params = argon2::Params::new(m, t, p, Some(32))
+        .map_err(|_| WalletFichierError::ParametresArgon)?;
+    let a = argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
+    let mut cle = [0u8; 32];
+    a.hash_password_into(phrase.as_bytes(), sel, &mut cle)
+        .map_err(|_| WalletFichierError::ParametresArgon)?;
+    Ok(cle)
+}
+
+/// Ce qui est authentifié SANS être chiffré : version, sel, paramètres. Les lier
+/// interdit de rejouer le fichier avec un coût mémoire abaissé.
+fn aad_enveloppe(sel: &[u8], m: u32, t: u32, p: u32) -> Vec<u8> {
+    let mut a = vec![VERSION_CHIFFRE];
+    a.extend_from_slice(sel);
+    a.extend_from_slice(&m.to_le_bytes());
+    a.extend_from_slice(&t.to_le_bytes());
+    a.extend_from_slice(&p.to_le_bytes());
+    a
+}
+
 const DOMAINE_EMPREINTE: &str = "obscura/wallet/fichier/v1";
 
 /// Longueur de l'empreinte d'intégrité : `dual_hash` COMPLET (BLAKE3‖SHA3-256), non
@@ -98,6 +152,12 @@ pub enum WalletFichierError {
          hors d'une frontière de bloc"
     )]
     AncreIncoherente { ancre: u64, feuilles: u64 },
+    #[error("fichier chiffré : une phrase de passe est requise pour le lire")]
+    PhraseRequise,
+    #[error("phrase de passe incorrecte, ou fichier chiffré altéré")]
+    PhraseIncorrecte,
+    #[error("paramètres Argon2 invalides")]
+    ParametresArgon,
     #[error("empreinte incorrecte — fichier de wallet corrompu")]
     EmpreinteIncorrecte,
     #[error("clé de réception illisible")]
@@ -284,8 +344,28 @@ impl Wallet {
     /// Les permissions sont posées AVANT d'écrire le contenu — sinon les clés
     /// existeraient brièvement en lecture pour tous, fenêtre suffisante pour un
     /// processus local qui les attend.
-    pub fn enregistrer(&self, chemin: &Path) -> Result<(), WalletFichierError> {
-        let octets = self.to_bytes_secret();
+    /// `protection` est OBLIGATOIRE : voir [`Protection`]. Chiffrer est le cas normal ;
+    /// [`Protection::Aucune`] laisse l'autorité de dépense en clair et doit se lire
+    /// dans le code appelant.
+    pub fn enregistrer(
+        &self,
+        chemin: &Path,
+        protection: &Protection,
+    ) -> Result<(), WalletFichierError> {
+        let clair = self.to_bytes_secret();
+        let octets = match protection {
+            Protection::Aucune => clair,
+            Protection::Phrase(phrase) => {
+                let mut sel = [0u8; SEL_LEN];
+                rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut sel);
+                let cle = deriver_cle(phrase, &sel, ARGON_M_COST, ARGON_T_COST, ARGON_P_COST)?;
+                let aad = aad_enveloppe(&sel, ARGON_M_COST, ARGON_T_COST, ARGON_P_COST);
+                let scelle = crypto::aead::encrypt(&cle, &aad, &clair);
+                let mut v = aad;
+                v.extend_from_slice(&scelle);
+                v
+            }
+        };
         let tmp = chemin.with_extension("tmp");
 
         #[cfg(unix)]
@@ -315,8 +395,32 @@ impl Wallet {
     /// Volontairement SANS variante « ou créer » : un wallet absent et un wallet
     /// illisible doivent être des situations distinctes et visibles. Créer un wallet
     /// neuf en réponse à un fichier illisible masquerait une perte de fonds.
-    pub fn charger(chemin: &Path) -> Result<Self, WalletFichierError> {
-        Self::from_bytes_secret(&std::fs::read(chemin)?)
+    pub fn charger(chemin: &Path, protection: &Protection) -> Result<Self, WalletFichierError> {
+        let brut = std::fs::read(chemin)?;
+        // Un fichier EN CLAIR reste lisible (migration d'un wallet antérieur), avec ou
+        // sans phrase fournie. L'inverse ne l'est pas : un fichier chiffré sans phrase
+        // ne doit surtout pas se dégrader en « illisible », qui se confondrait avec un
+        // fichier corrompu.
+        if brut.first() != Some(&VERSION_CHIFFRE) {
+            return Self::from_bytes_secret(&brut);
+        }
+        let Protection::Phrase(phrase) = protection else {
+            return Err(WalletFichierError::PhraseRequise);
+        };
+        let entete = 1 + SEL_LEN + 12;
+        if brut.len() < entete {
+            return Err(WalletFichierError::Tronque);
+        }
+        let sel = &brut[1..1 + SEL_LEN];
+        let lire = |o: usize| {
+            u32::from_le_bytes([brut[o], brut[o + 1], brut[o + 2], brut[o + 3]])
+        };
+        let (m, t, p) = (lire(1 + SEL_LEN), lire(5 + SEL_LEN), lire(9 + SEL_LEN));
+        let cle = deriver_cle(phrase, sel, m, t, p)?;
+        let aad = aad_enveloppe(sel, m, t, p);
+        let clair = crypto::aead::decrypt(&cle, &aad, &brut[entete..])
+            .map_err(|_| WalletFichierError::PhraseIncorrecte)?;
+        Self::from_bytes_secret(&clair)
     }
 }
 
@@ -403,8 +507,8 @@ mod tests {
     fn aller_retour_fichier() {
         let chemin = fichier("roundtrip");
         let w = wallet_garni();
-        w.enregistrer(&chemin).expect("écriture");
-        let r = Wallet::charger(&chemin).expect("lecture");
+        w.enregistrer(&chemin, &Protection::Aucune).expect("écriture");
+        let r = Wallet::charger(&chemin, &Protection::Aucune).expect("lecture");
         assert_eq!(r.solde(), w.solde());
         assert_eq!(r.racine(), w.racine());
         std::fs::remove_file(&chemin).ok();
@@ -553,18 +657,106 @@ mod tests {
         let chemin = fichier("absent_zzz");
         std::fs::remove_file(&chemin).ok();
         assert!(matches!(
-            Wallet::charger(&chemin),
+            Wallet::charger(&chemin, &Protection::Aucune),
             Err(WalletFichierError::Io(_))
         ));
     }
 
     /// Sur Unix, le fichier de wallet n'est lisible que par son propriétaire.
+    /// Le CYCLE chiffré : un wallet écrit sous phrase se relit à l'identique, et le
+    /// fichier ne contient plus le secret en clair.
+    #[test]
+    fn cycle_chiffre_et_secret_absent_du_fichier() {
+        let w = wallet_garni();
+        let dir = std::env::temp_dir().join(format!("obsc-chiffre-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let chemin = dir.join("w.bin");
+        let phrase = Protection::Phrase("corbeau bleu 42".to_string());
+
+        w.enregistrer(&chemin, &phrase).unwrap();
+        let brut = std::fs::read(&chemin).unwrap();
+        assert_eq!(brut[0], VERSION_CHIFFRE, "l'enveloppe doit s'annoncer chiffrée");
+        // Le secret de dépense ne doit apparaître NULLE PART dans le fichier.
+        let clair = w.to_bytes_secret();
+        assert!(
+            !brut.windows(32).any(|f| clair.windows(32).any(|c| f == c)),
+            "un fragment du clair se retrouve dans le fichier chiffré"
+        );
+
+        let relu = Wallet::charger(&chemin, &phrase).unwrap();
+        assert_eq!(relu.to_bytes_secret(), clair, "cycle chiffré non fidèle");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Une MAUVAISE phrase est refusée explicitement — jamais confondue avec un
+    /// fichier corrompu, et jamais silencieusement dégradée en wallet vide.
+    #[test]
+    fn mauvaise_phrase_refusee() {
+        let w = wallet_garni();
+        let dir = std::env::temp_dir().join(format!("obsc-phrase-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let chemin = dir.join("w.bin");
+        w.enregistrer(&chemin, &Protection::Phrase("bonne".into())).unwrap();
+
+        assert!(matches!(
+            Wallet::charger(&chemin, &Protection::Phrase("mauvaise".into())),
+            Err(WalletFichierError::PhraseIncorrecte)
+        ));
+        // Et sans phrase du tout : un message qui DIT qu'il faut une phrase.
+        assert!(matches!(
+            Wallet::charger(&chemin, &Protection::Aucune),
+            Err(WalletFichierError::PhraseRequise)
+        ));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// ADVERSE — abaisser le coût mémoire dans l'en-tête pour accélérer un crible doit
+    /// invalider le fichier : les paramètres sont authentifiés (AAD), pas seulement lus.
+    #[test]
+    fn parametres_argon_abaisses_sont_rejetes() {
+        let w = wallet_garni();
+        let dir = std::env::temp_dir().join(format!("obsc-aad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let chemin = dir.join("w.bin");
+        let phrase = Protection::Phrase("corbeau bleu 42".to_string());
+        w.enregistrer(&chemin, &phrase).unwrap();
+
+        let mut brut = std::fs::read(&chemin).unwrap();
+        let o = 1 + SEL_LEN; // m_cost
+        brut[o..o + 4].copy_from_slice(&8u32.to_le_bytes()); // 19 Mio → 8 Kio
+        std::fs::write(&chemin, &brut).unwrap();
+        assert!(
+            matches!(
+                Wallet::charger(&chemin, &phrase),
+                Err(WalletFichierError::PhraseIncorrecte)
+            ),
+            "des paramètres Argon abaissés doivent invalider le fichier"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// MIGRATION : un fichier écrit en clair (wallet antérieur) reste lisible, avec ou
+    /// sans phrase fournie — sinon la mise à jour perdrait les fonds existants.
+    #[test]
+    fn un_fichier_en_clair_reste_lisible() {
+        let w = wallet_garni();
+        let dir = std::env::temp_dir().join(format!("obsc-clair-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let chemin = dir.join("w.bin");
+        w.enregistrer(&chemin, &Protection::Aucune).unwrap();
+        for p in [Protection::Aucune, Protection::Phrase("peu importe".into())] {
+            let relu = Wallet::charger(&chemin, &p).unwrap();
+            assert_eq!(relu.to_bytes_secret(), w.to_bytes_secret());
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[cfg(unix)]
     #[test]
     fn permissions_restreintes() {
         use std::os::unix::fs::PermissionsExt;
         let chemin = fichier("perms");
-        wallet_garni().enregistrer(&chemin).unwrap();
+        wallet_garni().enregistrer(&chemin, &Protection::Aucune).unwrap();
         let mode = std::fs::metadata(&chemin).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "l'autorité de dépense ne doit être lisible que par son propriétaire");
         std::fs::remove_file(&chemin).ok();

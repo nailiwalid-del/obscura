@@ -12,3 +12,5 @@ proved-hash = { path = "../proved-hash" }
 hex.workspace = true
 rand_core.workspace = true
 thiserror.workspace = true
+argon2.workspace = true
+zeroize.workspace = true
