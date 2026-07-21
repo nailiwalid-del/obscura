@@ -49,8 +49,11 @@ avant sophistication crypto**. Reste :
    « arbre plein » ; racine identique à `ProvedMerkleTree`, test différentiel) ;
    **persistance disque faite** (`ProvedLedgerState::{to_bytes, from_bytes, save,
    load}` — dump canonique frontier+nullifiers+racines, écriture atomique
-   tmp+rename). Ne reste que les tests key-privacy IK-CCA (**phase 4**) → #7
-   effectivement bouclé pour la phase 3.
+   tmp+rename) ; **test distingueur key-privacy fait** (`ledger::proved_wallet` :
+   invariance de longueur, aucun fragment de clé en clair, chiffrement randomisé,
+   et aucun octet ne sépare deux destinataires sur 24 échantillons — RED vérifié
+   en injectant une empreinte). ⚠️ Portée : non-fuite STRUCTURELLE, PAS une preuve
+   d'IK-CCA (qui repose sur X25519/ANO-CCA Kyber, cf. PROTOCOL.md). **#7 bouclé.**
 2. **3z-c — généralisation M-in/N-out** : au-delà du 2-in/2-out figé, empilement
    accru des colonnes (levier de réduction de taille de preuve additionnel).
    Statut : la 1re tranche **3z-c1** (refonte segmentée à parité) a été entamée
@@ -72,7 +75,8 @@ Puis phase 4 (P2P PQ + Dandelion++ + test key privacy) et phase 5 (nœud/wallet/
 - Versioning d'algos partout : byte 0x01 = round-3 en tête des sérialisations
   KEM/sig ; la migration FIPS 203/204 = nouvelle version 0x02, PAS un simple import
 - spend_pk publié = fuite acceptée UNIQUEMENT en mode transparent dev
-- Key privacy (IK-CCA) exigée pour enc_note — test distingueur à écrire en phase 4
+- Key privacy (IK-CCA) exigée pour enc_note — test distingueur ÉCRIT (non-fuite
+  structurelle ; la réduction IK-CCA elle-même reste un argument, cf. PROTOCOL.md)
 - Hash consensus (BLAKE3‖SHA3) ≠ hash prouvé (Rescue-Prime, migration avec le circuit)
 
 ## Notes de build
