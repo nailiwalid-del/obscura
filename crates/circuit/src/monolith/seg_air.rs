@@ -1459,6 +1459,131 @@ mod tests {
         );
     }
 
+    /// Preuve segmentée à blinding SEEDÉ : deux graines → deux blindings distincts,
+    /// tout le reste identique. Support du test de masquage.
+    #[cfg(test)]
+    fn preuve_seedee(w: &MonolithWitness, seed: u64) -> (MonolithPublicInputs, ValidityProof) {
+        use crate::monolith::seg_trace::build_seg_trace_seeded;
+        use rand::rngs::StdRng;
+        use rand::SeedableRng;
+
+        let depth = w.inputs[0].path.len();
+        let trace = build_seg_trace_seeded(w, &mut StdRng::seed_from_u64(seed));
+        let pi = MonolithPublicInputs {
+            root: read4(&trace, ROOT_C, 0),
+            nullifiers: [
+                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(1, depth) + NF_ROWS_END - 1),
+                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(2, depth) + NF_ROWS_END - 1),
+            ],
+            output_commitments: [
+                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(3, depth) + CM_ROWS_END - 1),
+                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(4, depth) + CM_ROWS_END - 1),
+            ],
+            fee: w.fee,
+            depth,
+        };
+        let prover = SegMonolithProver {
+            options: crate::proof_options_hi(),
+            pi: pi.clone(),
+        };
+        (pi.clone(), ValidityProof(prover.prove(trace).expect("génération")))
+    }
+
+    /// Ouvertures FRI d'une colonne de trace (parsing des trace queries).
+    #[cfg(test)]
+    fn ouvertures_colonne(proof: &ValidityProof, col: usize) -> Vec<BaseElement> {
+        let queries = proof.0.trace_queries[0].clone();
+        let (_op, table) = queries
+            .parse::<BaseElement, Blake3, MerkleTree<Blake3>>(
+                proof.0.lde_domain_size(),
+                proof.0.num_unique_queries as usize,
+                WIDTH,
+            )
+            .expect("parse des trace queries");
+        table.rows().map(|row| row[col]).collect()
+    }
+
+    /// MASQUAGE (witness-hiding) sous la disposition SEGMENTÉE — T5.
+    ///
+    /// Les colonnes PORTEUSES sont CONSTANTES sur `[0, used)`. Sans blinding, leur
+    /// polynôme serait constant et CHAQUE ouverture FRI vaudrait le témoin EN CLAIR
+    /// (fuite catastrophique constatée au zk-spike). C'est le détecteur DUR : il
+    /// échouerait de façon déterministe si le gating `blind_off` sautait sur une
+    /// famille lors du portage segmenté.
+    ///
+    /// Pour chaque porteuse : (a) aucune ouverture ne vaut le témoin, reconstruit
+    /// HORS-CIRCUIT depuis `w` (jamais lu dans la trace) ; (b) les ouvertures ne
+    /// sont pas toutes identiques ; (c) deux preuves de la MÊME tx (graines
+    /// distinctes) ouvrent des valeurs DISJOINTES — le masquage est randomisé, pas
+    /// déterministe.
+    ///
+    /// La porteuse `ROOT_C` est incluse mais NON comparée à un témoin secret : la
+    /// racine est PUBLIQUE. Elle sert de contrôle de cohérence (elle ne doit pas
+    /// fuiter par un canal witness), pas de test de masquage.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "AIR gatée : générer en --release")]
+    fn masquage_porteuses_sous_segments() {
+        use proved_hash::rescue;
+
+        let (w, _root) = witness_de_test();
+        let depth = w.inputs[0].path.len();
+        let (pi1, p1) = preuve_seedee(&w, 41);
+        let (pi2, p2) = preuve_seedee(&w, 42);
+        assert!(verify_seg_monolith(&pi1, depth, &p1), "preuve blindée 1 acceptée");
+        assert!(verify_seg_monolith(&pi2, depth, &p2), "preuve blindée 2 acceptée");
+
+        // Témoins reconstruits HORS-CIRCUIT (jamais lus dans la trace).
+        let owner = rescue::hash(Domain::Owner, w.secret.as_felts());
+        let nk = rescue::hash(Domain::Nk, w.secret.as_felts());
+        let cm0 = {
+            let n = &w.inputs[0].note;
+            rescue::note_commitment(n.value, &n.owner, &n.rho, &n.r)
+        };
+        let leaf0 = proved_hash::merkle::leaf(&cm0);
+
+        // (colonne, valeur témoin attendue) — un représentant par famille.
+        let cibles: Vec<(usize, BaseElement)> = vec![
+            (OWNER_C, owner.0[0].to_winter()),
+            (OWNER_C + 1, owner.0[1].to_winter()),
+            (NK_C, nk.0[0].to_winter()),
+            (NK_C + 1, nk.0[1].to_winter()),
+            (RHO_C[0], w.inputs[0].note.rho.0[0].to_winter()),
+            (CM_C[0], cm0.0[0].to_winter()),
+            (LEAF_C[0], leaf0.0[0].to_winter()),
+            (VIN_C[0], BaseElement::new(w.inputs[0].note.value)),
+            (VOUT_C[0], BaseElement::new(w.outputs[0].value)),
+        ];
+
+        for (col, temoin) in cibles {
+            let o1 = ouvertures_colonne(&p1, col);
+            let o2 = ouvertures_colonne(&p2, col);
+            assert!(!o1.is_empty(), "ouvertures non vides @col {col}");
+
+            // (a) aucune ouverture ne révèle le témoin.
+            assert!(
+                !o1.contains(&temoin),
+                "FUITE : une ouverture FRI vaut le témoin en clair @col {col}"
+            );
+            assert!(!o2.contains(&temoin), "FUITE (preuve 2) @col {col}");
+
+            // (b) les ouvertures ne sont pas toutes identiques (polynôme non constant).
+            assert!(
+                o1.iter().any(|v| *v != o1[0]),
+                "porteuse non masquée : ouvertures toutes identiques @col {col}"
+            );
+
+            // (c) deux blindings distincts → ouvertures disjointes.
+            assert!(
+                o1.iter().zip(o2.iter()).any(|(a, b)| a != b),
+                "masquage déterministe : mêmes ouvertures pour 2 graines @col {col}"
+            );
+        }
+
+        // ROOT_C : contrôle de cohérence (valeur PUBLIQUE, pas un secret).
+        let or = ouvertures_colonne(&p1, ROOT_C);
+        assert!(or.iter().any(|v| *v != or[0]), "ROOT_C doit aussi être blindée");
+    }
+
     /// ORACLE DE PARITÉ — le test que la construction côte à côte rend possible :
     /// le MÊME témoin doit produire les MÊMES publics par les deux monolithes.
     ///
