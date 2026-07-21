@@ -7,11 +7,14 @@
 //! | module | rôle |
 //! |---|---|
 //! | [`message`] | protocole applicatif circulant DANS le canal chiffré |
+//! | [`orchestration`] | ce qu'un nœud FAIT d'un message — fonction PURE, sans E/S |
 //!
 //! Il dépend de `net` (transport) ET du consensus (`circuit`, `ledger`) : c'est
 //! précisément pour garder `net` PUR TRANSPORT — sans dépendance au consensus — que
 //! le câblage vit ici plutôt que là-bas.
 
 pub mod message;
+pub mod orchestration;
 
 pub use message::{Message, MessageError};
+pub use orchestration::{Action, Noeud};
