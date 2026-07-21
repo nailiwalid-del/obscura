@@ -43,13 +43,28 @@ consensus : `dev-transparent` (ledger transparent, non-privé) et `dev-circuits`
 2. ✅ Ledger **transparent de dev** (explicitement non-privé, fonctions `_transparent`)
 3. ✅ **Circuit STARK = définition du consensus** (P1–P7 monolithe, Rescue-Prime des
    commitments/Merkle, spend_pk/path retirés, witness-hiding) — reste 3z-c (M-in/N-out)
-4. ⬜ Réseau P2P chiffré PQ + Dandelion++ + test de key privacy
-5. ⬜ Nœud, wallet CLI, testnet local multi-nœuds
+4. ✅ Réseau P2P chiffré PQ + Dandelion++ + test de key privacy
+5. ✅ Nœud, wallet CLI, testnet local multi-nœuds
+6. ⬜ **Finalité** (ordre convenu entre nœuds) puis synchronisation wallet ↔ nœud
 
 > Phase 3 : intégrité prouvée (P1–P7, monolithe 2-in/2-out) ; depuis 3z-b1 la preuve
 > de consensus est **witness-hiding (HVZK dans le modèle de l'oracle aléatoire)** —
 > caveat : honnête-vérifieur, prototype non audité (docs/STARK_STATEMENT.md,
 > « Argument HVZK »). `ProvedTx` v3 porte les `enc_notes` (scan wallet, liés au digest).
 > Reste dans 3z : la généralisation M-in/N-out (3z-c).
+
+> Phases 4–5 : transport PQ 3 passes (forward secrecy, identités masquées), pairs
+> anti-eclipse, mempool ordonné par coût, Dandelion++, nœud réel et testnet local.
+> Trois binaires : `obscura-node`, `obscura-demo`, `obscura-wallet`.
+
+## Trou de complétude connu
+
+`ProvedLedgerState::apply_proved_tx` implémente et teste la règle de consensus, mais
+**aucun chemin du nœud ne l'appelle** : les transactions s'accumulent dans le mempool
+sans jamais être finalisées. Appliquer localement sans ordre convenu ferait diverger
+les arbres entre nœuds — c'est une brique de FINALITÉ qui manque, pas un câblage.
+
+Conséquence : **un wallet peut payer, pas recevoir**. Détail dans
+docs/THREAT_MODEL.md.
 
 **Prototype pédagogique — pas d'audit de sécurité, ne pas utiliser en production.**

@@ -61,6 +61,24 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   décidé en brique frontier). ⚠️ `observer()` doit être appelé pour CHAQUE
   commitment dans le MÊME ordre que le nœud, sinon les index divergent.
   Monnaie rendue toujours produite ET chiffrée vers soi-même.
+  **Clé d'intention NEUVE à chaque transaction** : `ProvedTx::signer` est public et
+  circule en clair — une clé stable serait un pseudonyme permanent reliant toutes
+  nos transactions, annulant montants engagés, destinataires chiffrés,
+  witness-hiding et Dandelion++ d'un seul coup. Licite car la signature d'intention
+  est une enveloppe d'anti-malléabilité, pas une autorité de propriété. Même raison
+  pour l'identité de transport du CLI, éphémère elle aussi.
+  **`adresse`** : encodage textuel `obs1‖hex(version‖owner‖kem_pk‖somme)` — la somme
+  de contrôle existe parce qu'un paiement vers une adresse abîmée est irréversible
+  et SILENCIEUX (aucun secret ne correspond au owner altéré) ; ⚠️ elle détecte
+  l'accident, PAS l'adversaire (courte, non clefée). ~2,5 Kio, prix des clés PQ.
+  **`persistance`** : `to_bytes_secret`/`charger`/`enregistrer` — le fichier le plus
+  sensible du projet (autorité de DÉPENSE). `0600` posé avant écriture, atomique,
+  empreinte `dual_hash` NON tronquée (un octet retourné dans un montant donnerait
+  sinon un solde faux sans erreur), cohérence croisée note↔arbre au chargement.
+  Aucune variante « charger ou créer » : un fichier illisible ne doit jamais devenir
+  un wallet vide. ⚠️ NON chiffré au repos.
+  `oublier_depensees(&tx)` reconnaît nos notes en RECALCULANT leurs nullifiers —
+  marche donc sur toute transaction observée, pas seulement les nôtres.
 - `crates/node` : **câblage** des briques réseau et consensus (phase 5). `message`
   = protocole applicatif (Annonce/Demande/Transaction) : on annonce des DIGESTS
   (~64 o), jamais les transactions (~68 Kio) — envoyer spontanément la tx à chaque
@@ -86,6 +104,12 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   `0600` sur Unix, écriture atomique, JAMAIS régénéré en silence si corrompu.
   ⚠️ Mempool non persisté (sans gravité : réannoncé par les pairs) ; clé NON
   chiffrée au repos (une phrase de passe supposerait une saisie interactive).
+  **`obscura-wallet`** (3e binaire) : `creer` (REFUSE d'écraser — un wallet écrasé
+  est irrécupérable, aucune option ne force), `adresse`, `solde`, `envoyer`
+  (preuve → handshake PQ éphémère → socket → mempool ; envoie AVANT d'oublier les
+  notes, l'ordre inverse perdrait des notes jamais dépensées si l'envoi échouait).
+  Chemin couvert par `crates/node/tests/paiement_wallet.rs`, qui va de l'adresse
+  TEXTUELLE jusqu'au déchiffrement par le bénéficiaire.
 - `docs/PROTOCOL.md`, `docs/THREAT_MODEL.md` et `docs/STARK_STATEMENT.md` : spécification de référence
 - `cargo test --all-features --release` : suite verte (crypto/net/ledger/circuit/wallet/node)
 
@@ -107,10 +131,21 @@ sophistication crypto**. Reste :
    ⚠️ Piège identifié à ne pas rejouer : mutualiser des colonnes peut SUPPRIMER
    une garantie que la redondance offrait gratuitement (cf. « Liaison de racine »
    dans STARK_STATEMENT.md) — auditer chaque fusion sous cet angle.
-2. **Industrialiser le nœud** : PERSISTANCE entre lancements — identité du nœud
-   et état ledger (`ProvedLedgerState::{save, load}` existe côté ledger depuis
-   #7, PAS encore câblé dans `obscura-node`) — et **wallet CLI** (le crate
-   `wallet` est une bibliothèque ; seul `obscura-demo` l'exerce aujourd'hui).
+2. **FINALITÉ — le trou structurel restant, et la priorité.**
+   `ProvedLedgerState::apply_proved_tx` implémente et teste la règle de consensus,
+   mais AUCUN chemin du nœud ne l'appelle : les transactions s'accumulent dans le
+   mempool sans jamais être appliquées. Ce n'est pas un simple câblage manquant —
+   appliquer localement SANS ordre convenu ferait diverger les arbres entre nœuds,
+   donc les racines, ce qui est pire que de ne rien appliquer. Il manque une notion
+   d'ordre (bloc / lot ordonné identifié et chaîné).
+   Conséquence directe : **un wallet ne peut pas RECEVOIR**. Il lui faut rejouer
+   dans l'ordre tous les commitments pour connaître ses index et produire ses
+   chemins ; le nœud n'en garde pas l'historique (frontier = bord droit) et n'a
+   rien à servir. Le paiement marche de bout en bout, mais la monnaie rendue sort
+   de la vue du wallet faute d'index. Deux briques en découlent : finalité, puis
+   protocole de synchronisation wallet ↔ nœud.
+3. Persistance du wallet ✅ / du nœud ✅ / CLI ✅ (faits) ; restent le chiffrement
+   au repos du fichier de wallet (Argon2 + saisie interactive) et un faucet de dev.
 
 ## Décisions v0.2 (revue intégrée — ne pas régresser)
 

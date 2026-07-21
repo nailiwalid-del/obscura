@@ -29,6 +29,28 @@
 //!
 //! `construire` calcule toujours la monnaie et la chiffre vers le wallet lui-même —
 //! la produire sans pouvoir la déchiffrer équivaudrait à l'oublier.
+//!
+//! # Le signataire est PUBLIC : une clé d'intention par transaction
+//!
+//! `ProvedTx::signer` est un champ public, sérialisé sur le fil et lisible par tout
+//! le réseau. Une clé d'intention STABLE serait donc un identifiant permanent
+//! attaché à chacune de nos transactions : un observateur les relierait toutes entre
+//! elles d'un simple regroupement par `signer`, sans casser la moindre primitive.
+//!
+//! Cela réduirait à néant, pour ce wallet, ce que le reste du protocole construit —
+//! montants engagés, destinataires chiffrés, preuve witness-hiding, Dandelion++ à
+//! l'émission. La chaîne de confidentialité vaut son maillon le plus faible, et un
+//! pseudonyme public en clair est un maillon très faible.
+//!
+//! `construire` tire donc une clé d'intention NEUVE à chaque appel. C'est licite
+//! parce que la signature d'intention est une **enveloppe d'anti-malléabilité**, pas
+//! une autorisation de propriété : l'autorité de dépense vient du `shielded_secret`
+//! prouvé dans le circuit, jamais du signataire. Rien n'a donc besoin de reconnaître
+//! une clé d'intention d'une transaction à l'autre — et c'est précisément ce qui
+//! permet de ne jamais la réutiliser.
+
+pub mod adresse;
+pub mod persistance;
 
 use circuit::{prove_tx, EncNote, ProvedInput, ProvedTx, SpendNote};
 use crypto::kem::{KemKeypair, KemPublicKey};
@@ -75,7 +97,6 @@ pub struct Wallet {
     secret: ShieldedSecret,
     owner: Digest,
     reception: KemKeypair,
-    intent: SigKeypair,
     notes: Vec<NoteDetenue>,
     /// Arbre COMPLET : le nœud n'en a qu'une frontier, incapable de produire les
     /// chemins dont les preuves ont besoin.
@@ -103,7 +124,6 @@ impl Wallet {
             secret,
             owner,
             reception: KemKeypair::generate(),
-            intent: SigKeypair::generate(),
             notes: Vec::new(),
             arbre: ProvedMerkleTree::new(profondeur),
         }
@@ -243,15 +263,66 @@ impl Wallet {
             index: choisies[i].index,
         });
 
+        // Clé d'intention FRAÎCHE à chaque transaction — voir « Le signataire est
+        // public » en tête de module. La réutiliser lierait publiquement toutes nos
+        // transactions entre elles.
+        let intent = SigKeypair::generate();
+
         let (_racine, tx) = prove_tx(
             &self.secret,
             entrees,
             [sortie_paiement, sortie_monnaie],
             frais,
-            &self.intent,
+            &intent,
             enc,
         );
         Ok(tx)
+    }
+
+    /// Nullifier d'une note détenue — exactement ce que le circuit publiera si nous
+    /// la dépensons : `H(nk ‖ rho ‖ cm)`, domaine `Nullifier`.
+    fn nullifier(&self, note: &SpendNote) -> Digest {
+        let nk = rescue::hash(Domain::Nk, self.secret.as_felts());
+        let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
+        let mut payload = Vec::with_capacity(12);
+        payload.extend_from_slice(&nk.0);
+        payload.extend_from_slice(&note.rho.0);
+        payload.extend_from_slice(&cm.0);
+        rescue::hash(Domain::Nullifier, &payload)
+    }
+
+    /// Retire de notre réserve les notes que `tx` dépense. Retourne combien.
+    ///
+    /// La reconnaissance se fait en RECALCULANT le nullifier de chacune de nos notes
+    /// et en le comparant à ceux publiés par la transaction. C'est la seule méthode
+    /// correcte : les nullifiers sont opaques, et rien dans la transaction ne dit
+    /// « ces entrées venaient de vous ». Elle a l'avantage de fonctionner sur
+    /// N'IMPORTE quelle transaction observée, pas seulement les nôtres — donc aussi
+    /// pour un wallet restauré depuis sa graine, ou dépensé depuis un autre appareil.
+    ///
+    /// ⚠️ Ne fait PAS rentrer la monnaie rendue. Le wallet connaît sa note de
+    /// monnaie, mais pas son INDEX dans l'arbre — celui-ci n'existe qu'une fois la
+    /// transaction appliquée par le consensus, et rien ne le lui rapporte
+    /// aujourd'hui. Tant que la synchronisation wallet ↔ nœud n'existe pas, dépenser
+    /// fait donc DISPARAÎTRE la monnaie de la vue du wallet. C'est une limite du
+    /// protocole, pas de cette fonction, et l'appelant doit le dire à l'utilisateur.
+    pub fn oublier_depensees(&mut self, tx: &ProvedTx) -> usize {
+        let publies: Vec<[u8; 32]> = tx.nullifiers.iter().map(|n| n.to_bytes()).collect();
+        // Les nôtres sont calculés AVANT le `retain` : la fermeture ne peut pas
+        // emprunter `self` alors qu'elle mute `self.notes`.
+        let miens: Vec<bool> = self
+            .notes
+            .iter()
+            .map(|d| publies.contains(&self.nullifier(&d.note).to_bytes()))
+            .collect();
+        let avant = self.notes.len();
+        let mut i = 0;
+        self.notes.retain(|_| {
+            let garder = !miens[i];
+            i += 1;
+            garder
+        });
+        avant - self.notes.len()
     }
 
     fn alea(&self) -> Digest {
@@ -377,6 +448,72 @@ mod tests {
         let note = retrouvee.expect("la monnaie doit nous être déchiffrable");
         assert_eq!(note.value, 1_180, "monnaie = disponible − montant − frais");
         assert_eq!(note.owner, w.owner(), "la monnaie revient à NOUS");
+    }
+
+    /// LIABILITÉ : deux transactions du MÊME wallet ne doivent pas partager de
+    /// signataire.
+    ///
+    /// `tx.signer` circule en clair. S'il était stable, un observateur relierait
+    /// toutes nos transactions par simple regroupement — sans casser aucune
+    /// primitive, et en rendant vaines la preuve witness-hiding comme Dandelion++.
+    ///
+    /// RED vérifié en réutilisant une clé d'intention de wallet : les deux
+    /// signataires deviennent identiques et le test échoue.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "preuve gatée : --release")]
+    fn deux_transactions_ne_partagent_pas_de_signataire() {
+        let mut w = Wallet::depuis_secret(secret(700), PROFONDEUR);
+        let _ = crediter(&mut w, 1_000, 500);
+        let dest = Wallet::depuis_secret(secret(900), PROFONDEUR).adresse();
+
+        let tx1 = w.construire(&dest, 100, 10).unwrap();
+        let tx2 = w.construire(&dest, 200, 10).unwrap();
+
+        assert_ne!(
+            tx1.signer.to_bytes(),
+            tx2.signer.to_bytes(),
+            "un signataire stable rendrait nos transactions liables entre elles"
+        );
+    }
+
+    /// Après une dépense, les notes consommées quittent la réserve — reconnues par
+    /// RECALCUL de leur nullifier, jamais par mémorisation de ce qu'on vient
+    /// d'envoyer.
+    ///
+    /// Sans cela, un second paiement resélectionnerait les mêmes notes et produirait
+    /// une double-dépense que le réseau rejetterait, en faisant brûler 4 ms de CPU à
+    /// chaque pair au passage.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "preuve gatée : --release")]
+    fn les_notes_depensees_quittent_la_reserve() {
+        let mut w = Wallet::depuis_secret(secret(700), PROFONDEUR);
+        let _ = crediter(&mut w, 1_000, 500);
+        let dest = Wallet::depuis_secret(secret(900), PROFONDEUR).adresse();
+        assert_eq!(w.solde(), 1_500);
+
+        let tx = w.construire(&dest, 300, 20).unwrap();
+        assert_eq!(w.oublier_depensees(&tx), 2, "les 2 entrées sont consommées");
+        assert_eq!(w.solde(), 0, "la monnaie rendue n'est PAS re-créditée (index inconnu)");
+
+        // Idempotent : rejouer la même transaction ne retire rien de plus.
+        assert_eq!(w.oublier_depensees(&tx), 0);
+    }
+
+    /// Une transaction d'un AUTRE wallet ne doit rien retirer de notre réserve —
+    /// sinon observer le réseau nous ferait perdre nos propres notes.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "preuve gatée : --release")]
+    fn transaction_dautrui_ne_touche_pas_notre_reserve() {
+        let mut etranger = Wallet::depuis_secret(secret(900), PROFONDEUR);
+        let _ = crediter(&mut etranger, 300, 200);
+        let tx = etranger
+            .construire(&Wallet::depuis_secret(secret(1_100), PROFONDEUR).adresse(), 50, 5)
+            .unwrap();
+
+        let mut nous = Wallet::depuis_secret(secret(700), PROFONDEUR);
+        let _ = crediter(&mut nous, 1_000, 500);
+        assert_eq!(nous.oublier_depensees(&tx), 0);
+        assert_eq!(nous.solde(), 1_500);
     }
 
     /// Le destinataire retrouve SON paiement, et pas la monnaie.

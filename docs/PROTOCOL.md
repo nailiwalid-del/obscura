@@ -35,11 +35,47 @@ Note { value: u64, owner: [u8;32], rho: [u8;32], r: [u8;32] }
 | Secret shielded `shielded_secret` | aléa 32 o, jamais publié | racine de l'identité ; témoin du circuit (P2/P4) |
 | Réception/vue | hybride X25519 + Kyber768 | déchiffrer les notes reçues |
 | Nullifier `nk` | `nk = H_nk(shielded_secret)` (**hash prouvé**) | calculer les nullifiers, liée à l'autorité (P4) |
-| Signature `spend` | hybride Ed25519 + Dilithium3 | enveloppe d'intention / anti-malléabilité sur `tx_digest` (PAS autorisation d'ownership tant que non liée au secret — phase 3) |
+| Signature `spend` | hybride Ed25519 + Dilithium3, **NEUVE à chaque transaction** | enveloppe d'intention / anti-malléabilité sur `tx_digest` (PAS autorisation d'ownership tant que non liée au secret — phase 3) |
+
+### La clé d'intention ne doit JAMAIS être réutilisée
+
+`ProvedTx::signer` est un champ **public**, sérialisé sur le fil. Une clé d'intention
+stable serait donc un pseudonyme permanent : un observateur relierait entre elles
+toutes les transactions d'un wallet par simple regroupement sur `signer`, sans casser
+aucune primitive — annulant de fait montants engagés, destinataires chiffrés, preuve
+witness-hiding et Dandelion++ pour ce wallet.
+
+C'est licite parce que la signature d'intention est une **enveloppe
+d'anti-malléabilité**, pas une autorisation de propriété : l'autorité de dépense vient
+du `shielded_secret` prouvé dans le circuit. Rien n'a besoin de reconnaître une clé
+d'intention d'une transaction à l'autre — donc rien n'empêche de la renouveler.
+`wallet::Wallet::construire` en tire une neuve à chaque appel, et ne la persiste pas.
+
+## Adresse
 
 Adresse = (`owner = H_owner(shielded_secret)`, clé publique KEM). Jamais publiée on-chain.
 `owner` et `nk` appartiennent au domaine **« hash prouvé »** : BLAKE3 domain-séparé en
 v0.2 dev, migration vers Rescue-Prime avec le circuit (jamais figés en BLAKE3).
+
+### Encodage textuel (`wallet::adresse`)
+
+```text
+obs1 ‖ hex( version(1 o) ‖ owner(32 o) ‖ kem_pk(1 217 o) ‖ somme(4 o) )
+```
+
+- **Version de FORMAT** distincte de la version d'ALGORITHME portée par `kem_pk` ; les
+  deux sont vérifiées. Une adresse `0x02` (future migration FIPS 203) doit être
+  REFUSÉE par un décodeur round-3, jamais réinterprétée.
+- **Somme de contrôle** : 4 octets de `dual_hash("obscura/adresse/v1", corps)`. Elle
+  existe parce qu'un paiement vers une adresse abîmée est **irréversible et
+  silencieux** — le `owner` altéré ne correspond à aucun secret, la note est engagée
+  et personne ne peut la dépenser. Le protocole ne peut rien rattraper ; la seule
+  défense possible est en amont de la preuve.
+- ⚠️ **La somme détecte l'ACCIDENT, pas l'ADVERSAIRE** : courte et non clefée,
+  quiconque fabrique une adresse en recalcule la somme. L'authenticité d'une adresse
+  vient du CANAL qui l'a transmise, jamais de son encodage.
+- ~2,5 Kio en hexadécimal — le prix des clés post-quantiques (Kyber768 pk = 1 184 o),
+  non réductible par troncature.
 
 ## Versioning des algorithmes (obligatoire)
 

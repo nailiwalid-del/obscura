@@ -67,6 +67,44 @@ avant la phase 3.
   (la migration round-3 → FIPS n'est pas transparente : FIPS 203/204 + errata NIST).
 - **Anti-sabotage de notes** : nullifier lié au commitment (nf = PRF_nk(rho ‖ cm)) —
   deux notes de même rho ne partagent plus le même nullifier.
+- **Aucun pseudonyme public stable par wallet.** Tout champ en clair réutilisé d'une
+  transaction à l'autre est un identifiant, et la confidentialité vaut son maillon le
+  plus faible : un seul champ stable annule montants engagés, destinataires chiffrés,
+  witness-hiding et Dandelion++ à la fois. Deux applications aujourd'hui :
+  `ProvedTx::signer` (clé d'intention **neuve à chaque transaction** — cf.
+  PROTOCOL.md) et l'identité de transport d'un wallet qui soumet à un nœud
+  (**éphémère**, sinon le nœud d'entrée relie toutes nos soumissions).
+
+## Ce que le wallet ne protège PAS (état actuel)
+
+- **Le fichier de wallet n'est pas chiffré au repos.** Il contient l'autorité de
+  DÉPENSE en clair ; sa confidentialité repose entièrement sur les permissions du
+  système de fichiers (`0600` sur Unix, posé avant écriture ; rien sur les plateformes
+  sans permissions POSIX). Une phrase de passe supposerait Argon2 + saisie
+  interactive — à faire correctement plutôt qu'à moitié.
+- **Le nœud d'entrée sait que la transaction vient de nous** (niveau IP). Dandelion++
+  protège la propagation, pas le premier saut : le pair auquel on soumet observe
+  directement l'origine. Se connecter à son propre nœud, ou via un réseau anonymisant,
+  reste à la charge de l'utilisateur.
+- **Aucune finalité, donc aucune réception.** Voir « Trou de complétude » ci-dessous.
+
+## Trou de complétude connu : pas de finalité, donc pas de réception
+
+`ProvedLedgerState::apply_proved_tx` implémente et teste la règle de consensus, mais
+**aucun chemin du nœud ne l'appelle** : les transactions s'accumulent dans le mempool
+sans jamais être appliquées. Il manque une notion d'ORDRE convenu entre nœuds —
+appliquer localement sans accord ferait diverger les arbres, et donc les racines, ce
+qui est pire que ne rien appliquer.
+
+Conséquence directe : un wallet ne peut pas **recevoir**. Il lui faut rejouer dans
+l'ordre tous les commitments insérés dans l'arbre pour en connaître les index et
+produire ses chemins de Merkle ; or le nœud n'en conserve pas l'historique
+(`MerkleFrontier` = bord droit seulement) et n'a rien à servir. Le paiement lui-même
+fonctionne de bout en bout (`crates/node/tests/paiement_wallet.rs`), mais la monnaie
+rendue sort de la vue du wallet faute d'index.
+
+C'est le prochain manque structurel à combler, avant toute sophistication
+cryptographique supplémentaire.
 
 ## Security Claims — Phase 3 (validité + witness-hiding 3z-b1)
 

@@ -147,6 +147,76 @@ impl ProvedMerkleTree {
         }
         Some(siblings)
     }
+
+    /// Encodage canonique : `depth (u8) ‖ n (u64 LE) ‖ feuilles (n × 32 o)`.
+    ///
+    /// Les octets sont les feuilles DÉJÀ HACHÉES (`leaf(cm)`), pas les commitments —
+    /// c'est ce que l'arbre conserve. Sérialiser cette représentation plutôt que les
+    /// commitments d'origine évite d'exposer un accesseur qu'un appelant pourrait
+    /// réalimenter par `append`, ce qui hacherait deux fois et produirait un arbre
+    /// silencieusement faux.
+    ///
+    /// ⚠️ Coût inhérent au rôle wallet : contrairement à la `MerkleFrontier` du nœud
+    /// (O(depth)), le dump est en O(n). Garder les feuilles est précisément ce qui
+    /// permet de produire les chemins.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut b = Vec::with_capacity(1 + 8 + self.leaves.len() * 32);
+        b.push(self.depth as u8);
+        b.extend_from_slice(&(self.leaves.len() as u64).to_le_bytes());
+        for l in &self.leaves {
+            b.extend_from_slice(&l.to_bytes());
+        }
+        b
+    }
+
+    /// Décode un arbre depuis `to_bytes`. Borné et validant — aucune panique sur
+    /// octets corrompus, et le compte de feuilles est vérifié AVANT allocation.
+    pub fn from_bytes(b: &[u8]) -> Result<Self, TreeDecodeError> {
+        if b.len() < 9 {
+            return Err(TreeDecodeError::TooShort);
+        }
+        let depth = b[0] as usize;
+        if depth == 0 || depth > 48 {
+            return Err(TreeDecodeError::BadDepth);
+        }
+        let n = u64::from_le_bytes(b[1..9].try_into().unwrap());
+        // Borne AVANT allocation : un en-tête annonçant 2^48 feuilles ne doit pas
+        // nous faire réserver 9 Pio pour 9 octets lus.
+        if (n as u128) > (1u128 << depth) {
+            return Err(TreeDecodeError::BadCount);
+        }
+        let n = usize::try_from(n).map_err(|_| TreeDecodeError::BadCount)?;
+        let attendu = 9usize
+            .checked_add(n.checked_mul(32).ok_or(TreeDecodeError::BadCount)?)
+            .ok_or(TreeDecodeError::BadCount)?;
+        if b.len() < attendu {
+            return Err(TreeDecodeError::TooShort);
+        }
+        if b.len() > attendu {
+            return Err(TreeDecodeError::TrailingBytes);
+        }
+        let mut leaves = Vec::with_capacity(n);
+        for i in 0..n {
+            let arr: [u8; 32] = b[9 + i * 32..9 + (i + 1) * 32].try_into().unwrap();
+            leaves.push(Digest::from_bytes(&arr).map_err(|_| TreeDecodeError::BadDigest)?);
+        }
+        Ok(ProvedMerkleTree { leaves, depth })
+    }
+}
+
+/// Erreur de désérialisation d'un `ProvedMerkleTree` (`from_bytes`).
+#[derive(Debug, PartialEq, Eq)]
+pub enum TreeDecodeError {
+    /// Moins d'octets qu'annoncé.
+    TooShort,
+    /// Octets résiduels après la fin — encodage non canonique.
+    TrailingBytes,
+    /// `depth` nul ou > 48.
+    BadDepth,
+    /// Plus de feuilles que `2^depth` n'en peut contenir.
+    BadCount,
+    /// Feuille non canonique (`Digest::from_bytes` échoue).
+    BadDigest,
 }
 
 /// L'arbre a atteint `2^depth` feuilles : plus aucune insertion possible.
@@ -321,6 +391,83 @@ mod tests {
         Digest(core::array::from_fn(|i| {
             Felt::from_canonical_u64(seed + i as u64).unwrap()
         }))
+    }
+
+    /// Un arbre wallet RECHARGÉ doit produire les mêmes CHEMINS, pas seulement la
+    /// même racine.
+    ///
+    /// La racine seule ne suffirait pas à conclure : c'est le chemin qui entre dans
+    /// la preuve STARK. Un arbre rechargé à la racine correcte mais aux chemins faux
+    /// laisserait le wallet construire des preuves systématiquement rejetées, sans
+    /// aucun message expliquant pourquoi.
+    #[test]
+    fn arbre_recharge_produit_les_memes_chemins() {
+        let mut t = ProvedMerkleTree::new(6);
+        for i in 0..11u64 {
+            t.append(&digest(i * 10 + 1));
+        }
+        let octets = t.to_bytes();
+        let r = ProvedMerkleTree::from_bytes(&octets).expect("aller-retour");
+
+        assert_eq!(r.depth(), t.depth());
+        assert_eq!(r.len(), t.len());
+        assert_eq!(r.root(), t.root());
+        for i in 0..t.len() as u64 {
+            assert_eq!(r.path(i), t.path(i), "chemin divergent en {i}");
+        }
+        assert_eq!(r.to_bytes(), octets, "canonique : même arbre ⇒ mêmes octets");
+    }
+
+    /// Un arbre VIDE se recharge en arbre vide (cas limite d'un wallet neuf).
+    #[test]
+    fn arbre_vide_aller_retour() {
+        let t = ProvedMerkleTree::new(4);
+        let r = ProvedMerkleTree::from_bytes(&t.to_bytes()).unwrap();
+        assert!(r.is_empty());
+        assert_eq!(r.root(), t.root());
+    }
+
+    /// Octets corrompus : `Result`, jamais de panique — et le compte de feuilles est
+    /// rejeté AVANT allocation (un en-tête annonçant 2^48 feuilles ne doit rien
+    /// coûter).
+    #[test]
+    fn arbre_malforme_rejete_sans_paniquer() {
+        let mut t = ProvedMerkleTree::new(5);
+        t.append(&digest(1));
+        let bon = t.to_bytes();
+
+        // `matches!` : `ProvedMerkleTree` n'est pas `PartialEq` (comparer deux
+        // arbres feuille à feuille n'a pas de sens comme opération publique).
+        assert!(matches!(
+            ProvedMerkleTree::from_bytes(&[]),
+            Err(TreeDecodeError::TooShort)
+        ));
+        assert!(matches!(
+            ProvedMerkleTree::from_bytes(&bon[..bon.len() - 1]),
+            Err(TreeDecodeError::TooShort)
+        ));
+        let mut trop = bon.clone();
+        trop.push(0);
+        assert!(matches!(
+            ProvedMerkleTree::from_bytes(&trop),
+            Err(TreeDecodeError::TrailingBytes)
+        ));
+
+        let mut mauvaise_profondeur = bon.clone();
+        mauvaise_profondeur[0] = 0;
+        assert!(matches!(
+            ProvedMerkleTree::from_bytes(&mauvaise_profondeur),
+            Err(TreeDecodeError::BadDepth)
+        ));
+
+        // En-tête seul annonçant plus de feuilles que l'arbre n'en peut contenir :
+        // refusé sans allouer (2^5 = 32 max ici).
+        let mut enorme = vec![5u8];
+        enorme.extend_from_slice(&u64::MAX.to_le_bytes());
+        assert!(matches!(
+            ProvedMerkleTree::from_bytes(&enorme),
+            Err(TreeDecodeError::BadCount)
+        ));
     }
 
     #[test]

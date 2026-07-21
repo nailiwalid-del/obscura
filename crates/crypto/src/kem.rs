@@ -8,7 +8,7 @@
 
 use crate::CryptoError;
 use pqcrypto_kyber::kyber768;
-use pqcrypto_traits::kem::{Ciphertext as _, PublicKey as _, SharedSecret as _};
+use pqcrypto_traits::kem::{Ciphertext as _, PublicKey as _, SecretKey as _, SharedSecret as _};
 use rand_core::{OsRng, RngCore};
 use x25519_dalek::{PublicKey as XPublicKey, StaticSecret};
 
@@ -116,6 +116,58 @@ pub fn decapsulate(kp: &KemKeypair, ct: &KemCiphertext) -> [u8; 32] {
     )
 }
 
+impl KemKeypair {
+    /// Sérialise la paire COMPLÈTE, **clé secrète comprise**.
+    ///
+    /// ⚠️ DANGER : le résultat est du MATÉRIEL DE CLÉ EN CLAIR. Quiconque l'obtient
+    /// peut DÉCHIFFRER toutes les notes reçues par ce wallet — c'est-à-dire découvrir
+    /// quels paiements lui sont destinés, et leurs montants. À n'écrire que dans un
+    /// fichier aux permissions restreintes, jamais en journal, jamais sur le réseau.
+    ///
+    /// Existe pour qu'un wallet retrouve sa clé de RÉCEPTION entre deux lancements :
+    /// une clé de réception régénérée rendrait indéchiffrables toutes les notes déjà
+    /// reçues — donc les fonds correspondants irrécupérables.
+    ///
+    /// Format : `version ‖ x25519_sk (32 o) ‖ kyber_pk ‖ kyber_sk`. La publique
+    /// X25519 est DÉRIVÉE de la secrète ; celle de Kyber ne l'est pas avec cette
+    /// crate, elle doit donc être stockée — asymétrie du format qui tient à la
+    /// bibliothèque, pas au protocole (même situation que `SigKeypair`).
+    pub fn to_bytes_secret(&self) -> Vec<u8> {
+        let mut v = vec![KEM_ALGO_VERSION];
+        v.extend_from_slice(&self.secret.x25519.to_bytes());
+        v.extend_from_slice(self.public.kyber.as_bytes());
+        v.extend_from_slice(self.secret.kyber.as_bytes());
+        v
+    }
+
+    /// Restaure une paire depuis `to_bytes_secret`.
+    pub fn from_bytes_secret(b: &[u8]) -> Result<Self, CryptoError> {
+        let n_pk = kyber768::public_key_bytes();
+        let n_sk = kyber768::secret_key_bytes();
+        if b.len() != 1 + 32 + n_pk + n_sk || b[0] != KEM_ALGO_VERSION {
+            return Err(CryptoError::InvalidEncoding("KemKeypair"));
+        }
+        let mut x = [0u8; 32];
+        x.copy_from_slice(&b[1..33]);
+        let xsk = StaticSecret::from(x);
+        let xpk = *XPublicKey::from(&xsk).as_bytes();
+        let mpk = kyber768::PublicKey::from_bytes(&b[33..33 + n_pk])
+            .map_err(|_| CryptoError::InvalidEncoding("kyber pk"))?;
+        let msk = kyber768::SecretKey::from_bytes(&b[33 + n_pk..])
+            .map_err(|_| CryptoError::InvalidEncoding("kyber sk"))?;
+        Ok(KemKeypair {
+            public: KemPublicKey {
+                x25519: xpk,
+                kyber: mpk,
+            },
+            secret: KemSecretKey {
+                x25519: xsk,
+                kyber: msk,
+            },
+        })
+    }
+}
+
 impl KemPublicKey {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut v = vec![KEM_ALGO_VERSION];
@@ -195,5 +247,48 @@ mod tests {
         let ct2 = KemCiphertext::from_bytes(&ct.to_bytes()).unwrap();
         assert_eq!(pk2.x25519, kp.public.x25519);
         assert_eq!(ct2.to_bytes(), ct.to_bytes());
+    }
+
+    /// La paire RESTAURÉE doit DÉCHIFFRER ce qui a été chiffré vers l'originale.
+    ///
+    /// C'est la seule propriété qui compte : un wallet rechargé dont la clé de
+    /// réception ne déchiffre plus ses notes a perdu ses fonds. Comparer les octets
+    /// ne suffirait pas — on éprouve donc la capacité de décapsulation elle-même.
+    #[test]
+    fn secret_restaure_dechiffre_ce_qui_etait_chiffre_vers_lorigine() {
+        let kp = KemKeypair::generate();
+        let (ct, ss) = encapsulate(&kp.public);
+
+        let restaure = KemKeypair::from_bytes_secret(&kp.to_bytes_secret()).unwrap();
+        assert_eq!(
+            decapsulate(&restaure, &ct),
+            ss,
+            "la paire rechargée doit décapsuler ce qui visait l'originale"
+        );
+        // Publique identique : c'est la MÊME adresse de réception.
+        assert_eq!(restaure.public.to_bytes(), kp.public.to_bytes());
+        // Encodage canonique : même paire ⇒ mêmes octets.
+        assert_eq!(restaure.to_bytes_secret(), kp.to_bytes_secret());
+    }
+
+    /// Un fichier de clé corrompu, tronqué ou d'une autre version est REJETÉ, jamais
+    /// accepté au rabais : accepter une clé partielle produirait un wallet qui ne
+    /// déchiffre plus rien, sans dire pourquoi.
+    #[test]
+    fn secret_malforme_rejete() {
+        let kp = KemKeypair::generate();
+        let bon = kp.to_bytes_secret();
+
+        assert!(KemKeypair::from_bytes_secret(&[]).is_err());
+        assert!(KemKeypair::from_bytes_secret(&bon[..bon.len() - 1]).is_err());
+        let mut trop = bon.clone();
+        trop.push(0);
+        assert!(KemKeypair::from_bytes_secret(&trop).is_err());
+        let mut autre_version = bon.clone();
+        autre_version[0] = 0x02; // future migration FIPS 203
+        assert!(
+            KemKeypair::from_bytes_secret(&autre_version).is_err(),
+            "une version d'algo inconnue ne doit pas être lue comme du round-3"
+        );
     }
 }
