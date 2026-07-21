@@ -30,9 +30,28 @@
 //! `seg_start` est un multiple de `MERKLE_LEVEL_ROWS` (garde compile-time de
 //! `seg_layout`). C'est précisément ce que le passage `KEY_LEN` 8 → 16 a assuré.
 
+use super::air::{push_preamble, MonolithPublicInputs};
 use super::seg_layout::*;
+use super::seg_trace::build_seg_trace;
+use super::trace::MonolithWitness;
+use crate::merkle_path::enforce_merkle_transition;
+use crate::rescue_round::{enforce_round_block, STATE_WIDTH};
+use crate::sponge::{enforce_sponge_transition, RATE_START};
+use crate::ValidityProof;
+use proved_hash::digest::DIGEST_FELTS;
+use proved_hash::domain::Domain;
 use winter_math::fields::f64::BaseElement;
 use winter_math::FieldElement;
+use winterfell::crypto::{hashers::Blake3_256, DefaultRandomCoin, MerkleTree};
+use winterfell::matrix::ColMatrix;
+use winterfell::{
+    AirContext, Assertion, AuxRandElements, CompositionPoly, CompositionPolyTrace,
+    ConstraintCompositionCoefficients, DefaultConstraintCommitment, DefaultConstraintEvaluator,
+    DefaultTraceLde, EvaluationFrame, PartitionOptions, ProofOptions, Prover, StarkDomain,
+    TraceInfo, TracePolyTable, TraceTable, TransitionConstraintDegree,
+};
+
+type Blake3 = Blake3_256<BaseElement>;
 
 /// Construit une colonne pleine longueur `l` en évaluant `f(kind, i, local)` sur
 /// chaque ligne appartenant à un segment, et `ZERO` hors des segments (traîne
@@ -403,11 +422,674 @@ pub(crate) fn build_periodic(depth: usize, l: usize) -> (PeriodicIdx, Vec<Vec<Ba
     )
 }
 
+// ================================================================================================
+// FAMILLES DE CONTRAINTES (ordre figé pour `result` / `degrees`)
+// ================================================================================================
+//
+// Recomptées pour la disposition segmentée — surtout PAS recopiées du côte-à-côte.
+// La mutualisation fait fondre les familles répétées (4 éponges → 1, 2 chemins → 1)
+// tandis que la porteuse `ROOT_C` et ses liaisons en ajoutent.
+
+const N_KEY: usize = 2 * STATE_WIDTH; // 24 : rondes owner + nk
+const N_SPONGE: usize = STATE_WIDTH; // 12 : UNE famille (était 4×12 = 48)
+const N_MERKLE: usize = 30; // UNE famille (était 2×30 = 60)
+const N_BAL: usize = 3; // bit booléen, S chaîné, VACC
+/// Porteuses = toutes les colonnes partagées SAUF `S_COL` (qui n'est pas constante :
+/// elle est chaînée). Bloc contigu `SHARED_OFF..S_COL`.
+const N_CARRIER: usize = S_COL - SHARED_OFF; // 40 (36 + ROOT_C)
+const N_BASE: usize = N_KEY + N_SPONGE + N_MERKLE + N_BAL + N_CARRIER; // 109
+
+const N_SECRET: usize = DIGEST_FELTS; // liaison secret owner↔nk
+const N_OWNER: usize = 3 * DIGEST_FELTS; // prod (clé) + 2 conso (commitments)
+const N_NK: usize = 3 * DIGEST_FELTS; // prod (clé) + 2 conso (nullifiers)
+const N_RHO: usize = 2 * (2 * DIGEST_FELTS); // par entrée : @7(4) + @40(1) + @47(3)
+const N_CM: usize = 2 * (3 * DIGEST_FELTS); // par entrée : @31 + @32 + @47
+const N_LEAF: usize = 2 * (2 * DIGEST_FELTS); // par entrée : prod @39 + conso @0 (chemin)
+/// NOUVEAU en segmenté : la racine repliée de CHAQUE entrée == porteuse `ROOT_C`.
+/// Le côte-à-côte assertait `root` publiquement sur chaque `M_i` ; ici elle est
+/// assertée une seule fois sur la porteuse, et sans cette liaison les deux entrées
+/// pourraient se replier vers des racines DIFFÉRENTES.
+const N_ROOT: usize = 2 * DIGEST_FELTS;
+const N_VIN: usize = 4; // 2 × (prod @0 + conso VACC)
+const N_VOUT: usize = 4; // 2 × (prod @0 + conso VACC)
+const N_LIAISON: usize =
+    N_SECRET + N_OWNER + N_NK + N_RHO + N_CM + N_LEAF + N_ROOT + N_VIN + N_VOUT; // 100
+const N_CONSTRAINTS: usize = N_BASE + N_LIAISON; // 209 (vs 263 côte-à-côte)
+
+/// Nombre d'assertions publiques.
+///
+/// KEY(16) + 2·IN(43) + 2·chemin(12·depth) + root(4) + 2·OUT(27) + BAL(3).
+/// Écart avec le côte-à-côte (`167 + 24·depth`) : **−4**, parce que `root` est
+/// assertée UNE fois sur la porteuse au lieu d'une fois par chemin.
+fn num_assertions(depth: usize) -> usize {
+    16 + 2 * 43 + 2 * (12 * depth) + 4 + 2 * 27 + 3
+}
+
+// ================================================================================================
+// AIR
+// ================================================================================================
+
+pub(crate) struct SegMonolithAir {
+    context: AirContext<BaseElement>,
+    pi: MonolithPublicInputs,
+    l: usize,
+    depth: usize,
+    /// Index NOMMÉS des colonnes périodiques, calculés une fois à la construction.
+    /// `evaluate_transition` les lit par nom — jamais d'indice en dur.
+    ix: PeriodicIdx,
+}
+
+impl winterfell::Air for SegMonolithAir {
+    type BaseField = BaseElement;
+    type PublicInputs = MonolithPublicInputs;
+
+    fn new(trace_info: TraceInfo, pi: MonolithPublicInputs, options: ProofOptions) -> Self {
+        // Witness-hiding : mêmes exigences qu'en côte-à-côte (cf. super::air::new).
+        assert!(
+            BLIND_ROWS >= options.num_queries() + 4,
+            "BLIND_ROWS ({}) doit couvrir num_queries + 4 ({})",
+            BLIND_ROWS,
+            options.num_queries() + 4
+        );
+        let l = trace_info.length();
+        let depth = pi.depth;
+        let (ix, _) = build_periodic(depth, l);
+        let context = AirContext::new(trace_info, degrees(l), num_assertions(depth), options);
+        SegMonolithAir { context, pi, l, depth, ix }
+    }
+
+    fn evaluate_transition<E: FieldElement + From<Self::BaseField>>(
+        &self,
+        frame: &EvaluationFrame<E>,
+        pv: &[E],
+        result: &mut [E],
+    ) {
+        let cur = frame.current();
+        let next = frame.next();
+        let one = E::ONE;
+        let ix = &self.ix;
+
+        // --- Colonnes périodiques, lues par NOM (jamais par index en dur). ---
+        let round_flag_s = pv[ix.round_flag_s];
+        let ark1 = &pv[ix.ark1..ix.ark1 + STATE_WIDTH];
+        let ark2 = &pv[ix.ark2..ix.ark2 + STATE_WIDTH];
+        let round_flag_m = pv[ix.round_flag_m];
+        let init0 = pv[ix.init0];
+        let init7 = pv[ix.init7];
+        let chain = pv[ix.chain];
+        let sel_key = pv[ix.sel_key];
+        let sel_sponge = pv[ix.sel_sponge];
+        let sel_m = pv[ix.sel_m];
+        let sel_bal = pv[ix.sel_bal];
+        let signe = pv[ix.signe];
+        let pow = pv[ix.pow];
+        let endblk = pv[ix.endblk];
+        let blind_off = pv[ix.blind_off];
+        let rate = RATE_START;
+
+        let mut idx = 0;
+
+        // --- KEY : 2 blocs de rondes (owner ‖ nk), gatés sel_key. ---
+        {
+            let mut tmp = [E::ZERO; N_KEY];
+            let k = &cur[SEG_KEY_OFF..SEG_KEY_OFF + N_KEY];
+            let kn = &next[SEG_KEY_OFF..SEG_KEY_OFF + N_KEY];
+            enforce_round_block(k, kn, 0, ark1, ark2, &mut tmp);
+            enforce_round_block(k, kn, STATE_WIDTH, ark1, ark2, &mut tmp);
+            for (r, t) in tmp.iter().enumerate() {
+                result[idx + r] = sel_key * *t;
+            }
+            idx += N_KEY;
+        }
+
+        // --- ÉPONGE MUTUALISÉE : la même colonne sert la pile des entrées ET le
+        //     commitment des sorties ; c'est le SEGMENT (donc sel_sponge) qui dit
+        //     lequel. Là où le côte-à-côte écrivait quatre fois cette famille. ---
+        {
+            let mut tmp = [E::ZERO; N_SPONGE];
+            enforce_sponge_transition(
+                &cur[SEG_SPONGE_OFF..SEG_SPONGE_OFF + SEG_SPONGE_W],
+                &next[SEG_SPONGE_OFF..SEG_SPONGE_OFF + SEG_SPONGE_W],
+                round_flag_s,
+                ark1,
+                ark2,
+                &mut tmp,
+            );
+            for (r, t) in tmp.iter().enumerate() {
+                result[idx + r] = sel_sponge * *t;
+            }
+            idx += N_SPONGE;
+        }
+
+        // --- CHEMIN DE MERKLE : une seule famille, gatée sel_m (segments IN). ---
+        {
+            let mut tmp = [E::ZERO; N_MERKLE];
+            enforce_merkle_transition(
+                &cur[SEG_MERKLE_OFF..SEG_MERKLE_OFF + SEG_MERKLE_W],
+                &next[SEG_MERKLE_OFF..SEG_MERKLE_OFF + SEG_MERKLE_W],
+                round_flag_m,
+                ark1,
+                ark2,
+                init0,
+                init7,
+                chain,
+                &mut tmp,
+            );
+            for (r, t) in tmp.iter().enumerate() {
+                result[idx + r] = sel_m * *t;
+            }
+            idx += N_MERKLE;
+        }
+
+        // --- ÉQUILIBRE CHAÎNÉ. `signe` vaut 0 sur KEY et hors segments : S y reste
+        //     constant SANS gating supplémentaire. `pow` est relatif au segment. ---
+        {
+            let bit = cur[SEG_BALBIT_OFF + SEG_BAL_BIT];
+            let s = cur[S_COL];
+            let s_next = next[S_COL];
+            let vacc = cur[SEG_BALBIT_OFF + SEG_BAL_VACC];
+            let vacc_next = next[SEG_BALBIT_OFF + SEG_BAL_VACC];
+            result[idx] = sel_bal * bit * (bit - one);
+            result[idx + 1] = s_next - s - signe * bit * pow;
+            result[idx + 2] = sel_bal * (vacc_next - (one - endblk) * (vacc + bit * pow));
+            idx += N_BAL;
+        }
+
+        // --- PORTEUSES : constantes sur la région utile (bloc contigu, S_COL exclue).
+        //     Le gating blind_off est appliqué par la boucle globale en fin. ---
+        for c in 0..N_CARRIER {
+            result[idx + c] = next[SHARED_OFF + c] - cur[SHARED_OFF + c];
+        }
+        idx += N_CARRIER;
+        debug_assert_eq!(idx, N_BASE);
+
+        // ============================================================================
+        // LIAISONS — motif `sel_ancre · (cur[porteuse] − cur[cellule])`.
+        //
+        // Différence CLÉ avec le côte-à-côte : là-bas l'entrée était distinguée par
+        // l'offset de COLONNE (`u_off`) avec un sélecteur de ligne partagé. Ici la
+        // colonne est la même pour les deux entrées et c'est le SÉLECTEUR qui porte
+        // le segment (`ix.anc_in[n][..]`). Une ancre qui désignerait le mauvais
+        // segment lierait la porteuse d'une entrée aux cellules de l'autre.
+        // ============================================================================
+        let sp = SEG_SPONGE_OFF;
+
+        // SECRET : le secret du bloc owner == celui du bloc nk (anti-double-dépense).
+        {
+            let s0k = pv[ix.s0_key];
+            for k in 0..DIGEST_FELTS {
+                result[idx + k] =
+                    s0k * (cur[SEG_KEY_OFF + 7 + k] - cur[SEG_KEY_OFF + STATE_WIDTH + 7 + k]);
+            }
+            idx += N_SECRET;
+        }
+
+        // OWNER : production @7 du segment KEY, consommation @0 de chaque entrée.
+        {
+            let s7k = pv[ix.s7_key];
+            for k in 0..DIGEST_FELTS {
+                result[idx + k] = s7k * (cur[OWNER_C + k] - cur[SEG_KEY_OFF + rate + k]);
+            }
+            idx += DIGEST_FELTS;
+            for n in 0..2 {
+                let s0 = pv[ix.anc_in[n][A_S0]];
+                for k in 0..DIGEST_FELTS {
+                    result[idx + k] = s0 * (cur[OWNER_C + k] - cur[sp + 8 + k]);
+                }
+                idx += DIGEST_FELTS;
+            }
+        }
+
+        // NK : production @7 (bloc nk de la clé), consommation @40 de chaque entrée.
+        {
+            let s7k = pv[ix.s7_key];
+            for k in 0..DIGEST_FELTS {
+                result[idx + k] =
+                    s7k * (cur[NK_C + k] - cur[SEG_KEY_OFF + STATE_WIDTH + rate + k]);
+            }
+            idx += DIGEST_FELTS;
+            for n in 0..2 {
+                let s40 = pv[ix.anc_in[n][A_S40]];
+                for k in 0..DIGEST_FELTS {
+                    result[idx + k] = s40 * (cur[NK_C + k] - cur[sp + 7 + k]);
+                }
+                idx += DIGEST_FELTS;
+            }
+        }
+
+        // RHO : le rho du nullifier == celui du commitment (v0.2, nf lié au cm).
+        for n in 0..2 {
+            let s7 = pv[ix.anc_in[n][A_S7]];
+            let s40 = pv[ix.anc_in[n][A_S40]];
+            let s47 = pv[ix.anc_in[n][A_S47]];
+            for k in 0..DIGEST_FELTS {
+                result[idx + k] = s7 * (cur[RHO_C[n] + k] - cur[sp + 12 + k]);
+            }
+            idx += DIGEST_FELTS;
+            result[idx] = s40 * (cur[RHO_C[n]] - cur[sp + 11]);
+            idx += 1;
+            for j in 0..DIGEST_FELTS - 1 {
+                result[idx + j] = s47 * (cur[RHO_C[n] + 1 + j] - cur[sp + 12 + j]);
+            }
+            idx += DIGEST_FELTS - 1;
+        }
+
+        // CM : le commitment produit gouverne la feuille ET le nullifier (P1).
+        for n in 0..2 {
+            let s31 = pv[ix.anc_in[n][A_S31]];
+            let s32 = pv[ix.anc_in[n][A_S32]];
+            let s47 = pv[ix.anc_in[n][A_S47]];
+            for k in 0..DIGEST_FELTS {
+                result[idx + k] = s31 * (cur[CM_C[n] + k] - cur[sp + rate + k]);
+            }
+            idx += DIGEST_FELTS;
+            for k in 0..DIGEST_FELTS {
+                result[idx + k] = s32 * (cur[CM_C[n] + k] - cur[sp + 7 + k]);
+            }
+            idx += DIGEST_FELTS;
+            for k in 0..DIGEST_FELTS {
+                result[idx + k] = s47 * (cur[CM_C[n] + k] - cur[sp + 15 + k]);
+            }
+            idx += DIGEST_FELTS;
+        }
+
+        // FEUILLE↔CHEMIN : la feuille produite == celle injectée dans le chemin.
+        for n in 0..2 {
+            let s39 = pv[ix.anc_in[n][A_S39]];
+            let s0 = pv[ix.anc_in[n][A_S0]];
+            for k in 0..DIGEST_FELTS {
+                result[idx + k] = s39 * (cur[LEAF_C[n] + k] - cur[sp + rate + k]);
+            }
+            idx += DIGEST_FELTS;
+            for k in 0..DIGEST_FELTS {
+                result[idx + k] = s0 * (cur[LEAF_C[n] + k] - cur[SEG_MERKLE_OFF + 20 + k]);
+            }
+            idx += DIGEST_FELTS;
+        }
+
+        // RACINE (nouveau) : la racine repliée de chaque entrée == porteuse ROOT_C.
+        // Sans elle, les deux entrées pourraient prouver contre des racines
+        // DIFFÉRENTES (chacune valide isolément) — trou créé par la mutualisation.
+        for n in 0..2 {
+            let sr = pv[ix.root_in[n]];
+            for k in 0..DIGEST_FELTS {
+                result[idx + k] = sr * (cur[ROOT_C + k] - cur[SEG_MERKLE_OFF + rate + k]);
+            }
+            idx += DIGEST_FELTS;
+        }
+
+        // MONTANTS (P5) : la value de chaque commitment == le VACC de son segment.
+        let vacc_col = SEG_BALBIT_OFF + SEG_BAL_VACC;
+        for n in 0..2 {
+            let s0 = pv[ix.anc_in[n][A_S0]];
+            let vg = pv[ix.vacc_in[n]];
+            result[idx] = s0 * (cur[VIN_C[n] ] - cur[sp + 7]);
+            result[idx + 1] = vg * (cur[VIN_C[n]] - cur[vacc_col]);
+            idx += 2;
+        }
+        for n in 0..2 {
+            let s0 = pv[ix.s0_out[n]];
+            let vg = pv[ix.vacc_out[n]];
+            result[idx] = s0 * (cur[VOUT_C[n]] - cur[sp + 7]);
+            result[idx + 1] = vg * (cur[VOUT_C[n]] - cur[vacc_col]);
+            idx += 2;
+        }
+
+        debug_assert_eq!(idx, N_CONSTRAINTS);
+
+        // --- Gating global witness-hiding (motif 3z-b1b conservé). ---
+        for r in result.iter_mut() {
+            *r *= blind_off;
+        }
+    }
+
+    fn get_assertions(&self) -> Vec<Assertion<Self::BaseField>> {
+        let d = self.depth;
+        let mut a = Vec::with_capacity(num_assertions(d));
+        let sp = SEG_SPONGE_OFF;
+        let schedule = schedule_2in2out();
+        let ins: Vec<usize> = schedule
+            .iter()
+            .enumerate()
+            .filter(|(_, k)| **k == SegKind::Input)
+            .map(|(i, _)| i)
+            .collect();
+        let outs: Vec<usize> = schedule
+            .iter()
+            .enumerate()
+            .filter(|(_, k)| **k == SegKind::Output)
+            .map(|(i, _)| i)
+            .collect();
+
+        // Segment KEY : éponges owner et nk.
+        let ks = seg_start(0, d);
+        push_preamble(&mut a, ks, SEG_KEY_OFF, 8, Domain::Owner.tag() as u64, DIGEST_FELTS);
+        push_preamble(
+            &mut a,
+            ks,
+            SEG_KEY_OFF + STATE_WIDTH,
+            8,
+            Domain::Nk.tag() as u64,
+            DIGEST_FELTS,
+        );
+
+        // Segments d'ENTRÉE : préambules de la pile + nullifier public + préambules
+        // de chaque merge du chemin. Toutes les lignes sont décalées de seg_start.
+        for (n, &i) in ins.iter().enumerate() {
+            let s = seg_start(i, d);
+            push_preamble(&mut a, s + CM_ROWS_START, sp, 32, Domain::NoteCommitment.tag() as u64, 13);
+            push_preamble(&mut a, s + LEAF_ROWS_START, sp, 8, Domain::MerkleLeaf.tag() as u64, 4);
+            push_preamble(&mut a, s + NF_ROWS_START, sp, 16, Domain::Nullifier.tag() as u64, 12);
+            for k in 0..DIGEST_FELTS {
+                a.push(Assertion::single(
+                    sp + RATE_START + k,
+                    s + NF_ROWS_END - 1,
+                    self.pi.nullifiers[n][k],
+                ));
+            }
+            for b in 0..d {
+                push_preamble(
+                    &mut a,
+                    s + b * MERKLE_LEVEL_ROWS,
+                    SEG_MERKLE_OFF,
+                    12,
+                    Domain::MerkleNode.tag() as u64,
+                    8,
+                );
+            }
+        }
+
+        // RACINE : assertée UNE SEULE FOIS sur la porteuse (les entrées s'y
+        // raccrochent par la liaison `root_in`). Le côte-à-côte l'assertait sur
+        // chaque chemin — d'où les 4 assertions économisées.
+        for k in 0..DIGEST_FELTS {
+            a.push(Assertion::single(ROOT_C + k, 0, self.pi.root[k]));
+        }
+
+        // Segments de SORTIE : préambule de commitment + commitment public.
+        for (n, &j) in outs.iter().enumerate() {
+            let s = seg_start(j, d);
+            push_preamble(&mut a, s, sp, 32, Domain::NoteCommitment.tag() as u64, 13);
+            for k in 0..DIGEST_FELTS {
+                a.push(Assertion::single(
+                    sp + RATE_START + k,
+                    s + CM_ROWS_END - 1,
+                    self.pi.output_commitments[n][k],
+                ));
+            }
+        }
+
+        // Équilibre : S part de 0, vaut fee à la dernière ligne utile.
+        a.push(Assertion::single(S_COL, 0, BaseElement::ZERO));
+        a.push(Assertion::single(
+            S_COL,
+            used_rows(d) - 1,
+            BaseElement::new(self.pi.fee),
+        ));
+        // VACC du PREMIER segment d'unité : sinon témoin libre (aucun `endblk` ne le
+        // précède — le segment KEY n'en produit pas). Même trou d'inflation qu'en
+        // côte-à-côte, mais l'ancrage se déplace en `seg_start(premier IN)`.
+        a.push(Assertion::single(
+            SEG_BALBIT_OFF + SEG_BAL_VACC,
+            seg_start(ins[0], d),
+            BaseElement::ZERO,
+        ));
+
+        a
+    }
+
+    fn get_periodic_column_values(&self) -> Vec<Vec<Self::BaseField>> {
+        build_periodic(self.depth, self.l).1
+    }
+
+    fn context(&self) -> &AirContext<Self::BaseField> {
+        &self.context
+    }
+}
+
+/// Degrés (bornes SUPÉRIEURES) — même calibration qu'en côte-à-côte pour les
+/// familles conservées ; les familles mutualisées gardent leur degré, seul leur
+/// NOMBRE change.
+fn degrees(n: usize) -> Vec<TransitionConstraintDegree> {
+    let wc = TransitionConstraintDegree::with_cycles;
+    let mut d = Vec::with_capacity(N_CONSTRAINTS);
+
+    for _ in 0..N_KEY {
+        d.push(wc(7, vec![n, n]));
+    }
+    for _ in 0..N_SPONGE {
+        d.push(wc(7, vec![8, n, n]));
+    }
+    // Chemin : 12 sponge, 10 booléen/copies (deg 2), 8 swap (deg 3).
+    for _ in 0..12 {
+        d.push(wc(8, vec![8, MERKLE_LEVEL_ROWS, n, n]));
+    }
+    for _ in 0..10 {
+        d.push(wc(2, vec![n, n]));
+    }
+    for _ in 0..8 {
+        d.push(wc(3, vec![n, n]));
+    }
+    d.push(wc(2, vec![n, n])); // bit booléen
+    d.push(wc(2, vec![n, n, n])); // S chaîné
+    d.push(wc(2, vec![n, n, n, n])); // VACC
+    for _ in 0..N_CARRIER {
+        d.push(wc(1, vec![n]));
+    }
+    for _ in 0..N_LIAISON {
+        d.push(wc(1, vec![n, n]));
+    }
+
+    debug_assert_eq!(d.len(), N_CONSTRAINTS);
+    d
+}
+
+// ================================================================================================
+// PROUVEUR + API INTERNE
+// ================================================================================================
+
+struct SegMonolithProver {
+    options: ProofOptions,
+    pi: MonolithPublicInputs,
+}
+
+impl Prover for SegMonolithProver {
+    type BaseField = BaseElement;
+    type Air = SegMonolithAir;
+    type Trace = TraceTable<BaseElement>;
+    type HashFn = Blake3;
+    type VC = MerkleTree<Blake3>;
+    type RandomCoin = DefaultRandomCoin<Blake3>;
+    type TraceLde<E: FieldElement<BaseField = Self::BaseField>> =
+        DefaultTraceLde<E, Self::HashFn, Self::VC>;
+    type ConstraintCommitment<E: FieldElement<BaseField = Self::BaseField>> =
+        DefaultConstraintCommitment<E, Self::HashFn, Self::VC>;
+    type ConstraintEvaluator<'a, E: FieldElement<BaseField = Self::BaseField>> =
+        DefaultConstraintEvaluator<'a, Self::Air, E>;
+
+    fn get_pub_inputs(&self, _trace: &Self::Trace) -> MonolithPublicInputs {
+        self.pi.clone()
+    }
+    fn options(&self) -> &ProofOptions {
+        &self.options
+    }
+    fn new_trace_lde<E: FieldElement<BaseField = Self::BaseField>>(
+        &self,
+        trace_info: &TraceInfo,
+        main_trace: &ColMatrix<Self::BaseField>,
+        domain: &StarkDomain<Self::BaseField>,
+        partition_options: PartitionOptions,
+    ) -> (Self::TraceLde<E>, TracePolyTable<E>) {
+        DefaultTraceLde::new(trace_info, main_trace, domain, partition_options)
+    }
+    fn new_evaluator<'a, E: FieldElement<BaseField = Self::BaseField>>(
+        &self,
+        air: &'a Self::Air,
+        aux_rand_elements: Option<AuxRandElements<E>>,
+        composition_coefficients: ConstraintCompositionCoefficients<E>,
+    ) -> Self::ConstraintEvaluator<'a, E> {
+        DefaultConstraintEvaluator::new(air, aux_rand_elements, composition_coefficients)
+    }
+    fn build_constraint_commitment<E: FieldElement<BaseField = Self::BaseField>>(
+        &self,
+        composition_poly_trace: CompositionPolyTrace<E>,
+        num_constraint_composition_columns: usize,
+        domain: &StarkDomain<Self::BaseField>,
+        partition_options: PartitionOptions,
+    ) -> (Self::ConstraintCommitment<E>, CompositionPoly<E>) {
+        DefaultConstraintCommitment::new(
+            composition_poly_trace,
+            num_constraint_composition_columns,
+            domain,
+            partition_options,
+        )
+    }
+}
+
+fn read4(trace: &TraceTable<BaseElement>, col: usize, row: usize) -> [BaseElement; DIGEST_FELTS] {
+    core::array::from_fn(|k| trace.get(col + k, row))
+}
+
+/// Prouve le monolithe SEGMENTÉ. À générer en `--release`.
+///
+/// Les publics sont extraits de la trace aux positions du SCHEDULE (et non à des
+/// lignes littérales) : la racine sur la porteuse, les nullifiers et commitments à
+/// la fin de la pile de leur segment respectif.
+pub(crate) fn prove_seg_monolith(w: &MonolithWitness) -> (MonolithPublicInputs, ValidityProof) {
+    let depth = w.inputs[0].path.len();
+    let trace = build_seg_trace(w);
+    debug_assert_eq!(trace.width(), WIDTH);
+
+    let schedule = schedule_2in2out();
+    let seg_de = |voulu: SegKind| -> Vec<usize> {
+        schedule
+            .iter()
+            .enumerate()
+            .filter(|(_, k)| **k == voulu)
+            .map(|(i, _)| i)
+            .collect()
+    };
+    let ins = seg_de(SegKind::Input);
+    let outs = seg_de(SegKind::Output);
+    let nf = |n: usize| {
+        read4(
+            &trace,
+            SEG_SPONGE_OFF + RATE_START,
+            seg_start(ins[n], depth) + NF_ROWS_END - 1,
+        )
+    };
+    let oc = |n: usize| {
+        read4(
+            &trace,
+            SEG_SPONGE_OFF + RATE_START,
+            seg_start(outs[n], depth) + CM_ROWS_END - 1,
+        )
+    };
+
+    let pi = MonolithPublicInputs {
+        // La racine est lue sur la PORTEUSE (constante) — les liaisons `root_in`
+        // garantissent qu'elle égale la racine repliée de chaque entrée.
+        root: read4(&trace, ROOT_C, 0),
+        nullifiers: [nf(0), nf(1)],
+        output_commitments: [oc(0), oc(1)],
+        fee: w.fee,
+        depth,
+    };
+
+    let prover = SegMonolithProver {
+        options: crate::proof_options_hi(),
+        pi: pi.clone(),
+    };
+    let proof = prover.prove(trace).expect("génération de preuve");
+    (pi, ValidityProof(proof))
+}
+
+/// Vérifie une preuve du monolithe segmenté.
+pub(crate) fn verify_seg_monolith(
+    pi: &MonolithPublicInputs,
+    depth: usize,
+    proof: &ValidityProof,
+) -> bool {
+    let mut pv = pi.clone();
+    pv.depth = depth;
+    let acceptable = winterfell::AcceptableOptions::MinConjecturedSecurity(95);
+    winterfell::verify::<SegMonolithAir, Blake3, DefaultRandomCoin<Blake3>, MerkleTree<Blake3>>(
+        proof.0.clone(),
+        pv,
+        &acceptable,
+    )
+    .is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::monolith::trace::witness_de_test;
 
     const DEPTHS: [usize; 2] = [2, 32];
+
+    /// Décompte des contraintes : recompté pour le segmenté, PAS recopié. La
+    /// mutualisation fait fondre les familles répétées.
+    #[test]
+    fn decompte_des_contraintes() {
+        assert_eq!(N_BASE, N_KEY + N_SPONGE + N_MERKLE + N_BAL + N_CARRIER);
+        assert_eq!(N_CONSTRAINTS, N_BASE + N_LIAISON);
+        // Les porteuses forment le bloc contigu SHARED_OFF..S_COL (S_COL exclue :
+        // elle est chaînée, pas constante).
+        assert_eq!(N_CARRIER, S_COL - SHARED_OFF);
+        // `degrees` doit produire exactement N_CONSTRAINTS entrées.
+        assert_eq!(degrees(trace_len(2)).len(), N_CONSTRAINTS);
+        // Moins de slots que le côte-à-côte (263) : éponges 48→12, Merkle 60→30.
+        const { assert!(N_CONSTRAINTS < 263, "la mutualisation doit réduire les slots") };
+    }
+
+    /// Roundtrip : une preuve segmentée d'un témoin honnête est acceptée, et chaque
+    /// public falsifié est rejeté.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
+    fn roundtrip_segmente() {
+        let (w, _root) = witness_de_test();
+        let (pi, proof) = prove_seg_monolith(&w);
+        assert!(verify_seg_monolith(&pi, pi.depth, &proof), "témoin honnête accepté");
+
+        let falsifie = |f: &dyn Fn(&mut MonolithPublicInputs)| {
+            let mut p = pi.clone();
+            f(&mut p);
+            assert!(
+                !verify_seg_monolith(&p, pi.depth, &proof),
+                "public falsifié doit être rejeté"
+            );
+        };
+        falsifie(&|p| p.root[0] += BaseElement::ONE);
+        falsifie(&|p| p.nullifiers[0][0] += BaseElement::ONE);
+        falsifie(&|p| p.nullifiers[1][0] += BaseElement::ONE);
+        falsifie(&|p| p.output_commitments[0][0] += BaseElement::ONE);
+        falsifie(&|p| p.output_commitments[1][0] += BaseElement::ONE);
+        falsifie(&|p| p.fee += 1);
+    }
+
+    /// ORACLE DE PARITÉ — le test que la construction côte à côte rend possible :
+    /// le MÊME témoin doit produire les MÊMES publics par les deux monolithes.
+    ///
+    /// C'est la non-régression la plus forte disponible : elle compare le segmenté
+    /// à une implémentation indépendante et déjà éprouvée, plutôt qu'à ses propres
+    /// attentes.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "monolithes gatés : --release")]
+    fn parite_publics_segmente_vs_cote_a_cote() {
+        let (w, _root) = witness_de_test();
+        let (pi_seg, _) = prove_seg_monolith(&w);
+        let (pi_ref, _) = super::super::air::prove_monolith(&w);
+
+        assert_eq!(pi_seg.root, pi_ref.root, "racine");
+        assert_eq!(pi_seg.nullifiers, pi_ref.nullifiers, "nullifiers");
+        assert_eq!(
+            pi_seg.output_commitments, pi_ref.output_commitments,
+            "commitments de sortie"
+        );
+        assert_eq!(pi_seg.fee, pi_ref.fee, "fee");
+        assert_eq!(pi_seg.depth, pi_ref.depth, "profondeur");
+    }
 
     fn indices_non_nuls(col: &[BaseElement]) -> Vec<usize> {
         col.iter()
