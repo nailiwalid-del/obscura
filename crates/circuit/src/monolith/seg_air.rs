@@ -263,6 +263,13 @@ pub(crate) struct PeriodicIdx {
     pub anc_in: [[usize; ANCRES_IN.len()]; 2],
     /// Ligne `RANGE_BITS` du i-ème segment d'entrée : consommation VACC (montant plein).
     pub vacc_in: [usize; 2],
+    /// Dernière ligne du chemin de Merkle du i-ème segment d'entrée
+    /// (`16·depth − 1`) : liaison « racine repliée == porteuse `ROOT_C` ».
+    ///
+    /// NOUVEAU en segmenté : le côte-à-côte assertait `root` publiquement sur
+    /// CHAQUE `M_i` ; ici `root` est assertée une seule fois sur la porteuse, et
+    /// chaque entrée s'y raccroche par cette liaison.
+    pub root_in: [usize; 2],
     /// Ligne 0 du j-ème segment de SORTIE : production vout.
     pub s0_out: [usize; 2],
     /// Ligne `RANGE_BITS` du j-ème segment de sortie : consommation VACC.
@@ -346,12 +353,15 @@ pub(crate) fn build_periodic(depth: usize, l: usize) -> (PeriodicIdx, Vec<Vec<Ba
 
     let mut anc_in = [[0usize; ANCRES_IN.len()]; 2];
     let mut vacc_in = [0usize; 2];
+    let mut root_in = [0usize; 2];
     for (n, &i) in ins.iter().enumerate() {
         let s = seg_start(i, depth);
         for (a, &ancre) in ANCRES_IN.iter().enumerate() {
             anc_in[n][a] = push(&mut cols, at_abs(l, s + ancre));
         }
         vacc_in[n] = push(&mut cols, at_abs(l, s + crate::range_check::RANGE_BITS));
+        // Dernière ligne du chemin : racine repliée == porteuse ROOT_C.
+        root_in[n] = push(&mut cols, at_abs(l, s + MERKLE_LEVEL_ROWS * depth - 1));
     }
 
     let mut s0_out = [0usize; 2];
@@ -384,6 +394,7 @@ pub(crate) fn build_periodic(depth: usize, l: usize) -> (PeriodicIdx, Vec<Vec<Ba
             s7_key,
             anc_in,
             vacc_in,
+            root_in,
             s0_out,
             vacc_out,
             total,
@@ -676,6 +687,12 @@ mod tests {
                     indices_non_nuls(&cols[ix.vacc_in[n]]),
                     vec![s + crate::range_check::RANGE_BITS]
                 );
+                // Ancre de racine : dernière ligne du chemin de Merkle du segment.
+                assert_eq!(
+                    indices_non_nuls(&cols[ix.root_in[n]]),
+                    vec![s + MERKLE_LEVEL_ROWS * depth - 1],
+                    "ancre de racine de l'entrée {n} @ depth {depth}"
+                );
             }
 
             // Segments de SORTIE.
@@ -727,6 +744,7 @@ mod tests {
             for n in 0..2 {
                 vus.extend_from_slice(&ix.anc_in[n]);
                 vus.push(ix.vacc_in[n]);
+                vus.push(ix.root_in[n]);
                 vus.push(ix.s0_out[n]);
                 vus.push(ix.vacc_out[n]);
             }
