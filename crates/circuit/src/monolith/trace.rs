@@ -62,7 +62,7 @@ pub(crate) fn segment<const N: usize>(
 }
 
 /// Lit un digest (4 Felts) dans un tampon de lignes largeur `N`, à `(row, col)`.
-fn read_digest<const N: usize>(rows: &[[BaseElement; N]], row: usize, col: usize) -> Digest {
+pub(crate) fn read_digest<const N: usize>(rows: &[[BaseElement; N]], row: usize, col: usize) -> Digest {
     Digest(core::array::from_fn(|k| {
         Felt::from_winter(rows[row][col + k]).expect("digest canonique")
     }))
@@ -70,7 +70,7 @@ fn read_digest<const N: usize>(rows: &[[BaseElement; N]], row: usize, col: usize
 
 /// Lignes d'une éponge `H_domain(payload)`, alignées PAD_ZERO* (motif de
 /// `sponge::prove_sponge`, sans le prouveur).
-fn sponge_rows_for(domain: Domain, payload: &[Felt]) -> Vec<[BaseElement; TRACE_WIDTH]> {
+pub(crate) fn sponge_rows_for(domain: Domain, payload: &[Felt]) -> Vec<[BaseElement; TRACE_WIDTH]> {
     let mut preamble: Vec<BaseElement> = sponge_preamble(domain, payload)
         .iter()
         .map(|f| f.to_winter())
@@ -83,10 +83,10 @@ fn sponge_rows_for(domain: Domain, payload: &[Felt]) -> Vec<[BaseElement; TRACE_
 // CLÉ (recopie locale de `key::build_key_trace`, cf. brief T2 — 2 blocs B=1, 8 lignes)
 // ================================================================================================
 
-const KEY_WIDTH: usize = 2 * STATE_WIDTH; // 24
+pub(crate) const KEY_WIDTH: usize = 2 * STATE_WIDTH; // 24
 const KEY_SECRET_START: usize = RATE_START + 3; // 7
 const KEY_PAD_ONE_IDX: usize = 11;
-const KEY_NK_LOCAL_OFF: usize = STATE_WIDTH; // 12 : bloc nk dans les 24 colonnes locales
+pub(crate) const KEY_NK_LOCAL_OFF: usize = STATE_WIDTH; // 12 : bloc nk dans les 24 colonnes locales
 const KEY_ABSORBED_LEN: u64 = 8; // préambule [V, tag, LEN, s0..s3, PAD_ONE] = 1 bloc
 const KEY_PAYLOAD_LEN: u64 = DIGEST_FELTS as u64;
 
@@ -108,7 +108,7 @@ fn key_initial_state(domain: Domain, secret: &[Felt; DIGEST_FELTS]) -> [BaseElem
 /// Lignes de la trace de clé : bloc owner (colonnes locales `0..12`) + bloc nk
 /// (`12..24`) côte à côte, pour LE MÊME secret — recopie de `key::build_key_trace`
 /// (sans dépendre de sa visibilité privée).
-fn key_rows(secret: &[Felt; DIGEST_FELTS]) -> Vec<[BaseElement; KEY_WIDTH]> {
+pub(crate) fn key_rows(secret: &[Felt; DIGEST_FELTS]) -> Vec<[BaseElement; KEY_WIDTH]> {
     key_rows_split(secret, secret)
 }
 
@@ -193,7 +193,7 @@ fn fill_balance(dst: &mut [[BaseElement; WIDTH]], amounts: [u64; 4]) {
 // ================================================================================================
 
 /// Un élément de corps uniformément aléatoire (réduit mod p par winterfell).
-fn felt_alea(rng: &mut impl rand::Rng) -> BaseElement {
+pub(crate) fn felt_alea(rng: &mut impl rand::Rng) -> BaseElement {
     BaseElement::new(rng.next_u64())
 }
 

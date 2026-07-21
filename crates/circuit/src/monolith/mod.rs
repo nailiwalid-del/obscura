@@ -26,3 +26,5 @@ pub(crate) mod trace;
 // (`seg_trace` T2, `seg_air` T3) n'existent pas encore. À retirer dès T3.
 #[allow(dead_code)]
 pub(crate) mod seg_layout;
+#[allow(dead_code)]
+pub(crate) mod seg_trace;
