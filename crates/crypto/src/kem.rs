@@ -248,7 +248,7 @@ mod tests {
         for u in ORDRE_FAIBLE {
             let hostile = KemPublicKey {
                 x25519: u,
-                kyber: bob.public.kyber.clone(),
+                kyber: bob.public.kyber,
             };
             assert!(
                 matches!(encapsulate(&hostile), Err(CryptoError::NonContributif)),
@@ -268,7 +268,7 @@ mod tests {
         for u in ORDRE_FAIBLE {
             let hostile = KemCiphertext {
                 x25519_eph: u,
-                kyber_ct: ct.kyber_ct.clone(),
+                kyber_ct: ct.kyber_ct,
             };
             assert!(
                 matches!(decapsulate(&bob, &hostile), Err(CryptoError::NonContributif)),
