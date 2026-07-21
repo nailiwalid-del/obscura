@@ -26,8 +26,10 @@
 //! reste invisible. S'en prémunir exige des identifiants de blocs venus d'AILLEURS
 //! (plusieurs nœuds, point de contrôle hors bande) — cf. docs/THREAT_MODEL.md.
 //!
-//! ⚠️ **Prototype non audité.** Le fichier de wallet contient l'AUTORITÉ DE DÉPENSE
-//! en clair (cf. `wallet::persistance`).
+//! ⚠️ **Prototype non audité.** Le fichier de wallet contient l'AUTORITÉ DE DÉPENSE,
+//! chiffrée au repos sous une phrase de passe (Argon2id + cascade AEAD) — ou EN CLAIR
+//! si `OBSCURA_WALLET_SANS_CHIFFREMENT=1` l'a explicitement demandé
+//! (cf. `wallet::persistance`).
 
 use crypto::sig::SigKeypair;
 use net::connexion::Connexion;
@@ -54,6 +56,25 @@ const DELAI_ECRITURE: Duration = Duration::from_secs(20);
 const CADENCE_DEMANDES: Duration = Duration::from_millis(50);
 
 
+/// Protection du fichier de wallet, résolue UNE SEULE FOIS par invocation.
+///
+/// La résolution est PARESSEUSE (première utilisation) puis mémorisée : `creer` peut
+/// ainsi refuser d'écraser un fichier AVANT toute saisie, et surtout la phrase n'est
+/// jamais redemandée en cours de commande. Sans cela, `synchroniser` la redemandait à
+/// CHAQUE bloc enregistré — et une frappe différente à mi-course aurait ré-enregistré
+/// le wallet sous une AUTRE phrase que celle du début, silencieusement.
+struct ProtectionCli(std::cell::OnceCell<wallet::persistance::Protection>);
+
+impl ProtectionCli {
+    fn nouvelle() -> Self {
+        ProtectionCli(std::cell::OnceCell::new())
+    }
+
+    fn get(&self) -> &wallet::persistance::Protection {
+        self.0.get_or_init(resoudre_protection)
+    }
+}
+
 /// Protection du fichier de wallet, résolue SANS valeur par défaut silencieuse.
 ///
 /// 1. `OBSCURA_WALLET_PHRASE` si définie (voie scriptable / CI) ;
@@ -66,7 +87,7 @@ const CADENCE_DEMANDES: Duration = Duration::from_millis(50);
 ///
 /// Sort du processus plutôt que de propager : sans protection résolue, aucune commande
 /// de wallet n'a de sens, et un `Result` remonté ici n'ajouterait qu'du bruit.
-fn protection() -> wallet::persistance::Protection {
+fn resoudre_protection() -> wallet::persistance::Protection {
     use wallet::persistance::Protection;
     if let Ok(p) = std::env::var("OBSCURA_WALLET_PHRASE") {
         if !p.is_empty() {
@@ -174,15 +195,41 @@ fn lire_options(args: &[String]) -> Options {
     o
 }
 
-fn charger(chemin: &Path) -> Wallet {
-    Wallet::charger(chemin, &protection()).unwrap_or_else(|e| {
-        abandon(&format!(
+fn charger(chemin: &Path, protection: &ProtectionCli) -> Wallet {
+    use wallet::persistance::{Protection, WalletFichierError};
+    match Wallet::charger(chemin, protection.get()) {
+        Ok(w) => w,
+        // Fichier EN CLAIR alors qu'une phrase est fournie : jamais lu en silence
+        // (un repli implicite permettrait de substituer un wallet en clair à un
+        // wallet chiffré sans que rien ne le signale). La migration est un GESTE :
+        // `OBSCURA_WALLET_MIGRER=1` relit le clair et réenregistre sous la phrase.
+        Err(WalletFichierError::FichierEnClair) => {
+            if std::env::var("OBSCURA_WALLET_MIGRER").as_deref() != Ok("1") {
+                abandon(&format!(
+                    "{} est EN CLAIR alors qu'une phrase de passe est fournie.\n\
+                     \x20        Si c'est bien votre wallet d'avant le chiffrement, migrez-le\n\
+                     \x20        explicitement : relancez avec OBSCURA_WALLET_MIGRER=1 (il sera\n\
+                     \x20        réenregistré chiffré sous votre phrase). Sinon, quelqu'un a\n\
+                     \x20        peut-être REMPLACÉ votre fichier : n'allez pas plus loin.",
+                    chemin.display()
+                ));
+            }
+            let w = Wallet::charger(chemin, &Protection::Aucune).unwrap_or_else(|e| {
+                abandon(&format!("wallet illisible ({}) : {e}", chemin.display()))
+            });
+            if let Err(e) = w.enregistrer(chemin, protection.get()) {
+                abandon(&format!("migration impossible ({}) : {e}", chemin.display()));
+            }
+            eprintln!("wallet migré : désormais chiffré sous votre phrase de passe.");
+            w
+        }
+        Err(e) => abandon(&format!(
             "wallet illisible ({}) : {e}\n\
              \x20        Ce fichier n'est PAS remplacé automatiquement : un wallet écrasé\n\
              \x20        est irrécupérable. Restaurez une sauvegarde.",
             chemin.display()
-        ))
-    })
+        )),
+    }
 }
 
 fn main() {
@@ -193,14 +240,15 @@ fn main() {
         eprintln!("--fichier est obligatoire");
         usage()
     };
+    let protection = ProtectionCli::nouvelle();
 
     match commande.as_str() {
-        "creer" => creer(&fichier),
-        "adresse" => println!("{}", charger(&fichier).adresse().encoder()),
-        "synchroniser" => synchroniser(&fichier, &o),
-        "solde" => solde(&fichier),
-        "envoyer" => envoyer(&fichier, &o),
-        "consolider" => consolider(&fichier, &o),
+        "creer" => creer(&fichier, &protection),
+        "adresse" => println!("{}", charger(&fichier, &protection).adresse().encoder()),
+        "synchroniser" => synchroniser(&fichier, &o, &protection),
+        "solde" => solde(&fichier, &protection),
+        "envoyer" => envoyer(&fichier, &o, &protection),
+        "consolider" => consolider(&fichier, &o, &protection),
         _ => usage(),
     }
 }
@@ -210,7 +258,7 @@ fn main() {
 /// C'est le garde-fou le plus important du binaire : `creer` sur un wallet garni
 /// détruirait des fonds sans recours possible. Aucune option ne force l'écrasement,
 /// délibérément.
-fn creer(fichier: &Path) {
+fn creer(fichier: &Path, protection: &ProtectionCli) {
     if fichier.exists() {
         abandon(&format!(
             "{} existe déjà — refus d'écraser un wallet.\n\
@@ -220,7 +268,7 @@ fn creer(fichier: &Path) {
         ));
     }
     let w = Wallet::nouveau(CONSENSUS_DEPTH);
-    if let Err(e) = w.enregistrer(fichier, &protection()) {
+    if let Err(e) = w.enregistrer(fichier, protection.get()) {
         abandon(&format!("écriture impossible : {e}"));
     }
     println!("wallet créé : {}", fichier.display());
@@ -228,15 +276,24 @@ fn creer(fichier: &Path) {
     println!("adresse à communiquer au payeur :");
     println!("{}", w.adresse().encoder());
     println!();
-    println!("⚠️  Ce fichier contient l'autorité de dépense, EN CLAIR et non chiffrée.");
-    println!("    Sauvegardez-le : il n'existe nulle part ailleurs.");
+    match protection.get() {
+        wallet::persistance::Protection::Aucune => {
+            println!("⚠️  Ce fichier contient l'autorité de dépense, EN CLAIR et non chiffrée.");
+            println!("    Sauvegardez-le : il n'existe nulle part ailleurs.");
+        }
+        wallet::persistance::Protection::Phrase(_) => {
+            println!("Ce fichier contient l'autorité de dépense, chiffrée sous votre phrase.");
+            println!("⚠️  Sauvegardez-le ET retenez la phrase : sans elle il est illisible,");
+            println!("    et il n'existe nulle part ailleurs.");
+        }
+    }
     println!();
     println!("Un wallet neuf ne connaît encore aucune note : lancez `synchroniser`");
     println!("contre un nœud archiviste pour découvrir les paiements reçus.");
 }
 
-fn solde(fichier: &Path) {
-    let w = charger(fichier);
+fn solde(fichier: &Path, protection: &ProtectionCli) {
+    let w = charger(fichier, protection);
     println!("solde connu : {} unités ({} notes)", w.solde(), w.notes().len());
     println!("position de synchronisation : prochaine hauteur {}", w.prochaine_hauteur());
     if w.prochaine_hauteur() == 0 {
@@ -272,12 +329,12 @@ fn connecter(noeud: SocketAddr, delai_lecture: Duration) -> Connexion<TcpStream>
 /// La boucle vit dans [`node::client`] ; ce qui suit n'est que le câblage : une
 /// connexion éphémère, l'enregistrement APRÈS chaque bloc (la position entre dans le
 /// fichier 0x02), et le compte rendu.
-fn synchroniser(fichier: &Path, o: &Options) {
+fn synchroniser(fichier: &Path, o: &Options, protection: &ProtectionCli) {
     let Some(noeud) = o.noeud else {
         eprintln!("--noeud est obligatoire pour synchroniser");
         usage()
     };
-    let mut w = charger(fichier);
+    let mut w = charger(fichier, protection);
     let depart = w.prochaine_hauteur();
     println!("synchronisation depuis la hauteur {depart} auprès de {noeud}…");
 
@@ -286,7 +343,7 @@ fn synchroniser(fichier: &Path, o: &Options) {
         // Enregistrement APRÈS chaque bloc rejoué : la position est dans le fichier, et
         // un crash entre deux blocs doit laisser le wallet exactement à son dernier bloc,
         // jamais en avance sur le disque.
-        w.enregistrer(fichier, &protection()).map_err(|e| e.to_string())?;
+        w.enregistrer(fichier, protection.get()).map_err(|e| e.to_string())?;
         if p.entrees > 0 || p.notes_recues > 0 {
             println!(
                 "  bloc {} : {} sorties, {} pour vous — solde {}",
@@ -327,7 +384,7 @@ fn rapporter_synchro(w: &Wallet, resume: &ResumeSynchro, depart: u64) {
     }
 }
 
-fn envoyer(fichier: &Path, o: &Options) {
+fn envoyer(fichier: &Path, o: &Options, protection: &ProtectionCli) {
     let (Some(dest), Some(montant), Some(noeud)) = (&o.destinataire, o.montant, o.noeud) else {
         eprintln!("--a, --montant et --noeud sont obligatoires pour envoyer");
         usage()
@@ -340,7 +397,7 @@ fn envoyer(fichier: &Path, o: &Options) {
         ))
     });
 
-    let mut w = charger(fichier);
+    let mut w = charger(fichier, protection);
 
     // Synchronisation optionnelle AVANT l'envoi, contre un nœud DISTINCT. C'est le seul
     // câblage qui rend la séparation possible sans deux commandes séparées — et il
@@ -360,7 +417,7 @@ fn envoyer(fichier: &Path, o: &Options) {
         let depart = w.prochaine_hauteur();
         let resume =
             synchroniser_par_connexion(&mut connexion, &mut w, CADENCE_DEMANDES, |_, w| {
-                w.enregistrer(fichier, &protection()).map_err(|e| e.to_string())
+                w.enregistrer(fichier, protection.get()).map_err(|e| e.to_string())
             });
         rapporter_synchro(&w, &resume, depart);
     }
@@ -423,7 +480,7 @@ fn envoyer(fichier: &Path, o: &Options) {
         _ => abandon("réencodage de la transaction impossible (bug interne)"),
     };
     let consommees = w.oublier_depensees(&tx);
-    if let Err(e) = w.enregistrer(fichier, &protection()) {
+    if let Err(e) = w.enregistrer(fichier, protection.get()) {
         abandon(&format!(
             "transaction ENVOYÉE mais wallet non enregistré : {e}\n\
              \x20        Relancer `envoyer` retenterait les mêmes notes."
@@ -447,12 +504,12 @@ fn envoyer(fichier: &Path, o: &Options) {
 /// ⚠️ Produit une forme rare (M/1), donc distinctive au regard d'un observateur —
 /// la forme d'une transaction est publique. C'est un geste VOLONTAIRE, dont
 /// l'alternative (ne pas pouvoir dépenser) est pire ; l'avertissement le rappelle.
-fn consolider(fichier: &Path, o: &Options) {
+fn consolider(fichier: &Path, o: &Options, protection: &ProtectionCli) {
     let Some(noeud) = o.noeud else {
         eprintln!("--noeud est obligatoire pour consolider");
         usage()
     };
-    let mut w = charger(fichier);
+    let mut w = charger(fichier, protection);
     if w.prochaine_hauteur() == 0 {
         abandon("wallet non synchronisé : lancez d'abord `synchroniser`.");
     }
@@ -479,7 +536,7 @@ fn consolider(fichier: &Path, o: &Options) {
         _ => abandon("réencodage impossible (bug interne)"),
     };
     let consommees = w.oublier_depensees(&tx);
-    if let Err(e) = w.enregistrer(fichier, &protection()) {
+    if let Err(e) = w.enregistrer(fichier, protection.get()) {
         abandon(&format!("transaction ENVOYÉE mais wallet non enregistré : {e}"));
     }
     println!("{consommees} notes regroupées — solde connu : {}", w.solde());

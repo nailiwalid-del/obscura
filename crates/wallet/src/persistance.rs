@@ -154,6 +154,14 @@ pub enum WalletFichierError {
     AncreIncoherente { ancre: u64, feuilles: u64 },
     #[error("fichier chiffré : une phrase de passe est requise pour le lire")]
     PhraseRequise,
+    #[error(
+        "fichier de wallet EN CLAIR alors qu'une phrase de passe est fournie — refus de \
+         le lire en silence : accepter ici un fichier non chiffré permettrait de \
+         SUBSTITUER un wallet en clair à un wallet chiffré sans que rien ne le signale. \
+         Migrez explicitement (rechargez sous Protection::Aucune puis réenregistrez \
+         sous la phrase), ou assumez le clair"
+    )]
+    FichierEnClair,
     #[error("phrase de passe incorrecte, ou fichier chiffré altéré")]
     PhraseIncorrecte,
     #[error("paramètres Argon2 invalides")]
@@ -397,12 +405,19 @@ impl Wallet {
     /// neuf en réponse à un fichier illisible masquerait une perte de fonds.
     pub fn charger(chemin: &Path, protection: &Protection) -> Result<Self, WalletFichierError> {
         let brut = std::fs::read(chemin)?;
-        // Un fichier EN CLAIR reste lisible (migration d'un wallet antérieur), avec ou
-        // sans phrase fournie. L'inverse ne l'est pas : un fichier chiffré sans phrase
-        // ne doit surtout pas se dégrader en « illisible », qui se confondrait avec un
-        // fichier corrompu.
+        // Un fichier EN CLAIR n'est lisible que si l'appelant a ASSUMÉ le clair
+        // (`Protection::Aucune`). Avec une phrase fournie, le lire en silence serait un
+        // repli : un attaquant local capable d'écrire le fichier substituerait un
+        // wallet en clair au wallet chiffré, et l'utilisateur — qui croit son fichier
+        // protégé — ne verrait rien. La migration d'un wallet antérieur reste possible,
+        // mais EXPLICITE (recharger sous `Aucune`, réenregistrer sous la phrase).
+        // L'inverse ne change pas : un fichier chiffré sans phrase donne
+        // `PhraseRequise`, jamais un « illisible » confondable avec une corruption.
         if brut.first() != Some(&VERSION_CHIFFRE) {
-            return Self::from_bytes_secret(&brut);
+            return match protection {
+                Protection::Aucune => Self::from_bytes_secret(&brut),
+                Protection::Phrase(_) => Err(WalletFichierError::FichierEnClair),
+            };
         }
         let Protection::Phrase(phrase) = protection else {
             return Err(WalletFichierError::PhraseRequise);
@@ -735,19 +750,29 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// MIGRATION : un fichier écrit en clair (wallet antérieur) reste lisible, avec ou
-    /// sans phrase fournie — sinon la mise à jour perdrait les fonds existants.
+    /// MIGRATION : un fichier écrit en clair (wallet antérieur) reste lisible sous
+    /// `Protection::Aucune` — sinon la mise à jour perdrait les fonds existants.
+    ///
+    /// ADVERSE, la moitié qui compte : le MÊME fichier est REFUSÉ quand une phrase est
+    /// fournie. L'accepter serait un repli silencieux — un attaquant local capable
+    /// d'écrire le fichier substituerait un wallet en clair au wallet chiffré, et
+    /// l'utilisateur croirait toujours son fichier protégé. La migration passe donc
+    /// par un rechargement EXPLICITE sous `Aucune`, jamais par un repli implicite.
     #[test]
-    fn un_fichier_en_clair_reste_lisible() {
+    fn un_fichier_en_clair_lisible_sans_phrase_refuse_avec() {
         let w = wallet_garni();
         let dir = std::env::temp_dir().join(format!("obsc-clair-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let chemin = dir.join("w.bin");
         w.enregistrer(&chemin, &Protection::Aucune).unwrap();
-        for p in [Protection::Aucune, Protection::Phrase("peu importe".into())] {
-            let relu = Wallet::charger(&chemin, &p).unwrap();
-            assert_eq!(relu.to_bytes_secret(), w.to_bytes_secret());
-        }
+
+        let relu = Wallet::charger(&chemin, &Protection::Aucune).unwrap();
+        assert_eq!(relu.to_bytes_secret(), w.to_bytes_secret());
+
+        assert!(matches!(
+            Wallet::charger(&chemin, &Protection::Phrase("peu importe".into())),
+            Err(WalletFichierError::FichierEnClair)
+        ));
         std::fs::remove_dir_all(&dir).ok();
     }
 
