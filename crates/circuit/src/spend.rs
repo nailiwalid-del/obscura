@@ -80,7 +80,12 @@ impl SpendNote {
         let owner = Digest::from_bytes(b[8..8 + D].try_into().ok()?).ok()?;
         let rho = Digest::from_bytes(b[8 + D..8 + 2 * D].try_into().ok()?).ok()?;
         let r = Digest::from_bytes(b[8 + 2 * D..8 + 3 * D].try_into().ok()?).ok()?;
-        Some(SpendNote { value, owner, rho, r })
+        Some(SpendNote {
+            value,
+            owner,
+            rho,
+            r,
+        })
     }
 }
 
@@ -224,7 +229,12 @@ mod tests {
 
     #[test]
     fn spend_note_roundtrip_serialisation() {
-        let n = SpendNote { value: 4_200, owner: digest(10), rho: digest(20), r: digest(30) };
+        let n = SpendNote {
+            value: 4_200,
+            owner: digest(10),
+            rho: digest(20),
+            r: digest(30),
+        };
         let b = n.to_bytes();
         assert_eq!(b.len(), 8 + 3 * 32);
         assert_eq!(SpendNote::from_bytes(&b), Some(n));
@@ -236,7 +246,13 @@ mod tests {
     /// `note_commitment`) est REJETÉE à la désérialisation, sans jamais atteindre le hash.
     #[test]
     fn from_bytes_rejette_value_hors_domaine() {
-        let mut b = SpendNote { value: 1, owner: digest(10), rho: digest(20), r: digest(30) }.to_bytes();
+        let mut b = SpendNote {
+            value: 1,
+            owner: digest(10),
+            rho: digest(20),
+            r: digest(30),
+        }
+        .to_bytes();
         // value = 2^60 (juste hors domaine) → None.
         b[0..8].copy_from_slice(&(1u64 << crate::range_check::RANGE_BITS).to_le_bytes());
         assert_eq!(SpendNote::from_bytes(&b), None);
@@ -279,13 +295,19 @@ mod tests {
         let (root, spend) = prove_spend(&n, &path, index, &nk);
 
         // Différentiels hors-circuit.
-        assert_eq!(spend.cm_in, rescue::note_commitment(n.value, &n.owner, &n.rho, &n.r));
+        assert_eq!(
+            spend.cm_in,
+            rescue::note_commitment(n.value, &n.owner, &n.rho, &n.r)
+        );
         assert_eq!(root, merkle::root(&spend.cm_in, &path, index));
         let mut nf_payload = Vec::new();
         nf_payload.extend_from_slice(&nk.0);
         nf_payload.extend_from_slice(&n.rho.0);
         nf_payload.extend_from_slice(&spend.cm_in.0);
-        assert_eq!(spend.nullifier, rescue::hash(Domain::Nullifier, &nf_payload));
+        assert_eq!(
+            spend.nullifier,
+            rescue::hash(Domain::Nullifier, &nf_payload)
+        );
 
         assert!(verify_spend(&root, &owner, &nk, DEPTH, &spend));
     }

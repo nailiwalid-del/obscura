@@ -41,8 +41,18 @@ fn main() {
         Felt::from_canonical_u64(700 + i as u64).unwrap()
     }));
     let owner = rescue::hash(Domain::Owner, secret.as_felts());
-    let n0 = SpendNote { value: 1_000, owner, rho: digest(20), r: digest(30) };
-    let n1 = SpendNote { value: 500, owner, rho: digest(40), r: digest(50) };
+    let n0 = SpendNote {
+        value: 1_000,
+        owner,
+        rho: digest(20),
+        r: digest(30),
+    };
+    let n1 = SpendNote {
+        value: 500,
+        owner,
+        rho: digest(40),
+        r: digest(50),
+    };
     let cm0 = rescue::note_commitment(n0.value, &n0.owner, &n0.rho, &n0.r);
     let cm1 = rescue::note_commitment(n1.value, &n1.owner, &n1.rho, &n1.r);
 
@@ -54,11 +64,29 @@ fn main() {
     let path0 = tree.path(i0).unwrap();
     let path1 = tree.path(i1).unwrap();
 
-    let o0 = SpendNote { value: 900, owner: digest(60), rho: digest(61), r: digest(62) };
-    let o1 = SpendNote { value: 580, owner: digest(70), rho: digest(71), r: digest(72) };
+    let o0 = SpendNote {
+        value: 900,
+        owner: digest(60),
+        rho: digest(61),
+        r: digest(62),
+    };
+    let o1 = SpendNote {
+        value: 580,
+        owner: digest(70),
+        rho: digest(71),
+        r: digest(72),
+    };
     let inputs = [
-        ProvedInput { note: n0, path: path0, index: i0 },
-        ProvedInput { note: n1, path: path1, index: i1 },
+        ProvedInput {
+            note: n0,
+            path: path0,
+            index: i0,
+        },
+        ProvedInput {
+            note: n1,
+            path: path1,
+            index: i1,
+        },
     ];
 
     // Génération. VRAIS enc_notes : chiffrés KEM hybride + AEAD cascade vers deux
@@ -71,7 +99,10 @@ fn main() {
         let (kem_ct, ss) = crypto::kem::encapsulate(&recipient.public)
             .expect("clé de bench fraîche : contributive");
         let enc_note = crypto::aead::encrypt(&ss, &cm.to_bytes(), &note.to_bytes());
-        circuit::EncNote { kem_ct: kem_ct.to_bytes(), enc_note }
+        circuit::EncNote {
+            kem_ct: kem_ct.to_bytes(),
+            enc_note,
+        }
     };
     let oc0 = rescue::note_commitment(o0.value, &o0.owner, &o0.rho, &o0.r);
     let oc1 = rescue::note_commitment(o1.value, &o1.owner, &o1.rho, &o1.r);
@@ -93,7 +124,10 @@ fn main() {
     println!("=== ACTUEL : monolithe SEGMENTÉ (3z-c1) + witness-hiding (3z-b1) ===");
     println!("génération  : {prove_ms:8.1} ms");
     println!("vérification: {verify_ms:8.1} ms  (moy. sur {V})");
-    println!("taille preuve totale : {bytes} o  ({:.1} Kio)", bytes as f64 / 1024.0);
+    println!(
+        "taille preuve totale : {bytes} o  ({:.1} Kio)",
+        bytes as f64 / 1024.0
+    );
     println!("  = 1 SEULE preuve STARK monolithique SEGMENTÉE (P1–P7, 92 col × 2048 lignes)");
     println!();
     println!("=== RÉFÉRENCE : monolithe CÔTE-À-CÔTE (3z-b1, avant bascule 3z-c1) ===");
@@ -101,8 +135,12 @@ fn main() {
     println!("vérification:      2.8 ms");
     println!("taille preuve totale : 89.3 Kio (201 col × 1024 lignes)");
     println!();
-    println!("Δ facteur vs côte-à-côte: {:.2}× génération, {:.2}× vérification, {:.3}× taille",
-        prove_ms / 1260.6, verify_ms / 2.8, bytes as f64 / 1024.0 / 89.3);
+    println!(
+        "Δ facteur vs côte-à-côte: {:.2}× génération, {:.2}× vérification, {:.3}× taille",
+        prove_ms / 1260.6,
+        verify_ms / 2.8,
+        bytes as f64 / 1024.0 / 89.3
+    );
     println!("(< 1 en taille = le segmenté gagne ; la taille est le coût PERMANENT,");
     println!(" payé par chaque nœud qui stocke et relaie chaque transaction)");
 }

@@ -145,7 +145,9 @@ fn un_bloc_scelle_fait_converger_deux_noeuds() {
     });
 
     let mut a = Runtime::new(Noeud::new(SigKeypair::generate(), etat_a, [1u8; 32]));
-    let pair_b = a.connecter(adresse_b, &SigKeypair::generate()).expect("handshake");
+    let pair_b = a
+        .connecter(adresse_b, &SigKeypair::generate())
+        .expect("handshake");
     let _ = pair_b;
 
     // A soumet la transaction (elle entre au mempool), puis SCELLE.
@@ -160,7 +162,10 @@ fn un_bloc_scelle_fait_converger_deux_noeuds() {
 
     let (avance, racine_b, tete_b, depense_b, mempool_b) = serveur.join().expect("thread B");
 
-    assert!(avance, "B doit avoir APPLIQUÉ le bloc, pas seulement l'avoir reçu");
+    assert!(
+        avance,
+        "B doit avoir APPLIQUÉ le bloc, pas seulement l'avoir reçu"
+    );
     assert_eq!(
         racine_b,
         a.noeud().etat.tree.root(),
@@ -169,7 +174,10 @@ fn un_bloc_scelle_fait_converger_deux_noeuds() {
     assert_eq!(tete_b, bloc.id(), "et la même tête de chaîne");
     assert_eq!(tete_b, a.noeud().etat.tete());
     assert!(depense_b, "le nullifier est dépensé des DEUX côtés");
-    assert_eq!(mempool_b, 0, "et la transaction n'est plus en attente chez B");
+    assert_eq!(
+        mempool_b, 0,
+        "et la transaction n'est plus en attente chez B"
+    );
 }
 
 /// Un bloc ne s'applique QU'UNE FOIS.
@@ -198,8 +206,10 @@ fn rejouer_un_bloc_ne_change_rien() {
 
     // Le même bloc nous revient d'un pair, cinq fois.
     let pair = net::pairs::PeerId::depuis_identite(&SigKeypair::generate().public);
-    n.pairs
-        .ajouter(pair, SocketAddr::from((Ipv4Addr::new(203, 0, 113, 9), 8333)));
+    n.pairs.ajouter(
+        pair,
+        SocketAddr::from((Ipv4Addr::new(203, 0, 113, 9), 8333)),
+    );
     for _ in 0..5 {
         let copie = ledger::bloc::Bloc::from_bytes(&bloc.to_bytes()).unwrap();
         let actions = n.traiter(pair, Message::Bloc(Box::new(copie)), 0);

@@ -501,7 +501,11 @@ mod tests {
         // Livrés à l'ENVERS.
         let p = w.synchroniser(&[m1, m0]).expect("rangement par index");
         assert_eq!(p.entrees, 2);
-        assert_eq!(w.racine(), etat.tree.root(), "arbre identique à celui du nœud");
+        assert_eq!(
+            w.racine(),
+            etat.tree.root(),
+            "arbre identique à celui du nœud"
+        );
         assert_eq!(w.solde(), 1_500);
     }
 
@@ -596,8 +600,10 @@ mod tests {
         ));
 
         // Morceaux annonçant des blocs différents.
-        let a = MorceauHistorique::bloc_entier(0, 0, lot.racine_apres, vec![lot.sorties[0].clone()]);
-        let b = MorceauHistorique::bloc_entier(1, 0, lot.racine_apres, vec![lot.sorties[1].clone()]);
+        let a =
+            MorceauHistorique::bloc_entier(0, 0, lot.racine_apres, vec![lot.sorties[0].clone()]);
+        let b =
+            MorceauHistorique::bloc_entier(1, 0, lot.racine_apres, vec![lot.sorties[1].clone()]);
         assert!(matches!(
             w.synchroniser(&[a, b]),
             Err(SynchroError::MorceauxIncoherents)
@@ -616,7 +622,10 @@ mod tests {
         };
         assert!(matches!(
             w.synchroniser(&[troue(0, 0), troue(1, 9)]),
-            Err(SynchroError::DecoupageNonContigu { recu: 9, attendu: 1 })
+            Err(SynchroError::DecoupageNonContigu {
+                recu: 9,
+                attendu: 1
+            })
         ));
 
         assert_eq!(w.arbre.len(), 0, "aucun lot dégénéré n'a touché l'arbre");

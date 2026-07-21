@@ -62,7 +62,11 @@ fn build_trace(v: u64) -> TraceTable<BaseElement> {
     let mut trace = TraceTable::new(WIDTH, TRACE_LEN);
     let mut acc = 0u128;
     for step in 0..TRACE_LEN {
-        let bit = if step < RANGE_BITS { (v >> step) & 1 } else { 0 };
+        let bit = if step < RANGE_BITS {
+            (v >> step) & 1
+        } else {
+            0
+        };
         let mut row = [BaseElement::ZERO; WIDTH];
         row[ACC] = BaseElement::new(acc as u64);
         row[BIT] = BaseElement::new(bit);

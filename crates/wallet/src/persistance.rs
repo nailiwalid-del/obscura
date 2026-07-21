@@ -101,8 +101,8 @@ fn deriver_cle(
     t: u32,
     p: u32,
 ) -> Result<[u8; 32], WalletFichierError> {
-    let params = argon2::Params::new(m, t, p, Some(32))
-        .map_err(|_| WalletFichierError::ParametresArgon)?;
+    let params =
+        argon2::Params::new(m, t, p, Some(32)).map_err(|_| WalletFichierError::ParametresArgon)?;
     let a = argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
     let mut cle = [0u8; 32];
     a.hash_password_into(phrase.as_bytes(), sel, &mut cle)
@@ -270,16 +270,13 @@ impl Wallet {
 
         let prochaine_hauteur =
             u64::from_le_bytes(prendre(corps, &mut pos, 8)?.try_into().unwrap());
-        let feuilles_ancrees =
-            u64::from_le_bytes(prendre(corps, &mut pos, 8)?.try_into().unwrap());
+        let feuilles_ancrees = u64::from_le_bytes(prendre(corps, &mut pos, 8)?.try_into().unwrap());
 
-        let n_kem =
-            u32::from_le_bytes(prendre(corps, &mut pos, 4)?.try_into().unwrap()) as usize;
+        let n_kem = u32::from_le_bytes(prendre(corps, &mut pos, 4)?.try_into().unwrap()) as usize;
         let reception = KemKeypair::from_bytes_secret(prendre(corps, &mut pos, n_kem)?)
             .map_err(|_| WalletFichierError::KemInvalide)?;
 
-        let n_notes =
-            u32::from_le_bytes(prendre(corps, &mut pos, 4)?.try_into().unwrap()) as usize;
+        let n_notes = u32::from_le_bytes(prendre(corps, &mut pos, 4)?.try_into().unwrap()) as usize;
         // Borne AVANT allocation : l'en-tête ne doit pas pouvoir réserver plus que ce
         // que le fichier peut réellement contenir.
         if corps.len().saturating_sub(pos) < n_notes.saturating_mul(TAILLE_NOTE) {
@@ -293,13 +290,17 @@ impl Wallet {
             let r = digest(corps, &mut pos)?;
             let index = u64::from_le_bytes(prendre(corps, &mut pos, 8)?.try_into().unwrap());
             notes.push(NoteDetenue {
-                note: SpendNote { value, owner, rho, r },
+                note: SpendNote {
+                    value,
+                    owner,
+                    rho,
+                    r,
+                },
                 index,
             });
         }
 
-        let n_arbre =
-            u64::from_le_bytes(prendre(corps, &mut pos, 8)?.try_into().unwrap());
+        let n_arbre = u64::from_le_bytes(prendre(corps, &mut pos, 8)?.try_into().unwrap());
         let n_arbre = usize::try_from(n_arbre).map_err(|_| WalletFichierError::Tronque)?;
         let arbre = ProvedMerkleTree::from_bytes(prendre(corps, &mut pos, n_arbre)?)
             .map_err(|_| WalletFichierError::ArbreInvalide)?;
@@ -331,10 +332,8 @@ impl Wallet {
             });
         }
 
-        let owner = proved_hash::rescue::hash(
-            proved_hash::domain::Domain::Owner,
-            secret.as_felts(),
-        );
+        let owner =
+            proved_hash::rescue::hash(proved_hash::domain::Domain::Owner, secret.as_felts());
         Ok(Wallet {
             secret,
             owner,
@@ -427,9 +426,7 @@ impl Wallet {
             return Err(WalletFichierError::Tronque);
         }
         let sel = &brut[1..1 + SEL_LEN];
-        let lire = |o: usize| {
-            u32::from_le_bytes([brut[o], brut[o + 1], brut[o + 2], brut[o + 3]])
-        };
+        let lire = |o: usize| u32::from_le_bytes([brut[o], brut[o + 1], brut[o + 2], brut[o + 3]]);
         let (m, t, p) = (lire(1 + SEL_LEN), lire(5 + SEL_LEN), lire(9 + SEL_LEN));
         let cle = deriver_cle(phrase, sel, m, t, p)?;
         let aad = aad_enveloppe(sel, m, t, p);
@@ -455,11 +452,7 @@ mod tests {
     }
 
     fn fichier(nom: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "obscura_wallet_{}_{}.cle",
-            nom,
-            std::process::id()
-        ))
+        std::env::temp_dir().join(format!("obscura_wallet_{}_{}.cle", nom, std::process::id()))
     }
 
     /// LA propriété : un wallet rechargé peut encore DÉPENSER et RECEVOIR.
@@ -522,7 +515,8 @@ mod tests {
     fn aller_retour_fichier() {
         let chemin = fichier("roundtrip");
         let w = wallet_garni();
-        w.enregistrer(&chemin, &Protection::Aucune).expect("écriture");
+        w.enregistrer(&chemin, &Protection::Aucune)
+            .expect("écriture");
         let r = Wallet::charger(&chemin, &Protection::Aucune).expect("lecture");
         assert_eq!(r.solde(), w.solde());
         assert_eq!(r.racine(), w.racine());
@@ -690,7 +684,10 @@ mod tests {
 
         w.enregistrer(&chemin, &phrase).unwrap();
         let brut = std::fs::read(&chemin).unwrap();
-        assert_eq!(brut[0], VERSION_CHIFFRE, "l'enveloppe doit s'annoncer chiffrée");
+        assert_eq!(
+            brut[0], VERSION_CHIFFRE,
+            "l'enveloppe doit s'annoncer chiffrée"
+        );
         // Le secret de dépense ne doit apparaître NULLE PART dans le fichier.
         let clair = w.to_bytes_secret();
         assert!(
@@ -711,7 +708,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("obsc-phrase-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let chemin = dir.join("w.bin");
-        w.enregistrer(&chemin, &Protection::Phrase("bonne".into())).unwrap();
+        w.enregistrer(&chemin, &Protection::Phrase("bonne".into()))
+            .unwrap();
 
         assert!(matches!(
             Wallet::charger(&chemin, &Protection::Phrase("mauvaise".into())),
@@ -781,9 +779,14 @@ mod tests {
     fn permissions_restreintes() {
         use std::os::unix::fs::PermissionsExt;
         let chemin = fichier("perms");
-        wallet_garni().enregistrer(&chemin, &Protection::Aucune).unwrap();
+        wallet_garni()
+            .enregistrer(&chemin, &Protection::Aucune)
+            .unwrap();
         let mode = std::fs::metadata(&chemin).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600, "l'autorité de dépense ne doit être lisible que par son propriétaire");
+        assert_eq!(
+            mode, 0o600,
+            "l'autorité de dépense ne doit être lisible que par son propriétaire"
+        );
         std::fs::remove_file(&chemin).ok();
     }
 }

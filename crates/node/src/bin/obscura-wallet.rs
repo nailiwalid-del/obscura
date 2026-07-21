@@ -55,7 +55,6 @@ const DELAI_ECRITURE: Duration = Duration::from_secs(20);
 /// client (aucun champ sur le fil ne le porte).
 const CADENCE_DEMANDES: Duration = Duration::from_millis(50);
 
-
 /// Protection du fichier de wallet, résolue UNE SEULE FOIS par invocation.
 ///
 /// La résolution est PARESSEUSE (première utilisation) puis mémorisée : `creer` peut
@@ -157,7 +156,9 @@ fn lire_options(args: &[String]) -> Options {
     };
     let mut i = 0;
     while i < args.len() {
-        let Some(valeur) = args.get(i + 1) else { usage() };
+        let Some(valeur) = args.get(i + 1) else {
+            usage()
+        };
         match args[i].as_str() {
             "--fichier" => o.fichier = Some(PathBuf::from(valeur)),
             "--a" => o.destinataire = Some(valeur.clone()),
@@ -174,11 +175,10 @@ fn lire_options(args: &[String]) -> Options {
                     .unwrap_or_else(|_| abandon(&format!("frais invalides : {valeur}")))
             }
             "--noeud" => {
-                o.noeud = Some(
-                    valeur
-                        .parse()
-                        .unwrap_or_else(|_| abandon(&format!("adresse de nœud invalide : {valeur}"))),
-                )
+                o.noeud =
+                    Some(valeur.parse().unwrap_or_else(|_| {
+                        abandon(&format!("adresse de nœud invalide : {valeur}"))
+                    }))
             }
             "--noeud-synchro" => {
                 o.noeud_synchro = Some(valeur.parse().unwrap_or_else(|_| {
@@ -218,7 +218,10 @@ fn charger(chemin: &Path, protection: &ProtectionCli) -> Wallet {
                 abandon(&format!("wallet illisible ({}) : {e}", chemin.display()))
             });
             if let Err(e) = w.enregistrer(chemin, protection.get()) {
-                abandon(&format!("migration impossible ({}) : {e}", chemin.display()));
+                abandon(&format!(
+                    "migration impossible ({}) : {e}",
+                    chemin.display()
+                ));
             }
             eprintln!("wallet migré : désormais chiffré sous votre phrase de passe.");
             w
@@ -234,7 +237,9 @@ fn charger(chemin: &Path, protection: &ProtectionCli) -> Wallet {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let Some(commande) = args.first().cloned() else { usage() };
+    let Some(commande) = args.first().cloned() else {
+        usage()
+    };
     let o = lire_options(&args[1..]);
     let Some(fichier) = o.fichier.clone() else {
         eprintln!("--fichier est obligatoire");
@@ -294,8 +299,15 @@ fn creer(fichier: &Path, protection: &ProtectionCli) {
 
 fn solde(fichier: &Path, protection: &ProtectionCli) {
     let w = charger(fichier, protection);
-    println!("solde connu : {} unités ({} notes)", w.solde(), w.notes().len());
-    println!("position de synchronisation : prochaine hauteur {}", w.prochaine_hauteur());
+    println!(
+        "solde connu : {} unités ({} notes)",
+        w.solde(),
+        w.notes().len()
+    );
+    println!(
+        "position de synchronisation : prochaine hauteur {}",
+        w.prochaine_hauteur()
+    );
     if w.prochaine_hauteur() == 0 {
         println!(
             "⚠️  Ce wallet n'a JAMAIS été synchronisé : il ne peut pas encore connaître\n\
@@ -343,7 +355,8 @@ fn synchroniser(fichier: &Path, o: &Options, protection: &ProtectionCli) {
         // Enregistrement APRÈS chaque bloc rejoué : la position est dans le fichier, et
         // un crash entre deux blocs doit laisser le wallet exactement à son dernier bloc,
         // jamais en avance sur le disque.
-        w.enregistrer(fichier, protection.get()).map_err(|e| e.to_string())?;
+        w.enregistrer(fichier, protection.get())
+            .map_err(|e| e.to_string())?;
         if p.entrees > 0 || p.notes_recues > 0 {
             println!(
                 "  bloc {} : {} sorties, {} pour vous — solde {}",
@@ -417,7 +430,8 @@ fn envoyer(fichier: &Path, o: &Options, protection: &ProtectionCli) {
         let depart = w.prochaine_hauteur();
         let resume =
             synchroniser_par_connexion(&mut connexion, &mut w, CADENCE_DEMANDES, |_, w| {
-                w.enregistrer(fichier, protection.get()).map_err(|e| e.to_string())
+                w.enregistrer(fichier, protection.get())
+                    .map_err(|e| e.to_string())
             });
         rapporter_synchro(&w, &resume, depart);
     }
@@ -487,7 +501,10 @@ fn envoyer(fichier: &Path, o: &Options, protection: &ProtectionCli) {
         ));
     }
 
-    println!("{consommees} notes retirées de la réserve — solde connu : {}", w.solde());
+    println!(
+        "{consommees} notes retirées de la réserve — solde connu : {}",
+        w.solde()
+    );
     let monnaie = tx.output_commitments.len().saturating_sub(1);
     if monnaie > 0 {
         println!();
@@ -527,7 +544,9 @@ fn consolider(fichier: &Path, o: &Options, protection: &ProtectionCli) {
     let mut connexion = connecter(noeud, DELAI_ECRITURE);
     let octets = Message::Transaction(Box::new(tx)).to_bytes();
     if let Err(e) = connexion.envoyer(&octets) {
-        abandon(&format!("envoi échoué : {e:?} — aucune note marquée dépensée"));
+        abandon(&format!(
+            "envoi échoué : {e:?} — aucune note marquée dépensée"
+        ));
     }
     println!("transaction soumise à {noeud}");
 
@@ -537,9 +556,14 @@ fn consolider(fichier: &Path, o: &Options, protection: &ProtectionCli) {
     };
     let consommees = w.oublier_depensees(&tx);
     if let Err(e) = w.enregistrer(fichier, protection.get()) {
-        abandon(&format!("transaction ENVOYÉE mais wallet non enregistré : {e}"));
+        abandon(&format!(
+            "transaction ENVOYÉE mais wallet non enregistré : {e}"
+        ));
     }
-    println!("{consommees} notes regroupées — solde connu : {}", w.solde());
+    println!(
+        "{consommees} notes regroupées — solde connu : {}",
+        w.solde()
+    );
     println!();
     println!("ℹ️  La note consolidée REVIENDRA au solde à la prochaine `synchroniser`");
     println!("    (chiffrée vers vous, reconnue au scan, comme la monnaie rendue).");

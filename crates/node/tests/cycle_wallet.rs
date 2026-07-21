@@ -67,8 +67,10 @@ fn emission_pour(w: &Wallet, valeur: u64, sel: u64) -> ledger::bloc::Emission {
 /// (c'est elle qui définit le SILENCE sur lequel la boucle s'arrête).
 fn client(adresse: SocketAddr) -> Connexion<TcpStream> {
     let flux = TcpStream::connect(adresse).expect("connexion");
-    flux.set_read_timeout(Some(Duration::from_millis(800))).unwrap();
-    flux.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+    flux.set_read_timeout(Some(Duration::from_millis(800)))
+        .unwrap();
+    flux.set_write_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
     Connexion::connecter(flux, &SigKeypair::generate()).expect("handshake")
 }
 
@@ -78,8 +80,7 @@ fn client(adresse: SocketAddr) -> Connexion<TcpStream> {
 /// Retourne le nombre de notes reçues sur l'invocation.
 fn synchroniser(w: &mut Wallet, adresse: SocketAddr) -> usize {
     let mut c = client(adresse);
-    let resume =
-        node::client::synchroniser_par_connexion(&mut c, w, Duration::ZERO, |_, _| Ok(()));
+    let resume = node::client::synchroniser_par_connexion(&mut c, w, Duration::ZERO, |_, _| Ok(()));
     resume.notes_recues
 }
 
@@ -170,7 +171,11 @@ fn le_cycle_complet_de_la_monnaie() {
     let recues = synchroniser(&mut alice, adresse);
     assert_eq!(recues, 2, "Alice doit reconnaître ses deux notes de genèse");
     assert_eq!(alice.solde(), 1_500);
-    assert_eq!(alice.prochaine_hauteur(), 1, "genèse rejouée, position avancée");
+    assert_eq!(
+        alice.prochaine_hauteur(),
+        1,
+        "genèse rejouée, position avancée"
+    );
 
     // 2. ALICE PAIE BOB. Le paiement s'ancre sur la frontière de bloc de la genèse.
     let texte = bob.adresse().encoder();

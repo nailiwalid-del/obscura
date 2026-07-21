@@ -266,7 +266,9 @@ impl Wallet {
         if self.notes.is_empty() {
             return Err(WalletError::AucuneNote);
         }
-        let requis = montant.checked_add(frais).ok_or(WalletError::MontantHorsBornes)?;
+        let requis = montant
+            .checked_add(frais)
+            .ok_or(WalletError::MontantHorsBornes)?;
 
         // Sélection : on accumule jusqu'à COUVRIR `requis`, mais on ne s'arrête pas à
         // UNE note tant qu'on peut en prendre une seconde — c'est le défaut 2/2.
@@ -282,19 +284,32 @@ impl Wallet {
             choisies.push(note);
         }
         if somme < requis {
-            return Err(WalletError::SoldeInsuffisant { disponible: somme, requis });
+            return Err(WalletError::SoldeInsuffisant {
+                disponible: somme,
+                requis,
+            });
         }
 
         let monnaie = somme - requis;
         let sorties = vec![
             (
-                SpendNote { value: montant, owner: destinataire.owner, rho: self.alea(), r: self.alea() },
+                SpendNote {
+                    value: montant,
+                    owner: destinataire.owner,
+                    rho: self.alea(),
+                    r: self.alea(),
+                },
                 destinataire.kem.clone(),
             ),
             (
                 // Monnaie rendue vers NOUS — chiffrée vers notre propre clé, sinon
                 // nous ne la retrouverions pas au scan.
-                SpendNote { value: monnaie, owner: self.owner, rho: self.alea(), r: self.alea() },
+                SpendNote {
+                    value: monnaie,
+                    owner: self.owner,
+                    rho: self.alea(),
+                    r: self.alea(),
+                },
                 self.reception.public.clone(),
             ),
         ];
@@ -327,10 +342,18 @@ impl Wallet {
         let choisies: Vec<&NoteDetenue> = self.notes.iter().take(MAX_IN).collect();
         let somme: u64 = choisies.iter().map(|n| n.note.value).sum();
         if somme <= frais {
-            return Err(WalletError::SoldeInsuffisant { disponible: somme, requis: frais + 1 });
+            return Err(WalletError::SoldeInsuffisant {
+                disponible: somme,
+                requis: frais + 1,
+            });
         }
         let sorties = vec![(
-            SpendNote { value: somme - frais, owner: self.owner, rho: self.alea(), r: self.alea() },
+            SpendNote {
+                value: somme - frais,
+                owner: self.owner,
+                rho: self.alea(),
+                r: self.alea(),
+            },
             self.reception.public.clone(),
         )];
         self.assembler(&choisies, sorties, frais)
@@ -366,7 +389,10 @@ impl Wallet {
             .iter()
             .map(|d| ProvedInput {
                 note: d.note.clone(),
-                path: self.arbre.path(d.index).expect("index observé, donc dans l'arbre"),
+                path: self
+                    .arbre
+                    .path(d.index)
+                    .expect("index observé, donc dans l'arbre"),
                 index: d.index,
             })
             .collect();
@@ -375,8 +401,8 @@ impl Wallet {
         let mut enc: Vec<EncNote> = Vec::with_capacity(sorties.len());
         for (note, kem) in sorties {
             let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
-            let e = encrypt_note(&kem, &cm, &note)
-                .map_err(|_| WalletError::DestinataireInvalide)?;
+            let e =
+                encrypt_note(&kem, &cm, &note).map_err(|_| WalletError::DestinataireInvalide)?;
             notes_out.push(note);
             enc.push(e);
         }
@@ -571,7 +597,10 @@ mod tests {
     fn refuse_sans_note() {
         let w = Wallet::depuis_secret(secret(700), PROFONDEUR);
         let dest = Wallet::depuis_secret(secret(900), PROFONDEUR).adresse();
-        assert!(matches!(w.construire(&dest, 100, 10), Err(WalletError::AucuneNote)));
+        assert!(matches!(
+            w.construire(&dest, 100, 10),
+            Err(WalletError::AucuneNote)
+        ));
     }
 
     #[test]
@@ -579,14 +608,23 @@ mod tests {
         let mut w = Wallet::depuis_secret(secret(700), PROFONDEUR);
         let _ = crediter(&mut w, 100, 50);
         let dest = Wallet::depuis_secret(secret(900), PROFONDEUR).adresse();
-        assert!(matches!(w.construire(&dest, 1_000, 10), Err(WalletError::SoldeInsuffisant { disponible: 150, requis: 1_010 })));
+        assert!(matches!(
+            w.construire(&dest, 1_000, 10),
+            Err(WalletError::SoldeInsuffisant {
+                disponible: 150,
+                requis: 1_010
+            })
+        ));
     }
 
     #[test]
     fn refuse_montant_hors_bornes() {
         let w = Wallet::depuis_secret(secret(700), PROFONDEUR);
         let dest = Wallet::depuis_secret(secret(900), PROFONDEUR).adresse();
-        assert!(matches!(w.construire(&dest, MONTANT_MAX, 0), Err(WalletError::MontantHorsBornes)));
+        assert!(matches!(
+            w.construire(&dest, MONTANT_MAX, 0),
+            Err(WalletError::MontantHorsBornes)
+        ));
     }
 
     /// LE PIÈGE : la monnaie rendue.
@@ -644,7 +682,9 @@ mod tests {
         assert_eq!(w.notes().len(), 1, "une seule note en réserve");
 
         let dest = Wallet::depuis_secret(secret(900), PROFONDEUR);
-        let tx = w.construire(&dest.adresse(), 300, 20).expect("1-in/2-out constructible");
+        let tx = w
+            .construire(&dest.adresse(), 300, 20)
+            .expect("1-in/2-out constructible");
         assert_eq!(tx.m(), 1, "une entrée");
         assert_eq!(tx.n(), 2, "paiement + monnaie");
         assert!(
@@ -654,11 +694,17 @@ mod tests {
 
         // Le destinataire lit son paiement ; nous, notre monnaie rendue (680).
         let paiement = scan_proved_output(
-            &dest.reception, &dest.owner, &tx.output_commitments[0], &tx.enc_notes[0],
+            &dest.reception,
+            &dest.owner,
+            &tx.output_commitments[0],
+            &tx.enc_notes[0],
         );
         assert_eq!(paiement.map(|n| n.value), Some(300));
         let monnaie = scan_proved_output(
-            &w.reception, &w.owner, &tx.output_commitments[1], &tx.enc_notes[1],
+            &w.reception,
+            &w.owner,
+            &tx.output_commitments[1],
+            &tx.enc_notes[1],
         );
         assert_eq!(monnaie.map(|n| n.value), Some(680));
     }
@@ -700,7 +746,10 @@ mod tests {
         );
         // La note consolidée (595 = 600 − 5) nous est déchiffrable.
         let note = scan_proved_output(
-            &w.reception, &w.owner, &tx.output_commitments[0], &tx.enc_notes[0],
+            &w.reception,
+            &w.owner,
+            &tx.output_commitments[0],
+            &tx.enc_notes[0],
         );
         assert_eq!(note.map(|n| n.value), Some(595));
     }
@@ -711,7 +760,10 @@ mod tests {
         let mut w = Wallet::depuis_secret(secret(700), PROFONDEUR);
         let (lot, _etat) = lot_de_genese(&w, &[1_000], PROFONDEUR);
         w.synchroniser(&[lot]).expect("rejeu");
-        assert!(matches!(w.consolider(5), Err(WalletError::RienAConsolider(1))));
+        assert!(matches!(
+            w.consolider(5),
+            Err(WalletError::RienAConsolider(1))
+        ));
     }
 
     /// LIABILITÉ : deux transactions du MÊME wallet ne doivent pas partager de
@@ -757,7 +809,11 @@ mod tests {
 
         let tx = w.construire(&dest, 300, 20).unwrap();
         assert_eq!(w.oublier_depensees(&tx), 2, "les 2 entrées sont consommées");
-        assert_eq!(w.solde(), 0, "la monnaie rendue n'est PAS re-créditée (index inconnu)");
+        assert_eq!(
+            w.solde(),
+            0,
+            "la monnaie rendue n'est PAS re-créditée (index inconnu)"
+        );
 
         // Idempotent : rejouer la même transaction ne retire rien de plus.
         assert_eq!(w.oublier_depensees(&tx), 0);
@@ -771,7 +827,11 @@ mod tests {
         let mut etranger = Wallet::depuis_secret(secret(900), PROFONDEUR);
         let _ = crediter(&mut etranger, 300, 200);
         let tx = etranger
-            .construire(&Wallet::depuis_secret(secret(1_100), PROFONDEUR).adresse(), 50, 5)
+            .construire(
+                &Wallet::depuis_secret(secret(1_100), PROFONDEUR).adresse(),
+                50,
+                5,
+            )
             .unwrap();
 
         let mut nous = Wallet::depuis_secret(secret(700), PROFONDEUR);
@@ -804,7 +864,11 @@ mod tests {
             .construire(&destinataire.adresse(), 300, 20)
             .expect("transaction constructible");
         assert_eq!(w.oublier_depensees(&tx), 2);
-        assert_eq!(w.solde(), 0, "la monnaie est hors de vue tant que le bloc n'est pas là");
+        assert_eq!(
+            w.solde(),
+            0,
+            "la monnaie est hors de vue tant que le bloc n'est pas là"
+        );
 
         // Le nœud scelle et applique le bloc 1, ce qui inscrit les DEUX sorties dans
         // l'arbre (le paiement du destinataire et notre monnaie).
@@ -816,8 +880,13 @@ mod tests {
         assert_eq!(sorties.len(), 2);
 
         let lot1 = MorceauHistorique::bloc_entier(1, tranche.debut, tranche.racine_apres, sorties);
-        let p = w.synchroniser(std::slice::from_ref(&lot1)).expect("rejeu du bloc 1");
-        assert_eq!(p.notes_recues, 1, "exactement UNE note nous revient : la monnaie");
+        let p = w
+            .synchroniser(std::slice::from_ref(&lot1))
+            .expect("rejeu du bloc 1");
+        assert_eq!(
+            p.notes_recues, 1,
+            "exactement UNE note nous revient : la monnaie"
+        );
         assert_eq!(p.solde, 1_180, "1500 − 300 − 20");
         assert_eq!(w.solde(), 1_180);
         assert_eq!(w.racine(), etat.tree.root(), "ancre alignée sur le nœud");
@@ -859,9 +928,8 @@ mod tests {
                 r: w.alea(),
             };
             let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
-            emissions.push(
-                ledger::proved_wallet::emission_vers(&w.adresse().kem, &cm, &note).unwrap(),
-            );
+            emissions
+                .push(ledger::proved_wallet::emission_vers(&w.adresse().kem, &cm, &note).unwrap());
         }
         let genese = ledger::bloc::Bloc::genese_avec(emissions).expect("genèse bornée");
         let etat = ledger::proved_state::ProvedLedgerState::depuis_genese_depth_archivant(
@@ -906,7 +974,12 @@ mod tests {
         let mut w = Wallet::depuis_secret(secret(700), PROFONDEUR);
         let _ = crediter(&mut w, 1_000, 500);
         // Une sortie observée « en avance », avant que son bloc ne soit complet.
-        w.observer(&rescue::note_commitment(1, &w.owner(), &w.owner(), &w.owner()));
+        w.observer(&rescue::note_commitment(
+            1,
+            &w.owner(),
+            &w.owner(),
+            &w.owner(),
+        ));
 
         let dest = Wallet::depuis_secret(secret(900), PROFONDEUR).adresse();
         assert!(matches!(

@@ -97,7 +97,9 @@ fn main() {
                 i += 2;
             }
             "--ecoute" | "--pair" => {
-                let Some(valeur) = args.get(i + 1) else { usage() };
+                let Some(valeur) = args.get(i + 1) else {
+                    usage()
+                };
                 let Ok(adresse) = valeur.parse::<SocketAddr>() else {
                     eprintln!("adresse invalide : {valeur}");
                     std::process::exit(2);
@@ -112,7 +114,9 @@ fn main() {
             _ => usage(),
         }
     }
-    let Some(adresse_ecoute) = ecoute else { usage() };
+    let Some(adresse_ecoute) = ecoute else {
+        usage()
+    };
 
     // GENÈSE d'abord, AVANT de toucher au répertoire de données : un démarrage qui
     // échoue ici ne doit rien laisser derrière lui (une identité créée pour un nœud

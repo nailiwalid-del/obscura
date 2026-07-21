@@ -18,17 +18,17 @@
 // CONSENSUS : le monolithe réutilise `enforce_merkle_transition` et `path_rows`
 // (+ les constantes de layout). L'AIR/prouveur standalone
 // (`prove_merkle_path`/`verify_merkle_path`) est gaté `dev-circuits`.
+#[cfg(feature = "dev-circuits")]
+use crate::sponge::locate;
 use crate::sponge::{
     enforce_sponge_transition, sponge_rows, INJECT_START, RATE_START, TRACE_WIDTH,
 };
 #[cfg(feature = "dev-circuits")]
-use crate::sponge::locate;
-#[cfg(feature = "dev-circuits")]
 use crate::ValidityProof;
 use proved_hash::digest::{Digest, DIGEST_FELTS};
-use proved_hash::domain::{sponge_preamble, Domain};
 #[cfg(feature = "dev-circuits")]
 use proved_hash::domain::ENCODING_VERSION;
+use proved_hash::domain::{sponge_preamble, Domain};
 use proved_hash::felt::Felt;
 use winter_math::fields::f64::BaseElement;
 use winter_math::FieldElement;
@@ -113,7 +113,10 @@ pub(crate) fn enforce_merkle_transition<E: FieldElement + From<BaseElement>>(
 /// recopier un segment `M_i` aux colonnes du layout global.
 pub(crate) fn path_rows(leaf: &Digest, path: &[Digest], index: u64) -> Vec<[BaseElement; WIDTH]> {
     let l = path.len() * BLOCK;
-    assert!(l.is_power_of_two(), "3b2b intermédiaire : 16·D doit être une puissance de 2");
+    assert!(
+        l.is_power_of_two(),
+        "3b2b intermédiaire : 16·D doit être une puissance de 2"
+    );
 
     let mut rows = vec![[BaseElement::ZERO; WIDTH]; l];
     let mut cur = *leaf;
@@ -132,7 +135,11 @@ pub(crate) fn path_rows(leaf: &Digest, path: &[Digest], index: u64) -> Vec<[Base
 
         let cur_be: [BaseElement; 4] = core::array::from_fn(|i| cur.0[i].to_winter());
         let sib_be: [BaseElement; 4] = core::array::from_fn(|i| sib.0[i].to_winter());
-        let bit_be = if bit { BaseElement::ONE } else { BaseElement::ZERO };
+        let bit_be = if bit {
+            BaseElement::ONE
+        } else {
+            BaseElement::ZERO
+        };
 
         for (r, sr) in sp_rows.iter().enumerate() {
             let row = &mut rows[b * BLOCK + r];
@@ -197,7 +204,8 @@ impl winterfell::Air for MerklePathAir {
         // sponge ≤ 245, booléen/copies ≤ 31, swap ≤ 61 à L=32.
         let mut degrees = Vec::with_capacity(30);
         for _ in 0..12 {
-            degrees.push(TransitionConstraintDegree::with_cycles(8, vec![8, BLOCK])); // → 275 ≥ 245
+            degrees.push(TransitionConstraintDegree::with_cycles(8, vec![8, BLOCK]));
+            // → 275 ≥ 245
         }
         degrees.push(TransitionConstraintDegree::new(2)); // booléen → 31 ≥ 31
         for _ in 0..9 {
@@ -242,9 +250,10 @@ impl winterfell::Air for MerklePathAir {
 
     fn get_assertions(&self) -> Vec<Assertion<Self::BaseField>> {
         let mut a = Vec::with_capacity(self.context.num_assertions());
-        let put = |a: &mut Vec<Assertion<BaseElement>>, row: usize, col: usize, val: BaseElement| {
-            a.push(Assertion::single(col, row, val));
-        };
+        let put =
+            |a: &mut Vec<Assertion<BaseElement>>, row: usize, col: usize, val: BaseElement| {
+                a.push(Assertion::single(col, row, val));
+            };
         for b in 0..self.pi.depth {
             let base = b * BLOCK;
             put(&mut a, base, 0, BaseElement::new(MERGE_M as u64));
@@ -288,7 +297,13 @@ impl winterfell::Air for MerklePathAir {
         let init0: Vec<BaseElement> = (0..l).map(|r| if r % BLOCK == 0 { o } else { z }).collect();
         let init7: Vec<BaseElement> = (0..l).map(|r| if r % BLOCK == 7 { o } else { z }).collect();
         let chain: Vec<BaseElement> = (0..l)
-            .map(|r| if r % BLOCK == BLOCK - 1 && r + 1 < l { o } else { z })
+            .map(|r| {
+                if r % BLOCK == BLOCK - 1 && r + 1 < l {
+                    o
+                } else {
+                    z
+                }
+            })
             .collect();
         cols.push(init0);
         cols.push(init7);
@@ -384,7 +399,12 @@ pub fn prove_merkle_path(leaf: &Digest, path: &[Digest], index: u64) -> (Digest,
 
 /// Vérifie une preuve de chaînage contre `leaf`/`root` publics.
 #[cfg(feature = "dev-circuits")]
-pub fn verify_merkle_path(leaf: &Digest, root: &Digest, depth: usize, proof: &ValidityProof) -> bool {
+pub fn verify_merkle_path(
+    leaf: &Digest,
+    root: &Digest,
+    depth: usize,
+    proof: &ValidityProof,
+) -> bool {
     let pi = MerklePathPublicInputs {
         leaf: core::array::from_fn(|i| leaf.0[i].to_winter()),
         root: core::array::from_fn(|i| root.0[i].to_winter()),

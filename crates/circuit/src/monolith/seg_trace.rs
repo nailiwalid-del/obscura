@@ -285,7 +285,11 @@ impl SegForge {
         // `out₀ + 2k` face à une porteuse à `out₀ + k` — la liaison VOUT mordrait et
         // masquerait l'ancrage VACC qu'on veut tester.
         if let SegForge::VaccInitial(k) = self {
-            return if est_entree && n == 0 { honnete + k } else { honnete };
+            return if est_entree && n == 0 {
+                honnete + k
+            } else {
+                honnete
+            };
         }
         let k = match (self, est_entree) {
             (SegForge::ValeurEntrees(k), true) => k,
@@ -331,11 +335,10 @@ fn lignes_commitment(
         SegForge::PaddingCommitment(v) if i == 0 => {
             use proved_hash::domain::sponge_preamble;
             use proved_hash::rescue::absorbed_len;
-            let mut preamble: Vec<BaseElement> =
-                sponge_preamble(Domain::NoteCommitment, payload)
-                    .iter()
-                    .map(|f| f.to_winter())
-                    .collect();
+            let mut preamble: Vec<BaseElement> = sponge_preamble(Domain::NoteCommitment, payload)
+                .iter()
+                .map(|f| f.to_winter())
+                .collect();
             preamble.resize(absorbed_len(preamble.len()), BaseElement::ZERO);
             preamble[17] = BaseElement::new(v); // première cellule PAD_ZERO
             crate::sponge::sponge_rows(&preamble)
@@ -401,7 +404,11 @@ pub(crate) fn build_seg_trace_forge(
     w: &MonolithWitness,
     forge: SegForge,
 ) -> TraceTable<BaseElement> {
-    build_seg_trace_interne(&SegWitness::depuis_2in2out(w), &mut rand::rngs::OsRng, forge)
+    build_seg_trace_interne(
+        &SegWitness::depuis_2in2out(w),
+        &mut rand::rngs::OsRng,
+        forge,
+    )
 }
 
 /// Construit la trace segmentée du monolithe 2-in/2-out à partir du témoin `w`.
@@ -449,9 +456,8 @@ fn build_seg_trace_interne(
     // self-consistante et que SEULE la liaison visée diffère.
     // (La reconstruction est gatée `cfg(test)` : hors tests, `forge` vaut toujours
     // `Aucune` et les chemins sont ceux du témoin.)
-    let chemins_temoin = || -> Vec<Vec<Digest>> {
-        w.inputs.iter().map(|i| i.path.clone()).collect()
-    };
+    let chemins_temoin =
+        || -> Vec<Vec<Digest>> { w.inputs.iter().map(|i| i.path.clone()).collect() };
     #[cfg(test)]
     let chemins: Vec<Vec<Digest>> = if forge.rebatit_arbre() {
         // Les forges à reconstruction restent 2/2 en FORME (le helper
@@ -459,7 +465,11 @@ fn build_seg_trace_interne(
         // silencieusement faux sur une autre forme. La PROFONDEUR, elle, est
         // libre depuis D8 (arbre synthétique prolongé par frères muets) — elles
         // tournent donc aussi à la profondeur consensus.
-        assert_eq!(f, Forme::F22, "forge à reconstruction d'arbre : 2/2 seulement");
+        assert_eq!(
+            f,
+            Forme::F22,
+            "forge à reconstruction d'arbre : 2/2 seulement"
+        );
         let f0 = feuille_injectee(w, 0, forge);
         let f1 = feuille_injectee(w, 1, forge);
         let (_root, p0, p1) = super::socle::build_tree_from_leaves(&f0, &f1, depth);
@@ -532,7 +542,12 @@ fn build_seg_trace_interne(
                 let cm_leaf = forge.cm_feuille(n_in, cm);
                 let leaf_rows = sponge_rows_for(Domain::MerkleLeaf, &cm_leaf.0);
                 debug_assert_eq!(leaf_rows.len(), LEAF_ROWS_END - LEAF_ROWS_START);
-                seg_copy(&mut rows, &leaf_rows, start + LEAF_ROWS_START, SEG_SPONGE_OFF);
+                seg_copy(
+                    &mut rows,
+                    &leaf_rows,
+                    start + LEAF_ROWS_START,
+                    SEG_SPONGE_OFF,
+                );
                 let leaf_d = read_digest(&leaf_rows, leaf_rows.len() - 1, RATE_START);
 
                 // nullifier = H_Nullifier(nk ‖ rho ‖ cm) — lignes 40..56.
@@ -639,8 +654,7 @@ fn build_seg_trace_interne(
     let used = f.used_rows(depth);
     debug_assert_eq!(
         used,
-        f.seg_start(f.n_segments() - 1, depth)
-            + seg_len(f.seg_kind(f.n_segments() - 1), depth)
+        f.seg_start(f.n_segments() - 1, depth) + seg_len(f.seg_kind(f.n_segments() - 1), depth)
     );
     for row in rows.iter_mut().skip(used) {
         for cell in row.iter_mut() {
@@ -754,7 +768,11 @@ pub(crate) mod tests {
         let l3 = merkle::leaf(cm1);
         let n_left = merkle::node(&l0, &l1);
         let n_right = merkle::node(&l2, &l3);
-        (merkle::node(&n_left, &n_right), vec![l1, n_right], vec![l2, n_left])
+        (
+            merkle::node(&n_left, &n_right),
+            vec![l1, n_right],
+            vec![l2, n_left],
+        )
     }
 
     /// Témoin 2-in/2-out équilibré (1000 + 500 = 900 + 580 + fee 20), profondeur 2.
@@ -763,20 +781,48 @@ pub(crate) mod tests {
             Felt::from_canonical_u64(700 + i as u64).unwrap()
         }));
         let owner = rescue::hash(proved_hash::domain::Domain::Owner, secret.as_felts());
-        let n0 = SpendNote { value: 1_000, owner, rho: digest(20), r: digest(30) };
-        let n1 = SpendNote { value: 500, owner, rho: digest(40), r: digest(50) };
+        let n0 = SpendNote {
+            value: 1_000,
+            owner,
+            rho: digest(20),
+            r: digest(30),
+        };
+        let n1 = SpendNote {
+            value: 500,
+            owner,
+            rho: digest(40),
+            r: digest(50),
+        };
         let cm0 = rescue::note_commitment(n0.value, &n0.owner, &n0.rho, &n0.r);
         let cm1 = rescue::note_commitment(n1.value, &n1.owner, &n1.rho, &n1.r);
         let (_root, path0, path1) = build_tree(&cm0, &cm1);
         MonolithWitness {
             secret,
             inputs: [
-                ProvedInput { note: n0, path: path0, index: 0 },
-                ProvedInput { note: n1, path: path1, index: 3 },
+                ProvedInput {
+                    note: n0,
+                    path: path0,
+                    index: 0,
+                },
+                ProvedInput {
+                    note: n1,
+                    path: path1,
+                    index: 3,
+                },
             ],
             outputs: [
-                SpendNote { value: 900, owner: digest(60), rho: digest(61), r: digest(62) },
-                SpendNote { value: 580, owner: digest(70), rho: digest(71), r: digest(72) },
+                SpendNote {
+                    value: 900,
+                    owner: digest(60),
+                    rho: digest(61),
+                    r: digest(62),
+                },
+                SpendNote {
+                    value: 580,
+                    owner: digest(70),
+                    rho: digest(71),
+                    r: digest(72),
+                },
             ],
             fee: 20,
         }
@@ -818,7 +864,10 @@ pub(crate) mod tests {
             .iter()
             .map(|note| {
                 let cm = proved_hash::rescue::note_commitment(
-                    note.value, &note.owner, &note.rho, &note.r,
+                    note.value,
+                    &note.owner,
+                    &note.rho,
+                    &note.r,
                 );
                 arbre.append(&cm)
             })
@@ -935,7 +984,10 @@ pub(crate) mod tests {
                     for input in &w.inputs {
                         let note = &input.note;
                         let cm = proved_hash::rescue::note_commitment(
-                            note.value, &note.owner, &note.rho, &note.r,
+                            note.value,
+                            &note.owner,
+                            &note.rho,
+                            &note.r,
                         );
                         a.append(&cm);
                     }
@@ -952,13 +1004,10 @@ pub(crate) mod tests {
     fn witness_hors_bornes_refuse() {
         let bon = witness_forme(1, 1);
         // 0 entrée : le constructeur de Forme refuse (aucune autorité de dépense).
-        assert!(
-            SegWitness::new(bon.secret.clone(), Vec::new(), bon.outputs.clone(), 0).is_err()
-        );
+        assert!(SegWitness::new(bon.secret.clone(), Vec::new(), bon.outputs.clone(), 0).is_err());
         // 5 sorties : au-delà de MAX_OUT.
-        let trop: Vec<crate::SpendNote> = (0..MAX_OUT + 1)
-            .map(|_| bon.outputs[0].clone())
-            .collect();
+        let trop: Vec<crate::SpendNote> =
+            (0..MAX_OUT + 1).map(|_| bon.outputs[0].clone()).collect();
         assert!(SegWitness::new(bon.secret.clone(), bon.inputs.clone(), trop, 0).is_err());
     }
 

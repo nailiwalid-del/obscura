@@ -175,7 +175,9 @@ fn un_noeud_qui_a_manque_un_bloc_rattrape() {
         )
     });
 
-    let _pair_b = a.connecter(adresse_b, &SigKeypair::generate()).expect("handshake");
+    let _pair_b = a
+        .connecter(adresse_b, &SigKeypair::generate())
+        .expect("handshake");
 
     // 3. Un bloc 2 arrive chez A et repart vers B. Il est VIDE : `sceller` n'en
     //    produit pas (une chaîne au repos ne doit pas s'allonger), mais le protocole
@@ -303,7 +305,8 @@ fn deux_noeuds_desaccordes_ne_bouclent_pas() {
     });
 
     let mut a = Runtime::new(noeud_a);
-    a.connecter(adresse_b, &SigKeypair::generate()).expect("handshake");
+    a.connecter(adresse_b, &SigKeypair::generate())
+        .expect("handshake");
 
     // A diffuse sa tête : c'est ce qui met B en position de vouloir rattraper.
     let tete = Bloc::from_bytes(a.noeud().archive().octets_a(3).expect("hauteur 3")).unwrap();
@@ -318,7 +321,10 @@ fn deux_noeuds_desaccordes_ne_bouclent_pas() {
     }
 
     let (desaccords, hauteur_b) = serveur.join().expect("thread B");
-    assert_eq!(hauteur_b, 1, "B n'a pas pu rejoindre la chaîne de A, et c'est correct");
+    assert_eq!(
+        hauteur_b, 1,
+        "B n'a pas pu rejoindre la chaîne de A, et c'est correct"
+    );
     assert!(
         desaccords <= 10,
         "l'échange doit s'ÉTEINDRE : {desaccords} blocs refusés en 3 s trahit une boucle"
@@ -371,7 +377,9 @@ fn demande_de_hauteur_inconnue_reste_sans_reponse_sur_socket() {
         ProvedLedgerState::with_depth(PROFONDEUR),
         [1u8; 32],
     ));
-    let pair_b = a.connecter(adresse_b, &SigKeypair::generate()).expect("handshake");
+    let pair_b = a
+        .connecter(adresse_b, &SigKeypair::generate())
+        .expect("handshake");
 
     // Hauteurs qu'aucune chaîne au repos ne possède, dont les bornes du domaine.
     for hauteur in [0u64, 1, 12_345, u64::MAX] {
@@ -390,6 +398,9 @@ fn demande_de_hauteur_inconnue_reste_sans_reponse_sur_socket() {
 
     let (score, liens) = serveur.join().expect("thread B");
     assert_eq!(recus, 0, "silence : aucune réponse ne doit revenir");
-    assert_eq!(score, 0, "demander une hauteur inconnue n'est PAS une faute");
+    assert_eq!(
+        score, 0,
+        "demander une hauteur inconnue n'est PAS une faute"
+    );
     assert_eq!(liens, 1, "et le lien reste ouvert — le nœud n'a pas coupé");
 }

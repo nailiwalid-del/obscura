@@ -70,8 +70,14 @@ impl Session {
     /// silencieux.
     pub fn separer(self) -> (Emetteur, Recepteur) {
         (
-            Emetteur { cle: self.k_envoi, seq: self.seq_envoi },
-            Recepteur { cle: self.k_reception, seq: self.seq_reception },
+            Emetteur {
+                cle: self.k_envoi,
+                seq: self.seq_envoi,
+            },
+            Recepteur {
+                cle: self.k_reception,
+                seq: self.seq_reception,
+            },
         )
     }
 }

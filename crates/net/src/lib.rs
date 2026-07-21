@@ -63,7 +63,7 @@ pub mod session;
 
 pub use connexion::{Connexion, Ecrivain, Lecteur};
 pub use dandelion::{Dandelion, Routage};
-pub use frame::{MAX_CADRE, ecrire_cadre, lire_cadre};
+pub use frame::{ecrire_cadre, lire_cadre, MAX_CADRE};
 pub use handshake::{Initiateur, Repondeur};
 pub use pairs::{GroupeReseau, Pair, PeerId, TablePairs};
 pub use session::{Emetteur, Recepteur, Session};
@@ -170,7 +170,10 @@ mod tests {
         let mut d = Transcript::neuf();
         d.absorber(b"deux");
         d.absorber(b"un");
-        assert_ne!(c, d, "l'ORDRE doit compter (sinon réordonnancement possible)");
+        assert_ne!(
+            c, d,
+            "l'ORDRE doit compter (sinon réordonnancement possible)"
+        );
     }
 
     /// Deux domaines distincts sur le MÊME transcript et les MÊMES secrets donnent

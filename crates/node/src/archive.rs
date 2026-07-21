@@ -148,7 +148,12 @@ mod tests {
     use super::*;
 
     fn bloc(hauteur: u64) -> Bloc {
-        Bloc::sceller(&[hauteur as u8; ledger::bloc::TAILLE_ID], hauteur, Vec::new()).unwrap()
+        Bloc::sceller(
+            &[hauteur as u8; ledger::bloc::TAILLE_ID],
+            hauteur,
+            Vec::new(),
+        )
+        .unwrap()
     }
 
     /// Un bloc conservé est resservi À L'IDENTIQUE, octet pour octet.
@@ -195,8 +200,14 @@ mod tests {
         }
         assert_eq!(a.len(), BLOCS_CONSERVES);
         // Hauteurs 1 à 10 évincées, 11 à `derniere` conservées.
-        assert!(a.octets_a(10).is_none(), "les anciennes hauteurs sont parties");
-        assert!(a.octets_a(11).is_some(), "la plus ancienne encore conservée");
+        assert!(
+            a.octets_a(10).is_none(),
+            "les anciennes hauteurs sont parties"
+        );
+        assert!(
+            a.octets_a(11).is_some(),
+            "la plus ancienne encore conservée"
+        );
         assert!(a.octets_a(derniere).is_some(), "la tête est là");
     }
 

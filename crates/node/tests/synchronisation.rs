@@ -85,8 +85,10 @@ fn serveur_archiviste(
 /// Se connecte comme un WALLET : transport chiffré, rien d'autre.
 fn client(adresse: SocketAddr) -> Connexion<TcpStream> {
     let flux = TcpStream::connect(adresse).expect("connexion");
-    flux.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
-    flux.set_write_timeout(Some(Duration::from_secs(20))).unwrap();
+    flux.set_read_timeout(Some(Duration::from_secs(20)))
+        .unwrap();
+    flux.set_write_timeout(Some(Duration::from_secs(20)))
+        .unwrap();
     Connexion::connecter(flux, &SigKeypair::generate()).expect("handshake")
 }
 
@@ -137,8 +139,7 @@ fn un_wallet_obtient_les_sorties_dun_bloc_dans_lordre() {
                 "l'ancre servie est celle de l'arbre, pas une valeur inventée"
             );
             let recus: Vec<[u8; 32]> = r.sorties.iter().map(|s| s.commitment.to_bytes()).collect();
-            let attendus: Vec<[u8; 32]> =
-                (0..SORTIES).map(|n| commitment(n).to_bytes()).collect();
+            let attendus: Vec<[u8; 32]> = (0..SORTIES).map(|n| commitment(n).to_bytes()).collect();
             assert_eq!(
                 recus, attendus,
                 "les commitments doivent arriver dans l'ORDRE D'INSERTION : \
@@ -219,6 +220,12 @@ fn hauteurs_hostiles_ne_font_ni_paniquer_ni_repondre() {
         matches!(recu, Err(net::NetError::Io(_))),
         "silence attendu : aucune réponse ne doit revenir pour une hauteur inconnue"
     );
-    assert_eq!(score, 0, "demander une hauteur qu'on n'a pas n'est PAS une faute");
-    assert_eq!(liens, 1, "et le lien reste ouvert — le nœud n'a ni coupé ni paniqué");
+    assert_eq!(
+        score, 0,
+        "demander une hauteur qu'on n'a pas n'est PAS une faute"
+    );
+    assert_eq!(
+        liens, 1,
+        "et le lien reste ouvert — le nœud n'a ni coupé ni paniqué"
+    );
 }

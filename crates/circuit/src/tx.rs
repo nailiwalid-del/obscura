@@ -33,11 +33,9 @@
 // pour 1,34× en génération et 1,64× en vérification (4,0 ms — négligeable). La
 // taille est le coût PERMANENT, payé par chaque nœud qui stocke et relaie chaque
 // transaction.
-use crate::monolith::socle::MonolithPublicInputs;
-use crate::monolith::seg_air::{
-    verify_seg_monolith as verify_monolith,
-};
 use crate::monolith::seg_air::prove_seg_forme;
+use crate::monolith::seg_air::verify_seg_monolith as verify_monolith;
+use crate::monolith::socle::MonolithPublicInputs;
 
 /// Bornes de forme, ré-exposées depuis le layout (le module est `pub(crate)` : on
 /// recopie la VALEUR, source unique inchangée). Les changer = nouvelle version wire.
@@ -47,12 +45,12 @@ use crate::monolith::seg_trace::SegWitness;
 use crate::range_check::RANGE_BITS;
 use crate::spend::SpendNote;
 use crate::ValidityProof;
-use winterfell::Proof;
 use crypto::hash::dual_hash;
 use crypto::sig::{HybridSignature, SigKeypair, SigPublicKey};
 use proved_hash::digest::{Digest, ShieldedSecret, DIGEST_FELTS};
 use proved_hash::felt::Felt;
 use winter_math::fields::f64::BaseElement;
+use winterfell::Proof;
 
 /// Domaine de la signature d'intention (anti-malléabilité), signée sur `tx_digest`.
 pub const INTENT_DOMAIN: &str = "obscura/proved-tx-intent/v3";
@@ -246,8 +244,14 @@ pub fn prove_tx_forme(
     let output_commitments: Vec<Digest> =
         pi.output_commitments.iter().map(felts_to_digest).collect();
     let signer = intent.public.clone();
-    let tx_digest =
-        tx_digest_bytes(&root, &nullifiers, &output_commitments, fee, &signer, &enc_notes);
+    let tx_digest = tx_digest_bytes(
+        &root,
+        &nullifiers,
+        &output_commitments,
+        fee,
+        &signer,
+        &enc_notes,
+    );
     let intent_sig = intent.sign(INTENT_DOMAIN, &tx_digest);
 
     Ok((
@@ -499,8 +503,14 @@ mod tests {
     /// passer le contrôle anti-DoS de `verify_tx`.
     fn enc_notes_test() -> [EncNote; 2] {
         [
-            EncNote { kem_ct: vec![1u8; KEM_CT_LEN], enc_note: vec![4, 5, 6] },
-            EncNote { kem_ct: vec![2u8; KEM_CT_LEN], enc_note: vec![9, 10, 11, 12] },
+            EncNote {
+                kem_ct: vec![1u8; KEM_CT_LEN],
+                enc_note: vec![4, 5, 6],
+            },
+            EncNote {
+                kem_ct: vec![2u8; KEM_CT_LEN],
+                enc_note: vec![9, 10, 11, 12],
+            },
         ]
     }
 
@@ -527,26 +537,56 @@ mod tests {
     /// construction (commitment, arbre) suit fidèlement cet owner, SANS aucun assert
     /// de cohérence : c'est la contrainte AIR de liaison qui doit mordre, pas un
     /// panic hors-circuit.
-    fn setup(owner0_faux: Option<Digest>) -> (ShieldedSecret, Digest, [ProvedInput; 2], [SpendNote; 2]) {
+    fn setup(
+        owner0_faux: Option<Digest>,
+    ) -> (ShieldedSecret, Digest, [ProvedInput; 2], [SpendNote; 2]) {
         let secret = ShieldedSecret::from_felts(core::array::from_fn(|i| {
             Felt::from_canonical_u64(700 + i as u64).unwrap()
         }));
         let owner = rescue::hash(Domain::Owner, secret.as_felts());
         let owner0 = owner0_faux.unwrap_or(owner);
 
-        let n0 = SpendNote { value: 1_000, owner: owner0, rho: digest(20), r: digest(30) };
-        let n1 = SpendNote { value: 500, owner, rho: digest(40), r: digest(50) };
+        let n0 = SpendNote {
+            value: 1_000,
+            owner: owner0,
+            rho: digest(20),
+            r: digest(30),
+        };
+        let n1 = SpendNote {
+            value: 500,
+            owner,
+            rho: digest(40),
+            r: digest(50),
+        };
         let cm0 = rescue::note_commitment(n0.value, &n0.owner, &n0.rho, &n0.r);
         let cm1 = rescue::note_commitment(n1.value, &n1.owner, &n1.rho, &n1.r);
         let (root, path0, path1) = build_tree(&cm0, &cm1);
 
         // Sorties (destinataires) : 900 + 580 + fee 20 = 1500 = 1000 + 500.
-        let o0 = SpendNote { value: 900, owner: digest(60), rho: digest(61), r: digest(62) };
-        let o1 = SpendNote { value: 580, owner: digest(70), rho: digest(71), r: digest(72) };
+        let o0 = SpendNote {
+            value: 900,
+            owner: digest(60),
+            rho: digest(61),
+            r: digest(62),
+        };
+        let o1 = SpendNote {
+            value: 580,
+            owner: digest(70),
+            rho: digest(71),
+            r: digest(72),
+        };
 
         let inputs = [
-            ProvedInput { note: n0, path: path0, index: 0 },
-            ProvedInput { note: n1, path: path1, index: 3 },
+            ProvedInput {
+                note: n0,
+                path: path0,
+                index: 0,
+            },
+            ProvedInput {
+                note: n1,
+                path: path1,
+                index: 3,
+            },
         ];
         (secret, root, inputs, [o0, o1])
     }
@@ -640,27 +680,59 @@ mod tests {
             Felt::from_canonical_u64(700 + i as u64).unwrap()
         }));
         let owner = rescue::hash(Domain::Owner, secret.as_felts());
-        let n0 = SpendNote { value: 1_000, owner, rho: digest(20), r: digest(30) };
-        let n1 = SpendNote { value: 500, owner, rho: digest(40), r: digest(50) };
+        let n0 = SpendNote {
+            value: 1_000,
+            owner,
+            rho: digest(20),
+            r: digest(30),
+        };
+        let n1 = SpendNote {
+            value: 500,
+            owner,
+            rho: digest(40),
+            r: digest(50),
+        };
         let cm0 = rescue::note_commitment(n0.value, &n0.owner, &n0.rho, &n0.r);
         let cm1 = rescue::note_commitment(n1.value, &n1.owner, &n1.rho, &n1.r);
         let (root, path0, path1) = build_tree(&cm0, &cm1);
 
         // Σsorties = 1500 + k > Σentrées = 1500 : k unités créées ; fee = p − k ≡ −k.
-        let o0 = SpendNote { value: 1_000, owner: digest(60), rho: digest(61), r: digest(62) };
-        let o1 = SpendNote { value: 500 + k, owner: digest(70), rho: digest(71), r: digest(72) };
+        let o0 = SpendNote {
+            value: 1_000,
+            owner: digest(60),
+            rho: digest(61),
+            r: digest(62),
+        };
+        let o1 = SpendNote {
+            value: 500 + k,
+            owner: digest(70),
+            rho: digest(71),
+            r: digest(72),
+        };
         let inputs = [
-            ProvedInput { note: n0, path: path0, index: 0 },
-            ProvedInput { note: n1, path: path1, index: 3 },
+            ProvedInput {
+                note: n0,
+                path: path0,
+                index: 0,
+            },
+            ProvedInput {
+                note: n1,
+                path: path1,
+                index: 3,
+            },
         ];
         let intent = SigKeypair::generate();
-        let (proved_root, tx) = prove_tx(&secret, inputs, [o0, o1], P - k, &intent, enc_notes_test());
+        let (proved_root, tx) =
+            prove_tx(&secret, inputs, [o0, o1], P - k, &intent, enc_notes_test());
         assert_eq!(proved_root, root);
 
         // La preuve STARK est valide (S ≡ fee mod p) : le trou est bien réel...
         let pi = MonolithPublicInputs {
             root: digest_to_felts(&root),
-            nullifiers: vec![digest_to_felts(&tx.nullifiers[0]), digest_to_felts(&tx.nullifiers[1])],
+            nullifiers: vec![
+                digest_to_felts(&tx.nullifiers[0]),
+                digest_to_felts(&tx.nullifiers[1]),
+            ],
             output_commitments: vec![
                 digest_to_felts(&tx.output_commitments[0]),
                 digest_to_felts(&tx.output_commitments[1]),
@@ -668,9 +740,15 @@ mod tests {
             fee: tx.fee,
             depth: DEPTH,
         };
-        assert!(verify_monolith(&pi, DEPTH, &tx.proof), "preuve STARK valide (wrap mod p)");
+        assert!(
+            verify_monolith(&pi, DEPTH, &tx.proof),
+            "preuve STARK valide (wrap mod p)"
+        );
         // ...mais la borne native `fee < 2^60` de verify_tx le ferme.
-        assert!(!verify_tx(&root, DEPTH, &tx), "fee = p − k ≥ 2^60 doit être rejeté");
+        assert!(
+            !verify_tx(&root, DEPTH, &tx),
+            "fee = p − k ≥ 2^60 doit être rejeté"
+        );
     }
 
     /// Entrée d'un AUTRE owner : la note 0 porte `owner = digest(9999)` ≠
@@ -746,13 +824,19 @@ mod tests {
         // Substitution du chiffré AEAD.
         let mut tx_a = valid_tx().2;
         tx_a.enc_notes[0].enc_note = vec![9, 9, 9];
-        assert!(!verify_tx(&root, DEPTH, &tx_a), "enc_note substitué doit casser le digest");
+        assert!(
+            !verify_tx(&root, DEPTH, &tx_a),
+            "enc_note substitué doit casser le digest"
+        );
         // Substitution du ciphertext KEM (les deux champs de EncNote sont liés).
         // NB : on garde une longueur `KEM_CT_LEN` valide pour tester la liaison digest
         // (et non le rejet de borne) — un contenu différent suffit.
         let mut tx_k = valid_tx().2;
         tx_k.enc_notes[1].kem_ct = vec![42u8; KEM_CT_LEN];
-        assert!(!verify_tx(&root, DEPTH, &tx_k), "kem_ct substitué doit casser le digest");
+        assert!(
+            !verify_tx(&root, DEPTH, &tx_k),
+            "kem_ct substitué doit casser le digest"
+        );
     }
 
     /// Sérialisation canonique : `from_bytes(to_bytes) == tx` (roundtrip) sur une
@@ -785,19 +869,31 @@ mod tests {
         let bytes = tx.to_bytes();
         // `matches!` plutôt que `assert_eq!` : `ProvedTx` n'est pas `Debug` (Proof/sig).
         // Tronqué.
-        assert!(matches!(ProvedTx::from_bytes(&bytes[..bytes.len() - 1]), Err(TxDecodeError::TooShort)));
+        assert!(matches!(
+            ProvedTx::from_bytes(&bytes[..bytes.len() - 1]),
+            Err(TxDecodeError::TooShort)
+        ));
         // Octets résiduels.
         let mut trailing = bytes.clone();
         trailing.push(0);
-        assert!(matches!(ProvedTx::from_bytes(&trailing), Err(TxDecodeError::TrailingBytes)));
+        assert!(matches!(
+            ProvedTx::from_bytes(&trailing),
+            Err(TxDecodeError::TrailingBytes)
+        ));
         // Digest non canonique : anchor (32 premiers octets) mis à 0xFF (≥ p sur chaque felt).
         let mut bad_digest = bytes.clone();
         for byte in bad_digest.iter_mut().take(32) {
             *byte = 0xFF;
         }
-        assert!(matches!(ProvedTx::from_bytes(&bad_digest), Err(TxDecodeError::BadDigest)));
+        assert!(matches!(
+            ProvedTx::from_bytes(&bad_digest),
+            Err(TxDecodeError::BadDigest)
+        ));
         // Vide.
-        assert!(matches!(ProvedTx::from_bytes(&[]), Err(TxDecodeError::TooShort)));
+        assert!(matches!(
+            ProvedTx::from_bytes(&[]),
+            Err(TxDecodeError::TooShort)
+        ));
     }
 
     /// `from_bytes` rejette un `enc_note` hors bornes (anti-DoS au parse). On reconstruit
@@ -808,7 +904,10 @@ mod tests {
         let (_s, _root, mut tx) = valid_tx();
         tx.enc_notes[0].enc_note = vec![0u8; MAX_ENC_NOTE_LEN + 1];
         let bytes = tx.to_bytes(); // to_bytes n'impose pas les bornes ; from_bytes oui.
-        assert!(matches!(ProvedTx::from_bytes(&bytes), Err(TxDecodeError::EncNoteOutOfBounds)));
+        assert!(matches!(
+            ProvedTx::from_bytes(&bytes),
+            Err(TxDecodeError::EncNoteOutOfBounds)
+        ));
     }
 
     /// FORME VARIABLE de bout en bout (C2-T6) : une tx 1-in/3-out se prouve, passe le
@@ -826,11 +925,20 @@ mod tests {
         }));
         let owner = rescue::hash(Domain::Owner, secret.as_felts());
         // Une seule entrée qui couvre trois sorties + fee.
-        let note = SpendNote { value: 1_000, owner, rho: digest(20), r: digest(30) };
+        let note = SpendNote {
+            value: 1_000,
+            owner,
+            rho: digest(20),
+            r: digest(30),
+        };
         let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
         let mut arbre = ProvedMerkleTree::new(DEPTH);
         let i0 = arbre.append(&cm);
-        let inputs = vec![ProvedInput { note, path: arbre.path(i0).unwrap(), index: i0 }];
+        let inputs = vec![ProvedInput {
+            note,
+            path: arbre.path(i0).unwrap(),
+            index: i0,
+        }];
 
         let fee = 10u64;
         let parts = [400u64, 300, 290]; // 400+300+290+10 = 1000
@@ -845,7 +953,10 @@ mod tests {
             })
             .collect();
         let enc_notes: Vec<EncNote> = (0..3)
-            .map(|j| EncNote { kem_ct: vec![j as u8; KEM_CT_LEN], enc_note: vec![j as u8; 3] })
+            .map(|j| EncNote {
+                kem_ct: vec![j as u8; KEM_CT_LEN],
+                enc_note: vec![j as u8; 3],
+            })
             .collect();
         let intent = crypto::sig::SigKeypair::generate();
 
@@ -915,18 +1026,31 @@ mod tests {
         forge.signer = autre.public.clone();
         // Il doit recalculer le digest (le signer y est lié) puis re-signer.
         forge.tx_digest = tx_digest_bytes(
-            &root, &forge.nullifiers, &forge.output_commitments, forge.fee, &forge.signer,
+            &root,
+            &forge.nullifiers,
+            &forge.output_commitments,
+            forge.fee,
+            &forge.signer,
             &forge.enc_notes,
         );
         forge.intent_sig = autre.sign(INTENT_DOMAIN, &forge.tx_digest);
-        assert!(verify_tx(&root, DEPTH, &forge), "verify_tx seul accepte le substitut re-signé");
+        assert!(
+            verify_tx(&root, DEPTH, &forge),
+            "verify_tx seul accepte le substitut re-signé"
+        );
         assert!(verify_proved_tx_full(&root, DEPTH, &forge));
         // (Le substitut re-signé EST accepté même par full : la sig est valide sous sa
         // propre clé — c'est la limitation documentée. Ce que full ajoute vs verify_tx :
         // il REFUSE une signature INVALIDE, cf. ci-dessous.)
         let mut sig_cassee = valid_tx().2;
         sig_cassee.intent_sig = SigKeypair::generate().sign(INTENT_DOMAIN, &sig_cassee.tx_digest);
-        assert!(verify_tx(&root, DEPTH, &sig_cassee), "verify_tx ignore la signature");
-        assert!(!verify_proved_tx_full(&root, DEPTH, &sig_cassee), "full refuse une sig invalide");
+        assert!(
+            verify_tx(&root, DEPTH, &sig_cassee),
+            "verify_tx ignore la signature"
+        );
+        assert!(
+            !verify_proved_tx_full(&root, DEPTH, &sig_cassee),
+            "full refuse une sig invalide"
+        );
     }
 }

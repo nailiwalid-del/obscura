@@ -52,9 +52,7 @@ const TAG_HISTORIQUE: u8 = 7;
 /// le plafond, `crypto` le surcoût de la cascade, `net` le cadre. Tout ajustement
 /// de l'un des trois qui rendrait un bloc plein indiffusable casse la compilation
 /// au lieu de produire une partition découverte sur le fil.
-const _: () = assert!(
-    ledger::bloc::MAX_OCTETS_BLOC + 1 + crypto::aead::SURCOUT <= net::MAX_CADRE
-);
+const _: () = assert!(ledger::bloc::MAX_OCTETS_BLOC + 1 + crypto::aead::SURCOUT <= net::MAX_CADRE);
 
 /// Erreur de décodage d'un message applicatif.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -205,7 +203,8 @@ impl Message {
             TAG_ANNONCE => Ok(Message::Annonce(lire_digests(reste)?)),
             TAG_DEMANDE => Ok(Message::Demande(lire_digests(reste)?)),
             TAG_TRANSACTION => {
-                let tx = ProvedTx::from_bytes(reste).map_err(|_| MessageError::TransactionInvalide)?;
+                let tx =
+                    ProvedTx::from_bytes(reste).map_err(|_| MessageError::TransactionInvalide)?;
                 Ok(Message::Transaction(Box::new(tx)))
             }
             TAG_BLOC => {
@@ -227,8 +226,8 @@ impl Message {
                 hauteur: lire_hauteur_exacte(reste)?,
             }),
             TAG_HISTORIQUE => {
-                let r =
-                    ReponseHistorique::from_bytes(reste).map_err(MessageError::HistoriqueInvalide)?;
+                let r = ReponseHistorique::from_bytes(reste)
+                    .map_err(MessageError::HistoriqueInvalide)?;
                 Ok(Message::Historique(Box::new(r)))
             }
             _ => Err(MessageError::TagInconnu),
@@ -329,32 +328,53 @@ mod tests {
     fn annonce_hors_borne_rejetee_sans_allouer() {
         let mut b = vec![TAG_ANNONCE];
         b.extend_from_slice(&1_000_000u32.to_le_bytes());
-        assert!(matches!(Message::from_bytes(&b), Err(MessageError::TropDeDigests)));
+        assert!(matches!(
+            Message::from_bytes(&b),
+            Err(MessageError::TropDeDigests)
+        ));
 
         // Juste au-dessus de la borne : rejeté aussi.
         let mut b2 = vec![TAG_ANNONCE];
         b2.extend_from_slice(&((MAX_DIGESTS + 1) as u32).to_le_bytes());
-        assert!(matches!(Message::from_bytes(&b2), Err(MessageError::TropDeDigests)));
+        assert!(matches!(
+            Message::from_bytes(&b2),
+            Err(MessageError::TropDeDigests)
+        ));
     }
 
     /// Message vide, tag inconnu, troncature, octets résiduels : `Result`, jamais
     /// de panique.
     #[test]
     fn messages_malformes_rejetes_sans_panique() {
-        assert!(matches!(Message::from_bytes(&[]), Err(MessageError::Tronque)));
-        assert!(matches!(Message::from_bytes(&[99]), Err(MessageError::TagInconnu)));
-        assert!(matches!(Message::from_bytes(&[TAG_ANNONCE]), Err(MessageError::Tronque)));
+        assert!(matches!(
+            Message::from_bytes(&[]),
+            Err(MessageError::Tronque)
+        ));
+        assert!(matches!(
+            Message::from_bytes(&[99]),
+            Err(MessageError::TagInconnu)
+        ));
+        assert!(matches!(
+            Message::from_bytes(&[TAG_ANNONCE]),
+            Err(MessageError::Tronque)
+        ));
 
         // Annonce annonçant 2 digests mais n'en fournissant qu'un.
         let mut court = vec![TAG_ANNONCE];
         court.extend_from_slice(&2u32.to_le_bytes());
         court.extend_from_slice(&dg(1));
-        assert!(matches!(Message::from_bytes(&court), Err(MessageError::Tronque)));
+        assert!(matches!(
+            Message::from_bytes(&court),
+            Err(MessageError::Tronque)
+        ));
 
         // Octets résiduels.
         let mut trop = Message::Annonce(vec![dg(1)]).to_bytes();
         trop.push(0);
-        assert!(matches!(Message::from_bytes(&trop), Err(MessageError::OctetsResiduels)));
+        assert!(matches!(
+            Message::from_bytes(&trop),
+            Err(MessageError::OctetsResiduels)
+        ));
     }
 
     /// Aller-retour d'un bloc VIDE sur le fil — le cas courant d'une chaîne au repos.
@@ -421,7 +441,10 @@ mod tests {
         for n in 0..8usize {
             let mut court = vec![TAG_DEMANDE_BLOC];
             court.extend_from_slice(&[0u8; 8][..n]);
-            assert!(matches!(Message::from_bytes(&court), Err(MessageError::Tronque)));
+            assert!(matches!(
+                Message::from_bytes(&court),
+                Err(MessageError::Tronque)
+            ));
         }
         let mut trop = Message::DemandeBloc { hauteur: 3 }.to_bytes();
         trop.push(0);
@@ -497,7 +520,10 @@ mod tests {
     fn transaction_indecodable_rejetee() {
         let mut b = vec![TAG_TRANSACTION];
         b.extend_from_slice(&[0xAB; 200]);
-        assert!(matches!(Message::from_bytes(&b), Err(MessageError::TransactionInvalide)));
+        assert!(matches!(
+            Message::from_bytes(&b),
+            Err(MessageError::TransactionInvalide)
+        ));
     }
 
     /// DEUX WALLETS À LA MÊME POSITION ÉMETTENT DES OCTETS IDENTIQUES.

@@ -136,8 +136,8 @@ fn somme(corps: &[u8]) -> [u8; SOMME] {
 mod tests {
     use super::*;
     use crate::Wallet;
-    use proved_hash::felt::Felt;
     use proved_hash::digest::ShieldedSecret;
+    use proved_hash::felt::Felt;
 
     fn adresse_de_test() -> Adresse {
         let secret = ShieldedSecret::from_felts(core::array::from_fn(|i| {

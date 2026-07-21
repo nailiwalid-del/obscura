@@ -58,8 +58,6 @@ pub use key::{prove_key, verify_key};
 #[cfg(feature = "dev-circuits")]
 pub use membership::{prove_membership, verify_membership, MembershipProof};
 #[cfg(feature = "dev-circuits")]
-pub use range_check::{prove_range, verify_range};
-#[cfg(feature = "dev-circuits")]
 pub use merkle_level::{prove_merkle_level, verify_merkle_level};
 #[cfg(feature = "dev-circuits")]
 pub use merkle_path::{prove_merkle_path, verify_merkle_path};
@@ -67,6 +65,8 @@ pub use merkle_path::{prove_merkle_path, verify_merkle_path};
 pub use output::{prove_output, verify_output, OutputProof};
 #[cfg(feature = "dev-circuits")]
 pub use owner_hash::{prove_owner, verify_owner};
+#[cfg(feature = "dev-circuits")]
+pub use range_check::{prove_range, verify_range};
 #[cfg(feature = "dev-circuits")]
 pub use rescue_perm::{prove_permutation, verify_permutation};
 #[cfg(feature = "dev-circuits")]

@@ -74,11 +74,10 @@ fn main() {
             ),
         };
         let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
-        emissions.push(ledger::proved_wallet::emission_vers(
-            &alice.adresse().kem,
-            &cm,
-            &note,
-        ).expect("clé de démo fraîche : contributive par construction"));
+        emissions.push(
+            ledger::proved_wallet::emission_vers(&alice.adresse().kem, &cm, &note)
+                .expect("clé de démo fraîche : contributive par construction"),
+        );
     }
     let genese = ledger::bloc::Bloc::genese_avec(emissions).expect("genèse bornée");
     let octets_genese = genese.to_bytes();
@@ -117,8 +116,14 @@ fn main() {
         .expect("transaction constructible");
     let duree = debut.elapsed();
     let taille = tx.to_bytes().len();
-    println!("      preuve générée en {:.1} ms", duree.as_secs_f64() * 1e3);
-    println!("      taille de la transaction : {:.1} Kio", taille as f64 / 1024.0);
+    println!(
+        "      preuve générée en {:.1} ms",
+        duree.as_secs_f64() * 1e3
+    );
+    println!(
+        "      taille de la transaction : {:.1} Kio",
+        taille as f64 / 1024.0
+    );
     println!("      monnaie rendue à Alice : {} unités", 1_500 - 300 - 20);
 
     // ---- 3. Deux nœuds réels ----
@@ -163,7 +168,10 @@ fn main() {
 
     println!("\n[5/5] Alice soumet sa transaction et l'annonce");
     a.noeud_mut().soumettre(tx, 0).expect("admission locale");
-    a.executer(vec![Action::Envoyer(pair_b, Message::Annonce(vec![digest]))]);
+    a.executer(vec![Action::Envoyer(
+        pair_b,
+        Message::Annonce(vec![digest]),
+    )]);
     attendre(|| a.pomper(0) > 0, Duration::from_secs(30));
 
     let recu = b.join().expect("nœud B");

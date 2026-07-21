@@ -38,7 +38,11 @@ impl<S: Read + Write> Connexion<S> {
         let final_i = init.recevoir_passe2(&passe2, identite)?;
         let (passe3, session, pair) = final_i.terminer();
         ecrire_cadre(&mut flux, &passe3)?;
-        Ok(Connexion { flux, session, pair })
+        Ok(Connexion {
+            flux,
+            session,
+            pair,
+        })
     }
 
     /// Établit une connexion en tant que RÉPONDEUR (côté entrant).
@@ -48,7 +52,11 @@ impl<S: Read + Write> Connexion<S> {
         ecrire_cadre(&mut flux, &passe2)?;
         let passe3 = lire_cadre(&mut flux)?;
         let (session, pair) = rep.recevoir_passe3(&passe3)?;
-        Ok(Connexion { flux, session, pair })
+        Ok(Connexion {
+            flux,
+            session,
+            pair,
+        })
     }
 
     /// Identité AUTHENTIFIÉE du pair (signature vérifiée sur le transcript).
@@ -81,8 +89,14 @@ impl<S: Read + Write> Connexion<S> {
         let flux_lecture = cloner_flux(&self.flux).map_err(|e| NetError::Io(e.kind()))?;
         let (emetteur, recepteur) = self.session.separer();
         Ok((
-            Lecteur { flux: flux_lecture, recepteur },
-            Ecrivain { flux: self.flux, emetteur },
+            Lecteur {
+                flux: flux_lecture,
+                recepteur,
+            },
+            Ecrivain {
+                flux: self.flux,
+                emetteur,
+            },
         ))
     }
 }
@@ -134,8 +148,14 @@ mod tests {
             let a = Arc::new(Mutex::new(VecDeque::new()));
             let b = Arc::new(Mutex::new(VecDeque::new()));
             (
-                Tuyau { lecture: a.clone(), ecriture: b.clone() },
-                Tuyau { lecture: b, ecriture: a },
+                Tuyau {
+                    lecture: a.clone(),
+                    ecriture: b.clone(),
+                },
+                Tuyau {
+                    lecture: b,
+                    ecriture: a,
+                },
             )
         }
     }
@@ -169,10 +189,7 @@ mod tests {
     ///
     /// Le handshake étant en 3 passes strictement alternées, on peut le dérouler
     /// sans thread : chaque côté n'écrit que lorsque l'autre a fini.
-    fn etablir(
-        id_i: &SigKeypair,
-        id_r: &SigKeypair,
-    ) -> (Connexion<Tuyau>, Connexion<Tuyau>) {
+    fn etablir(id_i: &SigKeypair, id_r: &SigKeypair) -> (Connexion<Tuyau>, Connexion<Tuyau>) {
         let (mut ti, mut tr) = Tuyau::paire();
 
         // Passe 1 (I) puis passe 2 (R) : on pilote les deux machines à la main pour
@@ -190,8 +207,16 @@ mod tests {
         let (sess_r, pair_r) = rep.recevoir_passe3(&recue3).unwrap();
 
         (
-            Connexion { flux: ti, session: sess_i, pair: pair_i },
-            Connexion { flux: tr, session: sess_r, pair: pair_r },
+            Connexion {
+                flux: ti,
+                session: sess_i,
+                pair: pair_i,
+            },
+            Connexion {
+                flux: tr,
+                session: sess_r,
+                pair: pair_r,
+            },
         )
     }
 
@@ -246,7 +271,11 @@ mod tests {
         assert_eq!(cr.recevoir().unwrap(), b"paiement");
 
         // Réinjection des MÊMES octets : le compteur a avancé → rejet.
-        cr.flux.lecture.lock().unwrap().extend(sur_le_fil.iter().copied());
+        cr.flux
+            .lecture
+            .lock()
+            .unwrap()
+            .extend(sur_le_fil.iter().copied());
         assert_eq!(cr.recevoir(), Err(NetError::DechiffrementEchoue));
     }
 }

@@ -122,11 +122,7 @@ pub struct Noeud {
 pub const MAX_ADRESSES_SUIVIES: usize = 4_096;
 
 impl Noeud {
-    pub fn new(
-        identite: SigKeypair,
-        etat: ProvedLedgerState,
-        secret_dandelion: [u8; 32],
-    ) -> Self {
+    pub fn new(identite: SigKeypair, etat: ProvedLedgerState, secret_dandelion: [u8; 32]) -> Self {
         let hauteur_max_vue = etat.hauteur();
         Noeud {
             identite,
@@ -307,8 +303,7 @@ impl Noeud {
         // doit rester candidat pour le suivant, sinon sceller PERDRAIT des paiements.
         let digests = retenus;
 
-        let bloc =
-            Bloc::sceller(&self.etat.tete(), self.etat.hauteur() + 1, transactions).ok()?;
+        let bloc = Bloc::sceller(&self.etat.tete(), self.etat.hauteur() + 1, transactions).ok()?;
         // On applique à NOTRE état avant de diffuser : diffuser un bloc qu'on n'a pas
         // su appliquer soi-même reviendrait à demander aux autres de nous croire.
         match self.etat.appliquer_bloc(&bloc) {
@@ -444,7 +439,10 @@ impl Noeud {
         if self.hauteur_max_vue < suivante {
             return None;
         }
-        Some(Action::Envoyer(de, Message::DemandeBloc { hauteur: suivante }))
+        Some(Action::Envoyer(
+            de,
+            Message::DemandeBloc { hauteur: suivante },
+        ))
     }
 
     /// Un pair demande un bloc : on le sert si on l'a ARCHIVÉ, silence sinon.
@@ -471,7 +469,10 @@ impl Noeud {
         let Some(adresse) = self.adresses.get(&de).copied() else {
             return Vec::new();
         };
-        if !self.etrangleur.autoriser(GroupeReseau::de(&adresse), maintenant_ms) {
+        if !self
+            .etrangleur
+            .autoriser(GroupeReseau::de(&adresse), maintenant_ms)
+        {
             return Vec::new();
         }
         match self.archive.octets_a(hauteur) {
@@ -604,12 +605,7 @@ impl Noeud {
 
     /// Une transaction arrive : admission (contrôles ordonnés par coût), puis
     /// routage Dandelion++ si elle est acceptée, ou sanction du pair sinon.
-    fn sur_transaction(
-        &mut self,
-        de: PeerId,
-        tx: ProvedTx,
-        maintenant_ms: u64,
-    ) -> Vec<Action> {
+    fn sur_transaction(&mut self, de: PeerId, tx: ProvedTx, maintenant_ms: u64) -> Vec<Action> {
         let digest = tx.tx_digest;
         match self.mempool.admettre(&self.etat, tx) {
             Ok(()) => {
@@ -709,8 +705,18 @@ mod tests {
             Felt::from_canonical_u64(700 + i as u64).unwrap()
         }));
         let owner = rescue::hash(Domain::Owner, secret.as_felts());
-        let n0 = SpendNote { value: 1_000, owner, rho: d(20), r: d(30) };
-        let n1 = SpendNote { value: 500, owner, rho: d(40), r: d(50) };
+        let n0 = SpendNote {
+            value: 1_000,
+            owner,
+            rho: d(20),
+            r: d(30),
+        };
+        let n1 = SpendNote {
+            value: 500,
+            owner,
+            rho: d(40),
+            r: d(50),
+        };
         let cm0 = rescue::note_commitment(n0.value, &n0.owner, &n0.rho, &n0.r);
         let cm1 = rescue::note_commitment(n1.value, &n1.owner, &n1.rho, &n1.r);
 
@@ -731,18 +737,39 @@ mod tests {
         arbre.append(&cm1);
         let (i0, i1) = (0u64, 1u64);
 
-        let o0 = SpendNote { value: 900, owner: d(60), rho: d(61), r: d(62) };
-        let o1 = SpendNote { value: 580, owner: d(70), rho: d(71), r: d(72) };
+        let o0 = SpendNote {
+            value: 900,
+            owner: d(60),
+            rho: d(61),
+            r: d(62),
+        };
+        let o1 = SpendNote {
+            value: 580,
+            owner: d(70),
+            rho: d(71),
+            r: d(72),
+        };
         let oc0 = rescue::note_commitment(o0.value, &o0.owner, &o0.rho, &o0.r);
         let oc1 = rescue::note_commitment(o1.value, &o1.owner, &o1.rho, &o1.r);
-        let (r0, r1) = (crypto::kem::KemKeypair::generate(), crypto::kem::KemKeypair::generate());
+        let (r0, r1) = (
+            crypto::kem::KemKeypair::generate(),
+            crypto::kem::KemKeypair::generate(),
+        );
         let enc = [
             encrypt_note(&r0.public, &oc0, &o0).unwrap(),
             encrypt_note(&r1.public, &oc1, &o1).unwrap(),
         ];
         let inputs = [
-            ProvedInput { note: n0, path: arbre.path(i0).unwrap(), index: i0 },
-            ProvedInput { note: n1, path: arbre.path(i1).unwrap(), index: i1 },
+            ProvedInput {
+                note: n0,
+                path: arbre.path(i0).unwrap(),
+                index: i0,
+            },
+            ProvedInput {
+                note: n1,
+                path: arbre.path(i1).unwrap(),
+                index: i1,
+            },
         ];
         let intent = SigKeypair::generate();
         let (_root, tx) = prove_tx(&secret, inputs, [o0, o1], 20, &intent, enc);
@@ -860,9 +887,15 @@ mod tests {
         assert_eq!(bloc.hauteur, 1);
         assert_eq!(n.etat.hauteur(), 1, "notre chaîne a avancé");
         assert_eq!(n.etat.tete(), bloc.id());
-        assert!(n.etat.is_spent(&nf), "le nullifier est DÉFINITIVEMENT dépensé");
+        assert!(
+            n.etat.is_spent(&nf),
+            "le nullifier est DÉFINITIVEMENT dépensé"
+        );
         assert_eq!(n.mempool.len(), 0, "la transaction n'est plus en attente");
-        assert!(matches!(actions.as_slice(), [Action::Diffuser(Message::Bloc(_))]));
+        assert!(matches!(
+            actions.as_slice(),
+            [Action::Diffuser(Message::Bloc(_))]
+        ));
     }
 
     /// Un mempool vide ne produit pas de bloc : une chaîne au repos ne doit pas
@@ -888,7 +921,10 @@ mod tests {
 
         let etranger = Bloc::sceller(&[9u8; 64], 1, Vec::new()).unwrap();
         let actions = n.traiter(p, Message::Bloc(Box::new(etranger)), 0);
-        assert!(actions.is_empty(), "on ne relaie pas un bloc qu'on n'applique pas");
+        assert!(
+            actions.is_empty(),
+            "on ne relaie pas un bloc qu'on n'applique pas"
+        );
         assert_eq!(
             n.pairs.get(&p).unwrap().score,
             0,
@@ -1174,7 +1210,8 @@ mod tests {
                 assert_eq!(r.racine_apres.to_bytes(), attendue.to_bytes());
                 // Et la réponse survit au fil, tag applicatif compris.
                 let octets = Message::Historique(Box::new(
-                    crate::synchro::ReponseHistorique::from_bytes(&r.to_bytes()).expect("relecture"),
+                    crate::synchro::ReponseHistorique::from_bytes(&r.to_bytes())
+                        .expect("relecture"),
                 ))
                 .to_bytes();
                 assert!(Message::from_bytes(&octets).is_ok());
@@ -1213,7 +1250,10 @@ mod tests {
             .is_empty());
         // Et la même demande, une fois l'adresse notée, est bien servie : c'est
         // l'adresse qui manquait, pas autre chose.
-        n.noter_adresse(inconnu, SocketAddr::from((Ipv4Addr::new(198, 51, 100, 4), 8333)));
+        n.noter_adresse(
+            inconnu,
+            SocketAddr::from((Ipv4Addr::new(198, 51, 100, 4), 8333)),
+        );
         assert_eq!(
             n.traiter(inconnu, Message::DemandeHistorique { hauteur: 0 }, 0)
                 .len(),
@@ -1243,7 +1283,8 @@ mod tests {
         );
         // La hauteur valide reste servie : le silence n'était pas un blocage global.
         assert_eq!(
-            n.traiter(p, Message::DemandeHistorique { hauteur: 0 }, 0).len(),
+            n.traiter(p, Message::DemandeHistorique { hauteur: 0 }, 0)
+                .len(),
             1
         );
     }
@@ -1266,7 +1307,10 @@ mod tests {
         for i in 0..200u16 {
             // Identité neuve à CHAQUE requête, adresses variées… dans le même /16.
             let p = pair_connecte(&mut n, 203, 0, (i % 256) as u8, (i / 256) as u8);
-            if !n.traiter(p, Message::DemandeHistorique { hauteur: 0 }, 0).is_empty() {
+            if !n
+                .traiter(p, Message::DemandeHistorique { hauteur: 0 }, 0)
+                .is_empty()
+            {
                 servies += 1;
             }
         }
@@ -1275,7 +1319,10 @@ mod tests {
             / (crate::etranglement::COUT_REQUETE + SORTIES_DE_GENESE as u64))
             as usize
             + 1;
-        assert!(servies >= 1, "un wallet honnête doit être servi au moins une fois");
+        assert!(
+            servies >= 1,
+            "un wallet honnête doit être servi au moins une fois"
+        );
         assert!(
             servies <= plafond,
             "200 identités d'un même /16 ont obtenu {servies} réponses (plafond {plafond}) : \
@@ -1306,7 +1353,9 @@ mod tests {
         let p = pair_connecte(&mut n, 203, 0, 113, 1);
         let mut vues = 0usize;
         for _ in 0..500 {
-            if n.traiter(p, Message::DemandeHistorique { hauteur: 0 }, 0).is_empty() {
+            if n.traiter(p, Message::DemandeHistorique { hauteur: 0 }, 0)
+                .is_empty()
+            {
                 vues += 1;
             }
         }

@@ -17,9 +17,9 @@
 // CONSENSUS : le monolithe réutilise les helpers `pub(crate)`
 // (`enforce_sponge_transition`, `sponge_rows`, `locate`, les constantes de
 // layout). L'AIR/prouveur standalone (`prove_sponge` & co) est gaté `dev-circuits`.
-use crate::rescue_round::{apply_matrix, apply_sbox, NUM_ROUNDS, STATE_WIDTH, TRACE_LEN};
 #[cfg(feature = "dev-circuits")]
 use crate::rescue_round::periodic_ark_columns;
+use crate::rescue_round::{apply_matrix, apply_sbox, NUM_ROUNDS, STATE_WIDTH, TRACE_LEN};
 #[cfg(feature = "dev-circuits")]
 use crate::ValidityProof;
 #[cfg(feature = "dev-circuits")]
@@ -64,7 +64,10 @@ pub(crate) fn locate(idx: usize) -> (usize, usize) {
     if block == 0 {
         (0, RATE_START + pos)
     } else {
-        ((block - 1) * TRACE_LEN + (TRACE_LEN - 1), INJECT_START + pos)
+        (
+            (block - 1) * TRACE_LEN + (TRACE_LEN - 1),
+            INJECT_START + pos,
+        )
     }
 }
 
@@ -81,7 +84,12 @@ pub(crate) fn sponge_rows(preamble: &[BaseElement]) -> Vec<[BaseElement; TRACE_W
 
     // blocs de rate (dernier bloc complété par des zéros).
     let block = |k: usize| -> [BaseElement; RATE_WIDTH] {
-        core::array::from_fn(|j| preamble.get(k * RATE_WIDTH + j).copied().unwrap_or(BaseElement::ZERO))
+        core::array::from_fn(|j| {
+            preamble
+                .get(k * RATE_WIDTH + j)
+                .copied()
+                .unwrap_or(BaseElement::ZERO)
+        })
     };
 
     let mut rows = vec![[BaseElement::ZERO; TRACE_WIDTH]; l];
@@ -258,8 +266,7 @@ impl winterfell::Air for SpongeAir {
     }
 
     fn get_assertions(&self) -> Vec<Assertion<Self::BaseField>> {
-        let mut a =
-            Vec::with_capacity(4 + 3 + 1 + DIGEST_FELTS + self.pi.public_payload.len());
+        let mut a = Vec::with_capacity(4 + 3 + 1 + DIGEST_FELTS + self.pi.public_payload.len());
 
         // Ligne 0 — capacité : [longueur absorbée, 0, 0, 0] (PUBLIC).
         a.push(Assertion::single(0, 0, BaseElement::new(self.m as u64)));
@@ -277,7 +284,11 @@ impl winterfell::Air for SpongeAir {
         put(&mut a, 2, BaseElement::new(self.pi.payload_len));
         // PAD_ONE : position LOGIQUE (juste après le payload), pas `capacité − 1`
         // (elles diffèrent quand PAD_ZERO* a complété le préambule, cf. commitment).
-        put(&mut a, 3 + self.pi.payload_len as usize, BaseElement::new(1));
+        put(
+            &mut a,
+            3 + self.pi.payload_len as usize,
+            BaseElement::new(1),
+        );
         // Payload public (positions relatives au payload → +3 dans le préambule).
         for (pi, val) in &self.pi.public_payload {
             put(&mut a, 3 + *pi, *val);
@@ -541,7 +552,13 @@ mod tests {
         let payload: Vec<Felt> = (0..28).map(|i| felt(i as u64 + 3)).collect();
         let (d, proof) = prove_sponge(Domain::NoteCommitment, &payload, &[]);
         assert_eq!(d, rescue::hash(Domain::NoteCommitment, &payload));
-        assert!(verify_sponge(Domain::NoteCommitment, payload.len(), &d, &[], &proof));
+        assert!(verify_sponge(
+            Domain::NoteCommitment,
+            payload.len(),
+            &d,
+            &[],
+            &proof
+        ));
     }
 
     /// P7 : commitment de note prouvé (payload 13 → **padding 3→4 blocs**) ==

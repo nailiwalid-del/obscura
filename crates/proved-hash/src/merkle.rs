@@ -457,7 +457,11 @@ mod tests {
         for i in 0..t.len() as u64 {
             assert_eq!(r.path(i), t.path(i), "chemin divergent en {i}");
         }
-        assert_eq!(r.to_bytes(), octets, "canonique : même arbre ⇒ mêmes octets");
+        assert_eq!(
+            r.to_bytes(),
+            octets,
+            "canonique : même arbre ⇒ mêmes octets"
+        );
     }
 
     /// Un arbre VIDE se recharge en arbre vide (cas limite d'un wallet neuf).
@@ -597,7 +601,9 @@ mod tests {
     fn profondeur_consensus() {
         // Une racine de profondeur 32 se calcule sans panique et est déterministe.
         let cm = digest(7);
-        let path: Vec<Digest> = (0..CONSENSUS_DEPTH as u64).map(|i| digest(100 + i)).collect();
+        let path: Vec<Digest> = (0..CONSENSUS_DEPTH as u64)
+            .map(|i| digest(100 + i))
+            .collect();
         let r = root(&cm, &path, 0xDEAD_BEEF);
         assert_eq!(r, root(&cm, &path, 0xDEAD_BEEF));
     }

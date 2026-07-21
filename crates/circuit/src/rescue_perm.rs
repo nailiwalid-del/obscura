@@ -218,7 +218,10 @@ mod tests {
     fn output_altere_rejete() {
         let input = felts(|i| i as u64 + 1);
         let (mut output, proof) = prove_permutation(input);
-        assert!(verify_permutation(output, &proof), "roundtrip doit être vert");
+        assert!(
+            verify_permutation(output, &proof),
+            "roundtrip doit être vert"
+        );
         output[0] = Felt::from_canonical_u64(output[0].as_u64() ^ 1).unwrap();
         assert!(!verify_permutation(output, &proof));
     }

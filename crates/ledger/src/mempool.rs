@@ -223,8 +223,18 @@ mod tests {
             Felt::from_canonical_u64(graine + i as u64).unwrap()
         }));
         let owner = rescue::hash(Domain::Owner, secret.as_felts());
-        let n0 = SpendNote { value: 1_000, owner, rho: digest(graine + 20), r: digest(30) };
-        let n1 = SpendNote { value: 500, owner, rho: digest(graine + 40), r: digest(50) };
+        let n0 = SpendNote {
+            value: 1_000,
+            owner,
+            rho: digest(graine + 20),
+            r: digest(30),
+        };
+        let n1 = SpendNote {
+            value: 500,
+            owner,
+            rho: digest(graine + 40),
+            r: digest(50),
+        };
         let cm0 = rescue::note_commitment(n0.value, &n0.owner, &n0.rho, &n0.r);
         let cm1 = rescue::note_commitment(n1.value, &n1.owner, &n1.rho, &n1.r);
 
@@ -241,19 +251,40 @@ mod tests {
         arbre.append(&cm1);
         let (i0, i1) = (0u64, 1u64);
 
-        let o0 = SpendNote { value: 900, owner: digest(60), rho: digest(61), r: digest(62) };
-        let o1 = SpendNote { value: 580, owner: digest(70), rho: digest(71), r: digest(72) };
+        let o0 = SpendNote {
+            value: 900,
+            owner: digest(60),
+            rho: digest(61),
+            r: digest(62),
+        };
+        let o1 = SpendNote {
+            value: 580,
+            owner: digest(70),
+            rho: digest(71),
+            r: digest(72),
+        };
         let oc0 = rescue::note_commitment(o0.value, &o0.owner, &o0.rho, &o0.r);
         let oc1 = rescue::note_commitment(o1.value, &o1.owner, &o1.rho, &o1.r);
-        let (r0, r1) = (crypto::kem::KemKeypair::generate(), crypto::kem::KemKeypair::generate());
+        let (r0, r1) = (
+            crypto::kem::KemKeypair::generate(),
+            crypto::kem::KemKeypair::generate(),
+        );
         let enc = [
             encrypt_note(&r0.public, &oc0, &o0).unwrap(),
             encrypt_note(&r1.public, &oc1, &o1).unwrap(),
         ];
 
         let inputs = [
-            ProvedInput { note: n0, path: arbre.path(i0).unwrap(), index: i0 },
-            ProvedInput { note: n1, path: arbre.path(i1).unwrap(), index: i1 },
+            ProvedInput {
+                note: n0,
+                path: arbre.path(i0).unwrap(),
+                index: i0,
+            },
+            ProvedInput {
+                note: n1,
+                path: arbre.path(i1).unwrap(),
+                index: i1,
+            },
         ];
         let intent = crypto::sig::SigKeypair::generate();
         let (_root, tx) = prove_tx(&secret, inputs, [o0, o1], 20, &intent, enc);
@@ -345,7 +376,13 @@ mod tests {
     #[test]
     fn seul_le_refus_de_preuve_est_couteux() {
         assert!(Refus::PreuveInvalide.couteux());
-        for r in [Refus::Plein, Refus::DejaConnue, Refus::ConflitMempool, Refus::DejaDepense, Refus::AncreInconnue] {
+        for r in [
+            Refus::Plein,
+            Refus::DejaConnue,
+            Refus::ConflitMempool,
+            Refus::DejaDepense,
+            Refus::AncreInconnue,
+        ] {
             assert!(!r.couteux(), "{r:?} doit être un refus bon marché");
         }
     }

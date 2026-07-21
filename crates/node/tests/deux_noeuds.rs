@@ -52,7 +52,9 @@ fn deux_noeuds_se_connectent_et_echangent() {
     let serveur = std::thread::spawn(move || {
         let mut rt = Runtime::new(noeud(1));
         let (flux, _) = ecoute.accept().unwrap();
-        let pair = rt.accepter(flux, &id_serveur).expect("handshake côté serveur");
+        let pair = rt
+            .accepter(flux, &id_serveur)
+            .expect("handshake côté serveur");
         // Attendre le message du client.
         assert!(
             attendre(|| rt.pomper(0) > 0, Duration::from_secs(10)),
@@ -70,7 +72,11 @@ fn deux_noeuds_se_connectent_et_echangent() {
 
     // L'identité authentifiée par le client est bien celle du serveur.
     assert_eq!(
-        rt_client.noeud().pairs.get(&pair_serveur).map(|p| p.adresse),
+        rt_client
+            .noeud()
+            .pairs
+            .get(&pair_serveur)
+            .map(|p| p.adresse),
         Some(adresse),
         "le pair sortant est mémorisé avec son adresse (sélection anti-eclipse)"
     );
@@ -154,7 +160,10 @@ fn message_indecodable_penalise_sans_faire_tomber_le_noeud() {
         );
         // Le nœud est toujours debout, et le pair a été pénalisé.
         let score = rt.noeud().pairs.get(&pair).map(|p| p.score).unwrap_or(0);
-        assert!(score < 0, "un message indécodable doit pénaliser (score {score})");
+        assert!(
+            score < 0,
+            "un message indécodable doit pénaliser (score {score})"
+        );
     });
 
     let mut client = Runtime::new(noeud(2));

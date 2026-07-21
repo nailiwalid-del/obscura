@@ -213,7 +213,9 @@ pub mod baseline {
         };
         let acceptable = winterfell::AcceptableOptions::MinConjecturedSecurity(95);
         winterfell::verify::<BaselineAir, Blake3, DefaultRandomCoin<Blake3>, MerkleTree<Blake3>>(
-            proof, pi, &acceptable,
+            proof,
+            pi,
+            &acceptable,
         )
         .is_ok()
     }
@@ -391,7 +393,9 @@ pub mod blinded {
         };
         let acceptable = winterfell::AcceptableOptions::MinConjecturedSecurity(95);
         winterfell::verify::<BlindedAir, Blake3, DefaultRandomCoin<Blake3>, MerkleTree<Blake3>>(
-            proof, pi, &acceptable,
+            proof,
+            pi,
+            &acceptable,
         )
         .is_ok()
     }
@@ -431,7 +435,10 @@ mod tests {
             openings.len(),
             leaked
         );
-        println!("[A] premières ouvertures : {:?}", &openings[..4.min(openings.len())]);
+        println!(
+            "[A] premières ouvertures : {:?}",
+            &openings[..4.min(openings.len())]
+        );
         // Fuite totale : le polynôme constant s'évalue à s PARTOUT.
         assert_eq!(
             leaked,
@@ -454,8 +461,14 @@ mod tests {
         let size = proof1.to_bytes().len();
 
         // 1) Complétude : les preuves blindées vérifient toujours.
-        assert!(blinded::verify(proof1.clone()), "preuve blindée 1 doit vérifier");
-        assert!(blinded::verify(proof2.clone()), "preuve blindée 2 doit vérifier");
+        assert!(
+            blinded::verify(proof1.clone()),
+            "preuve blindée 1 doit vérifier"
+        );
+        assert!(
+            blinded::verify(proof2.clone()),
+            "preuve blindée 2 doit vérifier"
+        );
 
         // 2) Masquage : plus aucune ouverture ne vaut s.
         let o1 = secret_openings(&proof1);

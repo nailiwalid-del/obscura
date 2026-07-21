@@ -271,7 +271,10 @@ mod tests {
                 kyber_ct: ct.kyber_ct,
             };
             assert!(
-                matches!(decapsulate(&bob, &hostile), Err(CryptoError::NonContributif)),
+                matches!(
+                    decapsulate(&bob, &hostile),
+                    Err(CryptoError::NonContributif)
+                ),
                 "un éphémère d'ordre faible doit être rejeté (u = {:?})",
                 &u[..4]
             );

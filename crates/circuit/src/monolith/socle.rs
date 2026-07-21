@@ -35,7 +35,11 @@ pub(crate) struct MonolithWitness {
 }
 
 /// Lit un digest (4 Felts) dans un tampon de lignes largeur `N`, à `(row, col)`.
-pub(crate) fn read_digest<const N: usize>(rows: &[[BaseElement; N]], row: usize, col: usize) -> Digest {
+pub(crate) fn read_digest<const N: usize>(
+    rows: &[[BaseElement; N]],
+    row: usize,
+    col: usize,
+) -> Digest {
     Digest(core::array::from_fn(|k| {
         Felt::from_winter(rows[row][col + k]).expect("digest canonique")
     }))
@@ -154,8 +158,7 @@ impl MonolithPublicInputs {
 
 impl winterfell::math::ToElements<BaseElement> for MonolithPublicInputs {
     fn to_elements(&self) -> Vec<BaseElement> {
-        let mut v =
-            Vec::with_capacity((1 + self.m() + self.n()) * DIGEST_FELTS + 4);
+        let mut v = Vec::with_capacity((1 + self.m() + self.n()) * DIGEST_FELTS + 4);
         // Les COMPTES d'abord : la forme fait partie de ce que la preuve engage.
         v.push(BaseElement::new(self.m() as u64));
         v.push(BaseElement::new(self.n() as u64));
@@ -201,7 +204,11 @@ pub(crate) fn push_preamble(
         (3 + payload_len, 1),
     ] {
         let (row, col) = locate(i);
-        a.push(Assertion::single(col_off + col, seg_start + row, BaseElement::new(val)));
+        a.push(Assertion::single(
+            col_off + col,
+            seg_start + row,
+            BaseElement::new(val),
+        ));
     }
     // PAD_ZERO* : toutes les cellules ABSORBÉES au-delà de la longueur LOGIQUE
     // `3 + payload_len + 1`, jusqu'à la frontière de bloc `⌈m/8⌉·8` (couvre à la
@@ -216,7 +223,11 @@ pub(crate) fn push_preamble(
     let cells = (m as usize).div_ceil(RATE_WIDTH) * RATE_WIDTH;
     for i in logical..cells {
         let (row, col) = locate(i);
-        a.push(Assertion::single(col_off + col, seg_start + row, BaseElement::ZERO));
+        a.push(Assertion::single(
+            col_off + col,
+            seg_start + row,
+            BaseElement::ZERO,
+        ));
     }
 }
 
@@ -315,22 +326,55 @@ pub(crate) fn witness_de_test_profondeur(depth: usize) -> (MonolithWitness, Dige
     }));
     let owner = rescue::hash(Domain::Owner, secret.as_felts());
 
-    let n0 = SpendNote { value: 1_000, owner, rho: digest(20), r: digest(30) };
-    let n1 = SpendNote { value: 500, owner, rho: digest(40), r: digest(50) };
+    let n0 = SpendNote {
+        value: 1_000,
+        owner,
+        rho: digest(20),
+        r: digest(30),
+    };
+    let n1 = SpendNote {
+        value: 500,
+        owner,
+        rho: digest(40),
+        r: digest(50),
+    };
     let cm0 = rescue::note_commitment(n0.value, &n0.owner, &n0.rho, &n0.r);
     let cm1 = rescue::note_commitment(n1.value, &n1.owner, &n1.rho, &n1.r);
     let (root, path0, path1) = build_tree(&cm0, &cm1, depth);
 
     // Sorties : 900 + 580 + fee 20 = 1500 = 1000 + 500.
-    let o0 = SpendNote { value: 900, owner: digest(60), rho: digest(61), r: digest(62) };
-    let o1 = SpendNote { value: 580, owner: digest(70), rho: digest(71), r: digest(72) };
+    let o0 = SpendNote {
+        value: 900,
+        owner: digest(60),
+        rho: digest(61),
+        r: digest(62),
+    };
+    let o1 = SpendNote {
+        value: 580,
+        owner: digest(70),
+        rho: digest(71),
+        r: digest(72),
+    };
 
     let inputs = [
-        ProvedInput { note: n0, path: path0, index: 0 },
-        ProvedInput { note: n1, path: path1, index: 3 },
+        ProvedInput {
+            note: n0,
+            path: path0,
+            index: 0,
+        },
+        ProvedInput {
+            note: n1,
+            path: path1,
+            index: 3,
+        },
     ];
 
-    let w = MonolithWitness { secret, inputs, outputs: [o0, o1], fee: 20 };
+    let w = MonolithWitness {
+        secret,
+        inputs,
+        outputs: [o0, o1],
+        fee: 20,
+    };
     (w, root)
 }
 
@@ -347,8 +391,18 @@ pub(crate) fn witness_de_test_profondeur_consensus() -> (MonolithWitness, Digest
     }));
     let owner = rescue::hash(Domain::Owner, secret.as_felts());
 
-    let n0 = SpendNote { value: 1_000, owner, rho: digest(20), r: digest(30) };
-    let n1 = SpendNote { value: 500, owner, rho: digest(40), r: digest(50) };
+    let n0 = SpendNote {
+        value: 1_000,
+        owner,
+        rho: digest(20),
+        r: digest(30),
+    };
+    let n1 = SpendNote {
+        value: 500,
+        owner,
+        rho: digest(40),
+        r: digest(50),
+    };
     let cm0 = rescue::note_commitment(n0.value, &n0.owner, &n0.rho, &n0.r);
     let cm1 = rescue::note_commitment(n1.value, &n1.owner, &n1.rho, &n1.r);
 
@@ -359,12 +413,35 @@ pub(crate) fn witness_de_test_profondeur_consensus() -> (MonolithWitness, Digest
     let path0 = tree.path(i0).unwrap();
     let path1 = tree.path(i1).unwrap();
 
-    let o0 = SpendNote { value: 900, owner: digest(60), rho: digest(61), r: digest(62) };
-    let o1 = SpendNote { value: 580, owner: digest(70), rho: digest(71), r: digest(72) };
+    let o0 = SpendNote {
+        value: 900,
+        owner: digest(60),
+        rho: digest(61),
+        r: digest(62),
+    };
+    let o1 = SpendNote {
+        value: 580,
+        owner: digest(70),
+        rho: digest(71),
+        r: digest(72),
+    };
     let inputs = [
-        ProvedInput { note: n0, path: path0, index: i0 },
-        ProvedInput { note: n1, path: path1, index: i1 },
+        ProvedInput {
+            note: n0,
+            path: path0,
+            index: i0,
+        },
+        ProvedInput {
+            note: n1,
+            path: path1,
+            index: i1,
+        },
     ];
-    let w = MonolithWitness { secret, inputs, outputs: [o0, o1], fee: 20 };
+    let w = MonolithWitness {
+        secret,
+        inputs,
+        outputs: [o0, o1],
+        fee: 20,
+    };
     (w, root)
 }

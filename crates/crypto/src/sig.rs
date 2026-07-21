@@ -121,7 +121,10 @@ impl SigKeypair {
         let msk = dilithium3::SecretKey::from_bytes(&b[33 + n_pk..])
             .map_err(|_| CryptoError::InvalidEncoding("dilithium sk"))?;
         Ok(SigKeypair {
-            public: SigPublicKey { ed25519: epk, dilithium: mpk },
+            public: SigPublicKey {
+                ed25519: epk,
+                dilithium: mpk,
+            },
             ed25519: esk,
             dilithium: msk,
         })
@@ -160,7 +163,9 @@ impl HybridSignature {
         v
     }
     pub fn from_bytes(b: &[u8]) -> Result<Self, CryptoError> {
-        if b.len() != 1 + ED25519_SIG_LEN + dilithium3::signature_bytes() || b[0] != SIG_ALGO_VERSION {
+        if b.len() != 1 + ED25519_SIG_LEN + dilithium3::signature_bytes()
+            || b[0] != SIG_ALGO_VERSION
+        {
             return Err(CryptoError::InvalidEncoding("HybridSignature"));
         }
         let mut e = [0u8; 64];

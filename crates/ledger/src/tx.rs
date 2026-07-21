@@ -125,8 +125,7 @@ pub fn build_transparent_transaction(
     for (addr, value) in recipients {
         let note = Note::new(*value, addr.owner);
         let commitment = note.commitment();
-        let (kem_ct, ss) =
-            kem::encapsulate(&addr.kem_pk).map_err(|_| LedgerError::Encoding)?;
+        let (kem_ct, ss) = kem::encapsulate(&addr.kem_pk).map_err(|_| LedgerError::Encoding)?;
         let enc_note = aead::encrypt(&ss, &commitment.to_bytes(), &note.to_bytes());
         outputs.push(TxOutput {
             commitment,

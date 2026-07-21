@@ -123,7 +123,14 @@ impl TablePairs {
                 false
             }
             None => {
-                self.pairs.insert(id, Pair { id, adresse, score: 0 });
+                self.pairs.insert(
+                    id,
+                    Pair {
+                        id,
+                        adresse,
+                        score: 0,
+                    },
+                );
                 true
             }
         }
@@ -306,8 +313,15 @@ mod tests {
 
         t.ajuster_score(&mechant, SEUIL_BANNISSEMENT);
         assert!(t.get(&mechant).unwrap().banni());
-        assert!(t.selection_sortante().is_empty(), "banni jamais sélectionné");
-        assert_eq!(t.groupes_disponibles(), 0, "un banni ne réserve pas son groupe");
+        assert!(
+            t.selection_sortante().is_empty(),
+            "banni jamais sélectionné"
+        );
+        assert_eq!(
+            t.groupes_disponibles(),
+            0,
+            "un banni ne réserve pas son groupe"
+        );
     }
 
     /// Le score départage à l'intérieur d'un groupe : le mieux noté l'emporte.

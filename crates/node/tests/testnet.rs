@@ -45,8 +45,18 @@ fn etat_partage_et_transaction() -> (ProvedLedgerState, circuit::ProvedTx) {
         Felt::from_canonical_u64(700 + i as u64).unwrap()
     }));
     let owner = rescue::hash(Domain::Owner, secret.as_felts());
-    let n0 = SpendNote { value: 1_000, owner, rho: d(20), r: d(30) };
-    let n1 = SpendNote { value: 500, owner, rho: d(40), r: d(50) };
+    let n0 = SpendNote {
+        value: 1_000,
+        owner,
+        rho: d(20),
+        r: d(30),
+    };
+    let n1 = SpendNote {
+        value: 500,
+        owner,
+        rho: d(40),
+        r: d(50),
+    };
     let cm0 = rescue::note_commitment(n0.value, &n0.owner, &n0.rho, &n0.r);
     let cm1 = rescue::note_commitment(n1.value, &n1.owner, &n1.rho, &n1.r);
 
@@ -63,8 +73,18 @@ fn etat_partage_et_transaction() -> (ProvedLedgerState, circuit::ProvedTx) {
     arbre.append(&cm1);
     let (i0, i1) = (0u64, 1u64);
 
-    let o0 = SpendNote { value: 900, owner: d(60), rho: d(61), r: d(62) };
-    let o1 = SpendNote { value: 580, owner: d(70), rho: d(71), r: d(72) };
+    let o0 = SpendNote {
+        value: 900,
+        owner: d(60),
+        rho: d(61),
+        r: d(62),
+    };
+    let o1 = SpendNote {
+        value: 580,
+        owner: d(70),
+        rho: d(71),
+        r: d(72),
+    };
     let oc0 = rescue::note_commitment(o0.value, &o0.owner, &o0.rho, &o0.r);
     let oc1 = rescue::note_commitment(o1.value, &o1.owner, &o1.rho, &o1.r);
     let (r0, r1) = (
@@ -76,8 +96,16 @@ fn etat_partage_et_transaction() -> (ProvedLedgerState, circuit::ProvedTx) {
         encrypt_note(&r1.public, &oc1, &o1).unwrap(),
     ];
     let inputs = [
-        ProvedInput { note: n0, path: arbre.path(i0).unwrap(), index: i0 },
-        ProvedInput { note: n1, path: arbre.path(i1).unwrap(), index: i1 },
+        ProvedInput {
+            note: n0,
+            path: arbre.path(i0).unwrap(),
+            index: i0,
+        },
+        ProvedInput {
+            note: n1,
+            path: arbre.path(i1).unwrap(),
+            index: i1,
+        },
     ];
     let intent = SigKeypair::generate();
     let (_root, tx) = prove_tx(&secret, inputs, [o0, o1], 20, &intent, enc);
@@ -118,7 +146,11 @@ fn transaction_se_propage_entre_deux_noeuds() {
 
     // Nœud B : reçoit et doit finir par détenir la transaction.
     let b = std::thread::spawn(move || {
-        let mut rt = Runtime::new(Noeud::new(SigKeypair::generate(), etat_partage(), [2u8; 32]));
+        let mut rt = Runtime::new(Noeud::new(
+            SigKeypair::generate(),
+            etat_partage(),
+            [2u8; 32],
+        ));
         let (flux, _) = ecoute.accept().unwrap();
         rt.accepter(flux, &id_b).expect("handshake");
         let recu = attendre(
@@ -140,7 +172,10 @@ fn transaction_se_propage_entre_deux_noeuds() {
         "A admet sa propre transaction"
     );
 
-    a.executer(vec![Action::Envoyer(pair_b, Message::Annonce(vec![digest]))]);
+    a.executer(vec![Action::Envoyer(
+        pair_b,
+        Message::Annonce(vec![digest]),
+    )]);
 
     // A doit répondre à la DEMANDE de B en envoyant la transaction : on pompe.
     assert!(
@@ -197,7 +232,11 @@ fn transaction_traverse_un_intermediaire() {
 
     // Nœud C : terminal, doit finir par détenir la transaction.
     let c = std::thread::spawn(move || {
-        let mut rt = Runtime::new(Noeud::new(SigKeypair::generate(), etat_partage(), [3u8; 32]));
+        let mut rt = Runtime::new(Noeud::new(
+            SigKeypair::generate(),
+            etat_partage(),
+            [3u8; 32],
+        ));
         let (flux, _) = ecoute_c.accept().unwrap();
         rt.accepter(flux, &id_c).expect("handshake C");
         let recu = attendre(
@@ -212,7 +251,11 @@ fn transaction_traverse_un_intermediaire() {
 
     // Nœud B : intermédiaire. Accepte A, se connecte à C, et relaie.
     let b = std::thread::spawn(move || {
-        let mut rt = Runtime::new(Noeud::new(SigKeypair::generate(), etat_partage(), [2u8; 32]));
+        let mut rt = Runtime::new(Noeud::new(
+            SigKeypair::generate(),
+            etat_partage(),
+            [2u8; 32],
+        ));
         let (flux, _) = ecoute_b.accept().unwrap();
         rt.accepter(flux, &id_b1).expect("handshake B←A");
         let vers_c = rt.connecter(adr_c, &id_b2).expect("handshake B→C");
@@ -226,7 +269,10 @@ fn transaction_traverse_un_intermediaire() {
             Duration::from_secs(45),
         );
         assert!(obtenue, "B doit d'abord obtenir la transaction de A");
-        rt.executer(vec![Action::Envoyer(vers_c, Message::Annonce(vec![digest]))]);
+        rt.executer(vec![Action::Envoyer(
+            vers_c,
+            Message::Annonce(vec![digest]),
+        )]);
 
         // Puis répondre à la demande de C.
         assert!(
@@ -239,7 +285,10 @@ fn transaction_traverse_un_intermediaire() {
     let mut a = Runtime::new(Noeud::new(SigKeypair::generate(), etat_a, [1u8; 32]));
     let pair_b = a.connecter(adr_b, &id_a).expect("handshake A→B");
     assert!(a.noeud_mut().soumettre(tx, 0).is_ok());
-    a.executer(vec![Action::Envoyer(pair_b, Message::Annonce(vec![digest]))]);
+    a.executer(vec![Action::Envoyer(
+        pair_b,
+        Message::Annonce(vec![digest]),
+    )]);
     assert!(
         attendre(|| a.pomper(0) > 0, Duration::from_secs(45)),
         "A doit recevoir la demande de B"

@@ -378,7 +378,8 @@ impl Bloc {
             let taille = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap()) as usize;
             let octets = prendre(b, &mut pos, taille)?;
             transactions.push(
-                ProvedTx::from_bytes(octets).map_err(|_| BlocDecodeError::TransactionInvalide(i))?,
+                ProvedTx::from_bytes(octets)
+                    .map_err(|_| BlocDecodeError::TransactionInvalide(i))?,
             );
         }
         let m = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap()) as usize;
@@ -476,30 +477,56 @@ mod tests {
         b.extend_from_slice(&PAS_DE_PARENT);
         b.extend_from_slice(&0u64.to_le_bytes());
         b.extend_from_slice(&1_000_000u32.to_le_bytes());
-        assert!(matches!(Bloc::from_bytes(&b), Err(BlocDecodeError::TropDeTransactions)));
+        assert!(matches!(
+            Bloc::from_bytes(&b),
+            Err(BlocDecodeError::TropDeTransactions)
+        ));
 
         let mut juste_au_dessus = b[..b.len() - 4].to_vec();
         juste_au_dessus.extend_from_slice(&((MAX_TX_PAR_BLOC + 1) as u32).to_le_bytes());
-        assert!(matches!(Bloc::from_bytes(&juste_au_dessus), Err(BlocDecodeError::TropDeTransactions)));
+        assert!(matches!(
+            Bloc::from_bytes(&juste_au_dessus),
+            Err(BlocDecodeError::TropDeTransactions)
+        ));
     }
 
     /// Bloc vide, version inconnue, troncature, octets résiduels : `Result`, jamais
     /// de panique. C'est un point d'entrée réseau.
     #[test]
     fn blocs_malformes_rejetes_sans_panique() {
-        assert!(matches!(Bloc::from_bytes(&[]), Err(BlocDecodeError::Tronque)));
-        assert!(matches!(Bloc::from_bytes(&[0x03]), Err(BlocDecodeError::VersionInconnue(0x03))));
+        assert!(matches!(
+            Bloc::from_bytes(&[]),
+            Err(BlocDecodeError::Tronque)
+        ));
+        assert!(matches!(
+            Bloc::from_bytes(&[0x03]),
+            Err(BlocDecodeError::VersionInconnue(0x03))
+        ));
         // La version PRÉCÉDENTE est refusée, pas réinterprétée : son encodage n'a pas
         // de compteur d'émissions, le lire comme la version courante ferait dériver
         // toutes les longueurs suivantes.
-        assert!(matches!(Bloc::from_bytes(&[0x01]), Err(BlocDecodeError::VersionInconnue(0x01))));
-        assert!(matches!(Bloc::from_bytes(&[VERSION_BLOC]), Err(BlocDecodeError::Tronque)));
+        assert!(matches!(
+            Bloc::from_bytes(&[0x01]),
+            Err(BlocDecodeError::VersionInconnue(0x01))
+        ));
+        assert!(matches!(
+            Bloc::from_bytes(&[VERSION_BLOC]),
+            Err(BlocDecodeError::Tronque)
+        ));
 
-        let bon = Bloc::sceller(&[1u8; TAILLE_ID], 3, Vec::new()).unwrap().to_bytes();
-        assert!(matches!(Bloc::from_bytes(&bon[..bon.len() - 1]), Err(BlocDecodeError::Tronque)));
+        let bon = Bloc::sceller(&[1u8; TAILLE_ID], 3, Vec::new())
+            .unwrap()
+            .to_bytes();
+        assert!(matches!(
+            Bloc::from_bytes(&bon[..bon.len() - 1]),
+            Err(BlocDecodeError::Tronque)
+        ));
         let mut trop = bon.clone();
         trop.push(0);
-        assert!(matches!(Bloc::from_bytes(&trop), Err(BlocDecodeError::OctetsResiduels)));
+        assert!(matches!(
+            Bloc::from_bytes(&trop),
+            Err(BlocDecodeError::OctetsResiduels)
+        ));
 
         // Une transaction annoncée à une taille délirante : refusée sans allouer.
         let mut menteur = vec![VERSION_BLOC];
@@ -507,7 +534,10 @@ mod tests {
         menteur.extend_from_slice(&1u64.to_le_bytes());
         menteur.extend_from_slice(&1u32.to_le_bytes()); // n_tx = 1
         menteur.extend_from_slice(&u32::MAX.to_le_bytes()); // taille annoncée délirante
-        assert!(matches!(Bloc::from_bytes(&menteur), Err(BlocDecodeError::Tronque)));
+        assert!(matches!(
+            Bloc::from_bytes(&menteur),
+            Err(BlocDecodeError::Tronque)
+        ));
     }
 
     // ================================================================================
@@ -556,7 +586,8 @@ mod tests {
         assert_ne!(vide.id(), une.id());
 
         // Même commitment, enveloppe factice fraîche ⇒ identifiant différent.
-        let autre = Bloc::genese_avec(vec![crate::proved_wallet::emission_factice(&cm(1))]).unwrap();
+        let autre =
+            Bloc::genese_avec(vec![crate::proved_wallet::emission_factice(&cm(1))]).unwrap();
         assert_ne!(une.id(), autre.id());
     }
 
@@ -585,7 +616,12 @@ mod tests {
     fn emission_factice_indistinguable_dune_reelle() {
         use circuit::SpendNote;
         let beneficiaire = crypto::kem::KemKeypair::generate();
-        let note = SpendNote { value: 1_000, owner: cm(7), rho: cm(20), r: cm(30) };
+        let note = SpendNote {
+            value: 1_000,
+            owner: cm(7),
+            rho: cm(20),
+            r: cm(30),
+        };
         let vrai_cm =
             proved_hash::rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
 
@@ -640,7 +676,10 @@ mod tests {
         b.extend_from_slice(&0u64.to_le_bytes());
         b.extend_from_slice(&0u32.to_le_bytes()); // aucune transaction
         b.extend_from_slice(&500_000u32.to_le_bytes()); // émissions annoncées
-        assert!(matches!(Bloc::from_bytes(&b), Err(BlocDecodeError::TropDEmissions)));
+        assert!(matches!(
+            Bloc::from_bytes(&b),
+            Err(BlocDecodeError::TropDEmissions)
+        ));
 
         let mut juste_au_dessus = b[..b.len() - 4].to_vec();
         juste_au_dessus.extend_from_slice(&((MAX_EMISSIONS_PAR_BLOC + 1) as u32).to_le_bytes());
@@ -660,7 +699,9 @@ mod tests {
         // Une seule enveloppe fabriquée, recopiée : générer 513 paires KEM serait lent
         // sans rien ajouter à la propriété testée.
         let modele = crate::proved_wallet::emission_factice(&cm(1));
-        let trop: Vec<Emission> = (0..=MAX_EMISSIONS_PAR_BLOC).map(|_| modele.clone()).collect();
+        let trop: Vec<Emission> = (0..=MAX_EMISSIONS_PAR_BLOC)
+            .map(|_| modele.clone())
+            .collect();
         assert!(matches!(
             Bloc::genese_avec(trop),
             Err(BlocConstructionError::TropDEmissions { .. })
@@ -721,7 +762,10 @@ mod tests {
         // Émission tronquée : `Tronque`, pas de panique.
         let mut b = entete(1);
         b.extend_from_slice(&cm(1).to_bytes()[..10]);
-        assert!(matches!(Bloc::from_bytes(&b), Err(BlocDecodeError::Tronque)));
+        assert!(matches!(
+            Bloc::from_bytes(&b),
+            Err(BlocDecodeError::Tronque)
+        ));
     }
 
     /// `sceller` n'offre AUCUN moyen de glisser une émission : le champ existe mais le

@@ -74,7 +74,9 @@ pub enum PersistanceError {
     /// formés, c'est leur accord qui manque. La distinction compte pour l'opérateur —
     /// « corrompu » invite à effacer, « désaccordé » invite à comprendre lequel des deux
     /// est en avance avant de décider.
-    #[error("archive désaccordée avec l'état : {0} — mode DÉGRADÉ (sans archive), rien n'est réparé")]
+    #[error(
+        "archive désaccordée avec l'état : {0} — mode DÉGRADÉ (sans archive), rien n'est réparé"
+    )]
     HistoriqueDesaccorde(String),
     /// Le nœud doit archiver mais l'état est déjà à une hauteur non nulle sans archive.
     #[error("archivage demandé sur un état déjà à la hauteur {hauteur} sans fichier d'historique : le préfixe est irrécupérable")]
@@ -182,10 +184,7 @@ impl Donnees {
     /// Refuse un état qui ne descend pas de `genese`. AVANT toute autre confrontation
     /// (historique compris) : comparer une archive à un état de la mauvaise chaîne
     /// produirait un « désaccord » trompeur là où la cause est le répertoire.
-    fn verifier_genese(
-        etat: &ProvedLedgerState,
-        genese: &Bloc,
-    ) -> Result<(), PersistanceError> {
+    fn verifier_genese(etat: &ProvedLedgerState, genese: &Bloc) -> Result<(), PersistanceError> {
         let demandee = genese.id();
         let trouvee = etat.genese_id();
         if trouvee != demandee {
@@ -231,10 +230,7 @@ impl Donnees {
                 // reconstruit exactement, sans rien inventer.
                 let neuf = ProvedLedgerState::depuis_genese_archivant(genese)
                     .map_err(|e| PersistanceError::GeneseRefusee(e.to_string()))?;
-                let hist = neuf
-                    .historique()
-                    .expect("amorçage archivant")
-                    .to_bytes();
+                let hist = neuf.historique().expect("amorçage archivant").to_bytes();
                 let hist = HistoriqueSorties::from_bytes(&hist)
                     .map_err(|e| PersistanceError::HistoriqueInvalide(e.to_string()))?;
                 etat.adopter_historique(hist)
@@ -293,9 +289,10 @@ impl Donnees {
             // JOURNAL : seules les tranches nouvelles depuis la dernière sauvegarde
             // sont écrites. Le dump intégral réécrivait tout — des Gio par jour sous
             // charge, toutes les 30 s.
-            let persistees = self
-                .tranches_persistees
-                .replace(h.save_journal(&self.chemin(FICHIER_HISTORIQUE), self.tranches_persistees.get())?);
+            let persistees = self.tranches_persistees.replace(h.save_journal(
+                &self.chemin(FICHIER_HISTORIQUE),
+                self.tranches_persistees.get(),
+            )?);
             let _ = persistees;
         }
         etat.save(&self.chemin(FICHIER_ETAT))?;
@@ -395,7 +392,11 @@ mod tests {
         // Au redémarrage la genèse est passée à nouveau — mais c'est le FICHIER qui
         // fait foi : ré-amorcer effacerait la chaîne accumulée depuis.
         let recharge = d.charger_ou_amorcer_etat(&genese).unwrap();
-        assert_eq!(recharge.tree.root(), racine, "même racine après redémarrage");
+        assert_eq!(
+            recharge.tree.root(),
+            racine,
+            "même racine après redémarrage"
+        );
         assert_eq!(recharge.tree.len(), taille);
         assert_eq!(recharge.tete(), etat.tete(), "même tête de chaîne");
         assert!(
@@ -477,7 +478,11 @@ mod tests {
         let chemin = dir.join("bonne.genese");
         fs::write(&chemin, g.to_bytes()).unwrap();
         let relue = charger_genese(&chemin).expect("genèse relue");
-        assert_eq!(relue.id(), g.id(), "le fichier doit désigner LA MÊME chaîne");
+        assert_eq!(
+            relue.id(),
+            g.id(),
+            "le fichier doit désigner LA MÊME chaîne"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -600,14 +605,10 @@ mod tests {
         let dir = repertoire_temporaire("genese_croisee");
         let d = Donnees::ouvrir(&dir).unwrap();
 
-        let genese_a = Bloc::genese_avec(vec![ledger::proved_wallet::emission_factice(
-            &digest(1),
-        )])
-        .unwrap();
-        let genese_b = Bloc::genese_avec(vec![ledger::proved_wallet::emission_factice(
-            &digest(2),
-        )])
-        .unwrap();
+        let genese_a =
+            Bloc::genese_avec(vec![ledger::proved_wallet::emission_factice(&digest(1))]).unwrap();
+        let genese_b =
+            Bloc::genese_avec(vec![ledger::proved_wallet::emission_factice(&digest(2))]).unwrap();
         assert_ne!(genese_a.id(), genese_b.id());
 
         // Amorçage et persistance sur la genèse A.
@@ -639,10 +640,8 @@ mod tests {
     fn archive_persistee_en_journal_et_migre_lancien_format() {
         let dir = repertoire_temporaire("journal");
         let d = Donnees::ouvrir(&dir).unwrap();
-        let genese = Bloc::genese_avec(vec![ledger::proved_wallet::emission_factice(
-            &digest(7),
-        )])
-        .unwrap();
+        let genese =
+            Bloc::genese_avec(vec![ledger::proved_wallet::emission_factice(&digest(7))]).unwrap();
 
         // Amorçage archivant + première persistance (journal complet).
         let etat = d.charger_ou_amorcer_archive(&genese).unwrap();
@@ -709,7 +708,10 @@ mod tests {
 
         let meta = fs::metadata(dir.join(FICHIER_IDENTITE)).unwrap();
         let mode = meta.permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600, "le matériel de clé ne doit être lisible que par son propriétaire");
+        assert_eq!(
+            mode, 0o600,
+            "le matériel de clé ne doit être lisible que par son propriétaire"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

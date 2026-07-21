@@ -15,13 +15,23 @@ fn handshake_complet() -> (net::Session, net::Session, SigKeypair, SigKeypair) {
 
     let (init, passe1) = Initiateur::commencer();
     let (rep, passe2) = Repondeur::repondre(&passe1, &id_r).expect("passe 2");
-    let final_i = init.recevoir_passe2(&passe2, &id_i).expect("passe 2 acceptée");
+    let final_i = init
+        .recevoir_passe2(&passe2, &id_i)
+        .expect("passe 2 acceptée");
     let (passe3, sess_i, vu_par_i) = final_i.terminer();
     let (sess_r, vu_par_r) = rep.recevoir_passe3(&passe3).expect("passe 3 acceptée");
 
     // Chacun a authentifié la VRAIE identité de l'autre.
-    assert_eq!(vu_par_i.to_bytes(), id_r.public.to_bytes(), "I authentifie R");
-    assert_eq!(vu_par_r.to_bytes(), id_i.public.to_bytes(), "R authentifie I");
+    assert_eq!(
+        vu_par_i.to_bytes(),
+        id_r.public.to_bytes(),
+        "I authentifie R"
+    );
+    assert_eq!(
+        vu_par_r.to_bytes(),
+        id_i.public.to_bytes(),
+        "R authentifie I"
+    );
 
     (sess_i, sess_r, id_i, id_r)
 }
@@ -90,7 +100,10 @@ fn identites_jamais_en_clair_sur_le_fil() {
     fil.extend_from_slice(&passe2);
     fil.extend_from_slice(&passe3);
 
-    for (nom, pk) in [("initiateur", id_i.public.to_bytes()), ("répondeur", id_r.public.to_bytes())] {
+    for (nom, pk) in [
+        ("initiateur", id_i.public.to_bytes()),
+        ("répondeur", id_r.public.to_bytes()),
+    ] {
         for fenetre in pk.windows(8) {
             assert!(
                 !fil.windows(8).any(|w| w == fenetre),
@@ -161,7 +174,10 @@ fn passe3_alteree_rejetee() {
     let (mut passe3, _, _) = final_i.terminer();
     let dernier = passe3.len() - 1;
     passe3[dernier] ^= 1;
-    assert!(rep.recevoir_passe3(&passe3).is_err(), "passe 3 altérée doit être rejetée");
+    assert!(
+        rep.recevoir_passe3(&passe3).is_err(),
+        "passe 3 altérée doit être rejetée"
+    );
 }
 
 /// SURFACE HOSTILE : messages tronqués, vides, aux longueurs aberrantes ou avec des
@@ -171,8 +187,14 @@ fn messages_malformes_rejetes_sans_panique() {
     let id_r = SigKeypair::generate();
 
     // Vide et tronqués.
-    assert_eq!(Repondeur::repondre(&[], &id_r).err(), Some(NetError::Tronque));
-    assert_eq!(Repondeur::repondre(&[0, 0], &id_r).err(), Some(NetError::Tronque));
+    assert_eq!(
+        Repondeur::repondre(&[], &id_r).err(),
+        Some(NetError::Tronque)
+    );
+    assert_eq!(
+        Repondeur::repondre(&[0, 0], &id_r).err(),
+        Some(NetError::Tronque)
+    );
 
     // Longueur annoncée gigantesque (anti-DoS mémoire) : refus AVANT allocation.
     let mut enorme = u32::MAX.to_le_bytes().to_vec();

@@ -34,7 +34,10 @@ pub fn encrypt_note(
 ) -> Result<EncNote, crypto::CryptoError> {
     let (kem_ct, ss) = kem::encapsulate(recipient_kem_pk)?;
     let enc_note = aead::encrypt(&ss, &commitment.to_bytes(), &note.to_bytes());
-    Ok(EncNote { kem_ct: kem_ct.to_bytes(), enc_note })
+    Ok(EncNote {
+        kem_ct: kem_ct.to_bytes(),
+        enc_note,
+    })
 }
 
 /// Scanne une sortie prouvée : tente de déchiffrer `e` avec la paire KEM `receive`, et
@@ -184,8 +187,16 @@ mod tests {
 
         let (lk, ln) = (ea[0].kem_ct.len(), ea[0].enc_note.len());
         for e in ea.iter().chain(eb.iter()) {
-            assert_eq!(e.kem_ct.len(), lk, "longueur kem_ct dépendante du destinataire");
-            assert_eq!(e.enc_note.len(), ln, "longueur enc_note dépendante du destinataire");
+            assert_eq!(
+                e.kem_ct.len(),
+                lk,
+                "longueur kem_ct dépendante du destinataire"
+            );
+            assert_eq!(
+                e.enc_note.len(),
+                ln,
+                "longueur enc_note dépendante du destinataire"
+            );
         }
     }
 
@@ -275,12 +286,20 @@ mod tests {
         let bob = kem::KemKeypair::generate();
         // Owner prouvé d'Alice (arbitraire pour ce test : le scan compare owner == expected).
         let owner_alice = digest(777);
-        let note = SpendNote { value: 1_000, owner: owner_alice, rho: digest(20), r: digest(30) };
+        let note = SpendNote {
+            value: 1_000,
+            owner: owner_alice,
+            rho: digest(20),
+            r: digest(30),
+        };
         let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
 
         let e = encrypt_note(&alice.public, &cm, &note).unwrap();
         // Alice, avec son owner prouvé, retrouve la note.
-        assert_eq!(scan_proved_output(&alice, &owner_alice, &cm, &e), Some(note.clone()));
+        assert_eq!(
+            scan_proved_output(&alice, &owner_alice, &cm, &e),
+            Some(note.clone())
+        );
         // Bob (autre clé KEM) échoue à déchiffrer.
         assert_eq!(scan_proved_output(&bob, &owner_alice, &cm, &e), None);
         // Même Alice, mais owner attendu différent → rejet (la note ne lui appartient pas).
@@ -293,7 +312,12 @@ mod tests {
     fn commitment_incoherent_rejete() {
         let alice = kem::KemKeypair::generate();
         let owner = digest(777);
-        let note = SpendNote { value: 1_000, owner, rho: digest(20), r: digest(30) };
+        let note = SpendNote {
+            value: 1_000,
+            owner,
+            rho: digest(20),
+            r: digest(30),
+        };
         let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
         let e = encrypt_note(&alice.public, &cm, &note).unwrap();
         // Scanner avec un mauvais commitment public.

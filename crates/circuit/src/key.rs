@@ -163,7 +163,11 @@ impl winterfell::Air for KeyAir {
                 0,
                 BaseElement::new(ENCODING_VERSION as u64),
             ));
-            a.push(Assertion::single(off + RATE_START + 1, 0, BaseElement::new(tag)));
+            a.push(Assertion::single(
+                off + RATE_START + 1,
+                0,
+                BaseElement::new(tag),
+            ));
             a.push(Assertion::single(
                 off + RATE_START + 2,
                 0,
@@ -186,7 +190,7 @@ impl winterfell::Air for KeyAir {
 
     fn get_periodic_column_values(&self) -> Vec<Vec<Self::BaseField>> {
         let mut cols = periodic_ark_columns(); // ARK1(12) + ARK2(12)
-        // init_flag : 1 à la ligne 0, 0 ailleurs (cycle TRACE_LEN).
+                                               // init_flag : 1 à la ligne 0, 0 ailleurs (cycle TRACE_LEN).
         let mut init = vec![BaseElement::ZERO; TRACE_LEN];
         init[0] = BaseElement::ONE;
         cols.push(init);
@@ -372,6 +376,9 @@ mod tests {
             options: crate::proof_options(),
         };
         let proof = ValidityProof(prover.prove(trace).expect("preuve produite en release"));
-        assert!(!verify_key(&owner, &nk, &proof), "la liaison doit rejeter s != s'");
+        assert!(
+            !verify_key(&owner, &nk, &proof),
+            "la liaison doit rejeter s != s'"
+        );
     }
 }

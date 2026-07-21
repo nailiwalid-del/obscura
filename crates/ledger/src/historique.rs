@@ -248,7 +248,12 @@ impl HistoriqueSorties {
     /// `verify_tx` (`EncNote::within_bounds`, contrôle de consensus), celles d'une
     /// genèse par `ProvedLedgerState::amorcer`. Contiguïté des hauteurs et cohérence
     /// des plages sont ici garanties par construction.
-    pub(crate) fn ajouter_bloc(&mut self, hauteur: u64, sorties: Vec<Sortie>, racine_apres: Digest) {
+    pub(crate) fn ajouter_bloc(
+        &mut self,
+        hauteur: u64,
+        sorties: Vec<Sortie>,
+        racine_apres: Digest,
+    ) {
         let debut = self.tranches.last().map(|t| t.fin).unwrap_or(0);
         debug_assert_eq!(
             hauteur,
@@ -337,9 +342,7 @@ impl HistoriqueSorties {
             .iter()
             .map(|s| DIGEST_BYTES + 4 + s.enc_note.kem_ct.len() + 4 + s.enc_note.enc_note.len())
             .sum();
-        entete
-            .saturating_add(tranches)
-            .saturating_add(sorties)
+        entete.saturating_add(tranches).saturating_add(sorties)
     }
 
     /// Encodage canonique : `version ‖ debut LE ‖ T LE ‖ [hauteur ‖ debut ‖ fin ‖
@@ -604,9 +607,7 @@ impl HistoriqueSorties {
     ///
     /// Retourne l'historique et la [`Reprise`] qui dit à l'appelant ce qu'il doit
     /// faire du fichier (migrer, tronquer une queue partielle, ou rien).
-    pub fn load_fichier(
-        path: &std::path::Path,
-    ) -> Result<(Self, Reprise), HistoriqueLoadError> {
+    pub fn load_fichier(path: &std::path::Path) -> Result<(Self, Reprise), HistoriqueLoadError> {
         let octets = std::fs::read(path).map_err(HistoriqueLoadError::Io)?;
         match octets.first() {
             Some(&VERSION_HISTORIQUE) => {
@@ -670,8 +671,7 @@ impl HistoriqueSorties {
             let hauteur = u64::from_le_bytes(b[o..o + 8].try_into().unwrap());
             let t_debut = u64::from_le_bytes(b[o + 8..o + 16].try_into().unwrap());
             let t_fin = u64::from_le_bytes(b[o + 16..o + 24].try_into().unwrap());
-            let r: [u8; DIGEST_BYTES] =
-                b[o + 24..o + 24 + DIGEST_BYTES].try_into().unwrap();
+            let r: [u8; DIGEST_BYTES] = b[o + 24..o + 24 + DIGEST_BYTES].try_into().unwrap();
             // Un digest non canonique n'est PAS une interruption d'écriture : refus.
             let racine = Digest::from_bytes(&r)
                 .map_err(|_| corrompu(E::TrancheIncoherente(index_tranche)))?;
@@ -690,9 +690,7 @@ impl HistoriqueSorties {
             // BORNE AVANT ALLOCATION : le compte annoncé est confronté aux octets
             // réellement présents avant toute réservation. Un manque d'octets est
             // indistinguable d'une écriture interrompue : queue partielle.
-            if n.saturating_mul(TAILLE_SORTIE_MIN as u64)
-                > b.len().saturating_sub(pos) as u64
-            {
+            if n.saturating_mul(TAILLE_SORTIE_MIN as u64) > b.len().saturating_sub(pos) as u64 {
                 queue_partielle = true;
                 break;
             }
@@ -905,7 +903,10 @@ mod tests {
         // Simule un crash : un enregistrement COMMENCÉ, jamais fini.
         {
             use std::io::Write;
-            let mut f = std::fs::OpenOptions::new().append(true).open(&chemin).unwrap();
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&chemin)
+                .unwrap();
             f.write_all(&1u64.to_le_bytes()).unwrap(); // hauteur seule, puis plus rien
         }
 
@@ -918,11 +919,17 @@ mod tests {
             panic!("format journal attendu");
         };
         assert!(queue_partielle, "la queue interrompue doit être SIGNALÉE");
-        assert_eq!(octets_valides, taille_valide, "le préfixe valide est intact");
+        assert_eq!(
+            octets_valides, taille_valide,
+            "le préfixe valide est intact"
+        );
         assert_eq!(relu.nombre_de_tranches(), 1, "le préfixe est rechargé");
 
         // Troncature (le geste de l'appelant), puis l'ajout reprend.
-        let f = std::fs::OpenOptions::new().write(true).open(&chemin).unwrap();
+        let f = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&chemin)
+            .unwrap();
         f.set_len(octets_valides).unwrap();
         drop(f);
         let mut h2 = relu;
@@ -984,7 +991,11 @@ mod tests {
 
         let (relu, reprise) = HistoriqueSorties::load_fichier(&chemin).unwrap();
         assert_eq!(reprise, Reprise::AncienFormat);
-        assert_eq!(relu.to_bytes(), h.to_bytes(), "contenu strictement identique");
+        assert_eq!(
+            relu.to_bytes(),
+            h.to_bytes(),
+            "contenu strictement identique"
+        );
 
         // La réécriture en journal (le geste de migration) reste équivalente.
         relu.save_journal(&chemin, 0).unwrap();
@@ -994,7 +1005,6 @@ mod tests {
 
         std::fs::remove_file(&chemin).ok();
     }
-
 
     fn digest(seed: u64) -> Digest {
         Digest(core::array::from_fn(|i| {
@@ -1058,7 +1068,11 @@ mod tests {
         assert_eq!(relu.debut(), 0);
         assert_eq!(relu.len(), 5);
         assert_eq!(relu.hauteur_max(), Some(2));
-        assert_eq!(h.octets(), octets.len(), "le compteur d'octets ne dérive pas");
+        assert_eq!(
+            h.octets(),
+            octets.len(),
+            "le compteur d'octets ne dérive pas"
+        );
 
         // Les plages sont bien celles de l'insertion.
         assert_eq!(relu.tranche(0).map(|t| (t.debut, t.fin)), Some((0, 2)));

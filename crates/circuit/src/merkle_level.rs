@@ -58,7 +58,11 @@ fn build_level_trace(cur: &[Felt; 4], sib: &[Felt; 4], bit: bool) -> TraceTable<
 
     let cur_be: [BaseElement; 4] = core::array::from_fn(|i| cur[i].to_winter());
     let sib_be: [BaseElement; 4] = core::array::from_fn(|i| sib[i].to_winter());
-    let bit_be = if bit { BaseElement::ONE } else { BaseElement::ZERO };
+    let bit_be = if bit {
+        BaseElement::ONE
+    } else {
+        BaseElement::ZERO
+    };
 
     let mut trace = TraceTable::new(WIDTH, LEVEL_LEN);
     for (i, sr) in sp_rows.iter().enumerate() {
@@ -186,7 +190,7 @@ impl winterfell::Air for MerkleLevelAir {
         put(&mut a, 1, BaseElement::new(Domain::MerkleNode.tag() as u64));
         put(&mut a, 2, BaseElement::new(MERGE_LEN));
         put(&mut a, MERGE_M - 1, BaseElement::new(1)); // PAD_ONE
-        // Digest = parent (dernière ligne). courant/frère/bit : JAMAIS assertés.
+                                                       // Digest = parent (dernière ligne). courant/frère/bit : JAMAIS assertés.
         let last = LEVEL_LEN - 1;
         for (i, d) in self.parent.iter().enumerate() {
             a.push(Assertion::single(RATE_START + i, last, *d));
@@ -287,11 +291,7 @@ impl Prover for MerkleLevelProver {
 // ================================================================================================
 
 /// Prouve un niveau de Merkle : `parent = MerkleNode(swap(courant, frère, bit))`.
-pub fn prove_merkle_level(
-    cur: &Digest,
-    sib: &Digest,
-    bit: bool,
-) -> (Digest, ValidityProof) {
+pub fn prove_merkle_level(cur: &Digest, sib: &Digest, bit: bool) -> (Digest, ValidityProof) {
     let trace = build_level_trace(&cur.0, &sib.0, bit);
     let last = trace.length() - 1;
     let parent = Digest(core::array::from_fn(|i| {
@@ -341,7 +341,10 @@ mod tests {
             } else {
                 merkle::node(&cur, &sib)
             };
-            assert_eq!(parent, attendu, "bit={bit} : divergence circuit ⟷ référence");
+            assert_eq!(
+                parent, attendu,
+                "bit={bit} : divergence circuit ⟷ référence"
+            );
             assert!(verify_merkle_level(&parent, &proof));
         }
     }
@@ -361,7 +364,10 @@ mod tests {
         let cur = digest(3);
         let sib = digest(30);
         let (parent, proof) = prove_merkle_level(&cur, &sib, false);
-        assert!(verify_merkle_level(&parent, &proof), "roundtrip doit être vert");
+        assert!(
+            verify_merkle_level(&parent, &proof),
+            "roundtrip doit être vert"
+        );
         let mut faux = parent;
         faux.0[0] = Felt::from_canonical_u64(faux.0[0].as_u64() ^ 1).unwrap();
         assert!(!verify_merkle_level(&faux, &proof));

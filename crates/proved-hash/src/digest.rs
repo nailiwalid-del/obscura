@@ -110,7 +110,6 @@ impl core::fmt::Debug for ShieldedSecret {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

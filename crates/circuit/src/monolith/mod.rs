@@ -22,6 +22,6 @@
 //! vérifient), sa géométrie ne doit pas dériver en silence.
 pub(crate) mod socle;
 
+pub(crate) mod seg_air;
 pub(crate) mod seg_layout;
 pub(crate) mod seg_trace;
-pub(crate) mod seg_air;

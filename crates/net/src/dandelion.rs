@@ -221,7 +221,10 @@ mod tests {
                 stemmees += 1;
             }
         }
-        assert!(stemmees > 100, "la majorité doit être stemmée (fluff ~10 %)");
+        assert!(
+            stemmees > 100,
+            "la majorité doit être stemmée (fluff ~10 %)"
+        );
     }
 
     /// Changer d'époque re-tire le successeur (sinon la route serait figée à vie et
@@ -236,7 +239,10 @@ mod tests {
             vus.push(d.successeur().unwrap());
         }
         vus.dedup();
-        assert!(vus.len() > 1, "le successeur doit varier d'une époque à l'autre");
+        assert!(
+            vus.len() > 1,
+            "le successeur doit varier d'une époque à l'autre"
+        );
     }
 
     /// Deux nœuds différents (secrets différents) ne choisissent pas le même
@@ -312,7 +318,11 @@ mod tests {
         assert!(d.embargos_expires(1_000 + EMBARGO_MS - 1).is_empty());
         // À l'échéance : on la diffuse nous-mêmes.
         let expires = d.embargos_expires(1_000 + EMBARGO_MS);
-        assert_eq!(expires, vec![dg], "l'embargo expiré doit forcer la diffusion");
+        assert_eq!(
+            expires,
+            vec![dg],
+            "l'embargo expiré doit forcer la diffusion"
+        );
         assert_eq!(d.en_attente(), 0, "et être retiré de l'attente");
     }
 
@@ -367,6 +377,9 @@ mod tests {
         let s = d.successeur().expect("un candidat");
         let sel = inondee.selection_sortante();
         assert_eq!(sel.len(), 1);
-        assert_eq!(s, sel[0].id, "le successeur sort de la sélection diversifiée");
+        assert_eq!(
+            s, sel[0].id,
+            "le successeur sort de la sélection diversifiée"
+        );
     }
 }

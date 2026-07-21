@@ -53,7 +53,10 @@ const WIDTH: usize = 4;
 /// Construit la trace : entrées (signe +1) puis sorties (signe −1), un bloc chacune.
 fn build_trace(inputs: &[u64], outputs: &[u64], _fee: u64) -> TraceTable<BaseElement> {
     let k = inputs.len() + outputs.len();
-    assert!(k.is_power_of_two(), "k = n_in + n_out doit être une puissance de 2");
+    assert!(
+        k.is_power_of_two(),
+        "k = n_in + n_out doit être une puissance de 2"
+    );
     let trace_len = BLOCK * k;
     let mut trace = TraceTable::new(WIDTH, trace_len);
 

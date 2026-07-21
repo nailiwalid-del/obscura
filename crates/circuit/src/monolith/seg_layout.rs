@@ -223,10 +223,7 @@ mod plan {
     /// depuis C2-T8 (production : `Forme::used_rows`).
     #[cfg(test)]
     pub(crate) fn used_rows(depth: usize) -> usize {
-        schedule_2in2out()
-            .iter()
-            .map(|k| seg_len(*k, depth))
-            .sum()
+        schedule_2in2out().iter().map(|k| seg_len(*k, depth)).sum()
     }
 
     /// Longueur de trace 2/2 : lignes utiles + blinding, puissance de 2
@@ -392,11 +389,7 @@ mod plan {
     pub(crate) fn forme_depuis_largeur(largeur: usize) -> Option<Forme> {
         (1..=MAX_IN)
             .flat_map(|m| (1..=MAX_OUT).map(move |n| (m, n)))
-            .find_map(|(m, n)| {
-                Forme::new(m, n)
-                    .ok()
-                    .filter(|f| f.width() == largeur)
-            })
+            .find_map(|(m, n)| Forme::new(m, n).ok().filter(|f| f.width() == largeur))
     }
 
     // La forme MAXIMALE tient dans le budget winterfell — garde compile-time :
@@ -531,7 +524,11 @@ mod tests {
                 in_len(depth) >= crate::range_check::RANGE_BITS,
                 "60 lignes de bits du range-check couvertes"
             );
-            assert_eq!(in_len(depth) % MERKLE_LEVEL_ROWS, 0, "pavage en blocs de 16");
+            assert_eq!(
+                in_len(depth) % MERKLE_LEVEL_ROWS,
+                0,
+                "pavage en blocs de 16"
+            );
         }
         // OUT : éponge de commitment (32) et bits de range (60) en parallèle.
         const { assert!(OUT_LEN >= CM_ROWS_END, "éponge de commitment couverte") };
@@ -659,7 +656,10 @@ mod tests {
         // `width(3, ·)`. C'est ce trou qui garantit qu'une largeur commise
         // correspond à AU PLUS une forme.
         let entre_amas = Forme::new(2, MAX_OUT).unwrap().width() + 5;
-        assert!(forme_depuis_largeur(entre_amas).is_none(), "largeur {entre_amas}");
+        assert!(
+            forme_depuis_largeur(entre_amas).is_none(),
+            "largeur {entre_amas}"
+        );
         assert!(forme_depuis_largeur(0).is_none());
     }
 
@@ -758,13 +758,19 @@ mod tests {
         // Consensus (profondeur 32) : 16 + 2·512 + 2·64 = 1168 lignes utiles.
         assert_eq!(used_rows(32), KEY_LEN + 2 * in_len(32) + 2 * OUT_LEN);
         assert_eq!(used_rows(32), 1168);
-        assert_eq!(trace_len(32), (used_rows(32) + BLIND_ROWS).next_power_of_two());
+        assert_eq!(
+            trace_len(32),
+            (used_rows(32) + BLIND_ROWS).next_power_of_two()
+        );
         assert_eq!(trace_len(32), 2048);
         assert!(trace_len(32).is_power_of_two());
         assert!(trace_len(32) >= used_rows(32) + BLIND_ROWS);
         // Dev (profondeur 2) : 16 + 2·64 + 2·64 = 272 lignes utiles.
         assert_eq!(used_rows(2), KEY_LEN + 2 * MIN_IN_LEN + 2 * OUT_LEN);
-        assert_eq!(trace_len(2), (used_rows(2) + BLIND_ROWS).next_power_of_two());
+        assert_eq!(
+            trace_len(2),
+            (used_rows(2) + BLIND_ROWS).next_power_of_two()
+        );
         assert_eq!(trace_len(2), 512);
     }
 }

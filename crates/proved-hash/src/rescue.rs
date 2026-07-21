@@ -63,7 +63,10 @@ pub fn note_commit_payload(value: u64, owner: &Digest, rho: &Digest, r: &Digest)
 /// Commitment de note prouvé (P7) : `cm = H_NoteCommitment(value ‖ owner ‖ rho ‖ r)`.
 /// C'est le JUGE du différentiel avec la version prouvée en circuit.
 pub fn note_commitment(value: u64, owner: &Digest, rho: &Digest, r: &Digest) -> Digest {
-    hash(Domain::NoteCommitment, &note_commit_payload(value, owner, rho, r))
+    hash(
+        Domain::NoteCommitment,
+        &note_commit_payload(value, owner, rho, r),
+    )
 }
 
 /// Compression 2->1 domaine-séparée (nœuds de Merkle) : `hash(domain, a ‖ b)`.

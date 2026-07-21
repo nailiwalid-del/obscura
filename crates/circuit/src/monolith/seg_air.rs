@@ -338,15 +338,21 @@ pub(crate) fn build_periodic(
     );
     let init0 = push(
         &mut cols,
-        (0..MERKLE_LEVEL_ROWS).map(|p| if p == 0 { o } else { z }).collect(),
+        (0..MERKLE_LEVEL_ROWS)
+            .map(|p| if p == 0 { o } else { z })
+            .collect(),
     );
     let init7 = push(
         &mut cols,
-        (0..MERKLE_LEVEL_ROWS).map(|p| if p == 7 { o } else { z }).collect(),
+        (0..MERKLE_LEVEL_ROWS)
+            .map(|p| if p == 7 { o } else { z })
+            .collect(),
     );
     let chain = push(
         &mut cols,
-        (0..MERKLE_LEVEL_ROWS).map(|p| if p == 15 { o } else { z }).collect(),
+        (0..MERKLE_LEVEL_ROWS)
+            .map(|p| if p == 15 { o } else { z })
+            .collect(),
     );
 
     // --- Pleine longueur (étape 1). ---
@@ -379,9 +385,15 @@ pub(crate) fn build_periodic(
             ancres[a] = push(&mut cols, at_abs(l, s + ancre));
         }
         anc_in.push(ancres);
-        vacc_in.push(push(&mut cols, at_abs(l, s + crate::range_check::RANGE_BITS)));
+        vacc_in.push(push(
+            &mut cols,
+            at_abs(l, s + crate::range_check::RANGE_BITS),
+        ));
         // Dernière ligne du chemin : racine repliée == porteuse ROOT_C.
-        root_in.push(push(&mut cols, at_abs(l, s + MERKLE_LEVEL_ROWS * depth - 1)));
+        root_in.push(push(
+            &mut cols,
+            at_abs(l, s + MERKLE_LEVEL_ROWS * depth - 1),
+        ));
     }
 
     let mut s0_out = Vec::with_capacity(forme.n());
@@ -390,7 +402,10 @@ pub(crate) fn build_periodic(
         let s = forme.seg_start(1 + forme.m() + n, depth);
         debug_assert_eq!(forme.seg_kind(1 + forme.m() + n), SegKind::Output);
         s0_out.push(push(&mut cols, at_abs(l, s)));
-        vacc_out.push(push(&mut cols, at_abs(l, s + crate::range_check::RANGE_BITS)));
+        vacc_out.push(push(
+            &mut cols,
+            at_abs(l, s + crate::range_check::RANGE_BITS),
+        ));
     }
 
     let total = cols.len();
@@ -522,8 +537,7 @@ impl winterfell::Air for SegMonolithAir {
         // par Fiat-Shamir (les comptes m, n sont préfixés dans `to_elements`). Une
         // largeur qui ne correspond à AUCUNE forme valide retombe sur 2/2 : la
         // vérification échouera de toute façon (graine de challenge incohérente).
-        let forme = forme_depuis_largeur(trace_info.main_trace_width())
-            .unwrap_or(Forme::F22);
+        let forme = forme_depuis_largeur(trace_info.main_trace_width()).unwrap_or(Forme::F22);
         let (ix, _) = build_periodic(forme, depth, l);
         let context = AirContext::new(
             trace_info,
@@ -531,7 +545,14 @@ impl winterfell::Air for SegMonolithAir {
             num_assertions(forme, depth),
             options,
         );
-        SegMonolithAir { context, pi, l, depth, forme, ix }
+        SegMonolithAir {
+            context,
+            pi,
+            l,
+            depth,
+            forme,
+            ix,
+        }
     }
 
     fn evaluate_transition<E: FieldElement + From<Self::BaseField>>(
@@ -683,8 +704,7 @@ impl winterfell::Air for SegMonolithAir {
         {
             let s7k = pv[ix.s7_key];
             for k in 0..DIGEST_FELTS {
-                result[idx + k] =
-                    s7k * (cur[NK_C + k] - cur[SEG_KEY_OFF + STATE_WIDTH + rate + k]);
+                result[idx + k] = s7k * (cur[NK_C + k] - cur[SEG_KEY_OFF + STATE_WIDTH + rate + k]);
             }
             idx += DIGEST_FELTS;
             for n in 0..f.m() {
@@ -795,7 +815,14 @@ impl winterfell::Air for SegMonolithAir {
 
         // Segment KEY : éponges owner et nk.
         let ks = f.seg_start(0, d);
-        push_preamble(&mut a, ks, SEG_KEY_OFF, 8, Domain::Owner.tag() as u64, DIGEST_FELTS);
+        push_preamble(
+            &mut a,
+            ks,
+            SEG_KEY_OFF,
+            8,
+            Domain::Owner.tag() as u64,
+            DIGEST_FELTS,
+        );
         push_preamble(
             &mut a,
             ks,
@@ -810,15 +837,45 @@ impl winterfell::Air for SegMonolithAir {
         // (ordre normatif [KEY][IN×m][OUT×n]).
         for n in 0..f.m() {
             let s = f.seg_start(1 + n, d);
-            push_preamble(&mut a, s + CM_ROWS_START, sp, 32, Domain::NoteCommitment.tag() as u64, 13);
-            push_preamble(&mut a, s + LEAF_ROWS_START, sp, 8, Domain::MerkleLeaf.tag() as u64, 4);
-            push_preamble(&mut a, s + NF_ROWS_START, sp, 16, Domain::Nullifier.tag() as u64, 12);
+            push_preamble(
+                &mut a,
+                s + CM_ROWS_START,
+                sp,
+                32,
+                Domain::NoteCommitment.tag() as u64,
+                13,
+            );
+            push_preamble(
+                &mut a,
+                s + LEAF_ROWS_START,
+                sp,
+                8,
+                Domain::MerkleLeaf.tag() as u64,
+                4,
+            );
+            push_preamble(
+                &mut a,
+                s + NF_ROWS_START,
+                sp,
+                16,
+                Domain::Nullifier.tag() as u64,
+                12,
+            );
             // Lecture DÉFENSIVE : si les publics déclarent moins d'entrées que la
             // trace (forme mentie), l'absence vaut ZÉRO → assertion fausse contre le
             // vrai nullifier → rejet propre, jamais de panique d'indexation.
-            let nf_n = self.pi.nullifiers.get(n).copied().unwrap_or([BaseElement::ZERO; DIGEST_FELTS]);
+            let nf_n = self
+                .pi
+                .nullifiers
+                .get(n)
+                .copied()
+                .unwrap_or([BaseElement::ZERO; DIGEST_FELTS]);
             for (k, nf_k) in nf_n.iter().enumerate() {
-                a.push(Assertion::single(sp + RATE_START + k, s + NF_ROWS_END - 1, *nf_k));
+                a.push(Assertion::single(
+                    sp + RATE_START + k,
+                    s + NF_ROWS_END - 1,
+                    *nf_k,
+                ));
             }
             for b in 0..d {
                 push_preamble(
@@ -843,9 +900,18 @@ impl winterfell::Air for SegMonolithAir {
         for n in 0..f.n() {
             let s = f.seg_start(1 + f.m() + n, d);
             push_preamble(&mut a, s, sp, 32, Domain::NoteCommitment.tag() as u64, 13);
-            let oc_n = self.pi.output_commitments.get(n).copied().unwrap_or([BaseElement::ZERO; DIGEST_FELTS]);
+            let oc_n = self
+                .pi
+                .output_commitments
+                .get(n)
+                .copied()
+                .unwrap_or([BaseElement::ZERO; DIGEST_FELTS]);
             for (k, oc_k) in oc_n.iter().enumerate() {
-                a.push(Assertion::single(sp + RATE_START + k, s + CM_ROWS_END - 1, *oc_k));
+                a.push(Assertion::single(
+                    sp + RATE_START + k,
+                    s + CM_ROWS_END - 1,
+                    *oc_k,
+                ));
             }
         }
 
@@ -1069,15 +1135,26 @@ mod tests {
         // 2/2 : le décompte doit COÏNCIDER avec l'ancien monolithe segmenté (209).
         // C'est la non-régression : la paramétrisation ne change pas la forme 2/2.
         let f22 = Forme::F22;
-        assert_eq!(n_constraints(f22), 209, "2/2 inchangé (mutualisation : 48→12, 60→30)");
-        assert!(n_constraints(f22) < 263, "moins de slots que le côte-à-côte");
+        assert_eq!(
+            n_constraints(f22),
+            209,
+            "2/2 inchangé (mutualisation : 48→12, 60→30)"
+        );
+        assert!(
+            n_constraints(f22) < 263,
+            "moins de slots que le côte-à-côte"
+        );
         // Porteuses = bloc contigu SHARED_OFF..s_col (chaînée exclue).
         assert_eq!(n_carrier(f22), Forme::F22.s_col() - SHARED_OFF);
         // `degrees` produit exactement `n_constraints` entrées, POUR CHAQUE forme.
         for m in 1..=MAX_IN {
             for n in 1..=MAX_OUT {
                 let f = Forme::new(m, n).unwrap();
-                assert_eq!(degrees(f, trace_len(2)).len(), n_constraints(f), "forme {m}/{n}");
+                assert_eq!(
+                    degrees(f, trace_len(2)).len(),
+                    n_constraints(f),
+                    "forme {m}/{n}"
+                );
             }
         }
         // Le compte CROÎT avec la forme : plus d'entrées = plus de liaisons.
@@ -1157,10 +1234,7 @@ mod tests {
 
     /// Prouve une trace DÉJÀ construite (éventuellement forgée) avec les publics
     /// donnés — le prouveur ne re-dérive rien, on éprouve la VÉRIFICATION.
-    fn prouver_trace(
-        trace: TraceTable<BaseElement>,
-        pi: &MonolithPublicInputs,
-    ) -> ValidityProof {
+    fn prouver_trace(trace: TraceTable<BaseElement>, pi: &MonolithPublicInputs) -> ValidityProof {
         let prover = SegMonolithProver {
             options: crate::proof_options_hi(),
             pi: pi.clone(),
@@ -1189,7 +1263,10 @@ mod tests {
         use crate::monolith::seg_trace::tests::witness_forme;
         let w = witness_forme(2, 2);
         let (pi, proof) = prove_seg_forme(&w);
-        assert!(verify_seg_monolith(&pi, pi.depth, &proof), "2/2 honnête accepté");
+        assert!(
+            verify_seg_monolith(&pi, pi.depth, &proof),
+            "2/2 honnête accepté"
+        );
 
         // Re-découpage des MÊMES digests en 1/3 et 3/1 : la forme déclarée change,
         // la graine de challenge change, la vérification échoue.
@@ -1226,7 +1303,10 @@ mod tests {
         // 4/4 : quatre segments de chaque, donc de vraies permutations à tester.
         let w = witness_forme(4, 4);
         let (pi, proof) = prove_seg_forme(&w);
-        assert!(verify_seg_monolith(&pi, pi.depth, &proof), "4/4 honnête accepté");
+        assert!(
+            verify_seg_monolith(&pi, pi.depth, &proof),
+            "4/4 honnête accepté"
+        );
 
         // Permuter deux nullifiers.
         let mut faux = pi.clone();
@@ -1261,7 +1341,10 @@ mod tests {
         use crate::monolith::seg_trace::tests::witness_forme;
         let w = witness_forme(4, 4);
         let (pi, proof) = prove_seg_forme(&w);
-        assert!(verify_seg_monolith(&pi, pi.depth, &proof), "4/4 honnête accepté");
+        assert!(
+            verify_seg_monolith(&pi, pi.depth, &proof),
+            "4/4 honnête accepté"
+        );
 
         // `fee` falsifié : seule l'assertion d'endpoint (à used_rows(4,4)−1) le lie.
         let mut faux = pi.clone();
@@ -1282,7 +1365,9 @@ mod tests {
     #[test]
     #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
     fn forges_existantes_sous_forme_4_4() {
-        use crate::monolith::seg_trace::{build_seg_trace_forme_forge, tests::witness_forme, SegForge};
+        use crate::monolith::seg_trace::{
+            build_seg_trace_forme_forge, tests::witness_forme, SegForge,
+        };
         let w = witness_forme(4, 4);
         let f = w.forme();
         let depth = w.inputs[0].path.len();
@@ -1321,7 +1406,10 @@ mod tests {
     fn roundtrip_segmente() {
         let (w, _root) = witness_de_test();
         let (pi, proof) = prove_seg_monolith(&w);
-        assert!(verify_seg_monolith(&pi, pi.depth, &proof), "témoin honnête accepté");
+        assert!(
+            verify_seg_monolith(&pi, pi.depth, &proof),
+            "témoin honnête accepté"
+        );
 
         let falsifie = |f: &dyn Fn(&mut MonolithPublicInputs)| {
             let mut p = pi.clone();
@@ -1374,8 +1462,18 @@ mod tests {
         }));
         let owner = rescue::hash(Domain::Owner, secret.as_felts());
 
-        let n0 = SpendNote { value: 1_000, owner, rho: dg(20), r: dg(30) };
-        let n1 = SpendNote { value: 500, owner, rho: dg(40), r: dg(50) };
+        let n0 = SpendNote {
+            value: 1_000,
+            owner,
+            rho: dg(20),
+            r: dg(30),
+        };
+        let n1 = SpendNote {
+            value: 500,
+            owner,
+            rho: dg(40),
+            r: dg(50),
+        };
         let cm0 = rescue::note_commitment(n0.value, &n0.owner, &n0.rho, &n0.r);
         let cm1 = rescue::note_commitment(n1.value, &n1.owner, &n1.rho, &n1.r);
 
@@ -1401,12 +1499,30 @@ mod tests {
         let w = MonolithWitness {
             secret,
             inputs: [
-                ProvedInput { note: n0, path: path0, index: 0 },
-                ProvedInput { note: n1, path: path1, index: 3 },
+                ProvedInput {
+                    note: n0,
+                    path: path0,
+                    index: 0,
+                },
+                ProvedInput {
+                    note: n1,
+                    path: path1,
+                    index: 3,
+                },
             ],
             outputs: [
-                SpendNote { value: 900, owner: dg(60), rho: dg(61), r: dg(62) },
-                SpendNote { value: 580, owner: dg(70), rho: dg(71), r: dg(72) },
+                SpendNote {
+                    value: 900,
+                    owner: dg(60),
+                    rho: dg(61),
+                    r: dg(62),
+                },
+                SpendNote {
+                    value: 580,
+                    owner: dg(70),
+                    rho: dg(71),
+                    r: dg(72),
+                },
             ],
             fee: 20,
         };
@@ -1460,12 +1576,28 @@ mod tests {
         let pi = MonolithPublicInputs {
             root: read4(&trace, ROOT_C, 0),
             nullifiers: vec![
-                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(1, depth) + NF_ROWS_END - 1),
-                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(2, depth) + NF_ROWS_END - 1),
+                read4(
+                    &trace,
+                    SEG_SPONGE_OFF + RATE_START,
+                    seg_start(1, depth) + NF_ROWS_END - 1,
+                ),
+                read4(
+                    &trace,
+                    SEG_SPONGE_OFF + RATE_START,
+                    seg_start(2, depth) + NF_ROWS_END - 1,
+                ),
             ],
             output_commitments: vec![
-                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(3, depth) + CM_ROWS_END - 1),
-                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(4, depth) + CM_ROWS_END - 1),
+                read4(
+                    &trace,
+                    SEG_SPONGE_OFF + RATE_START,
+                    seg_start(3, depth) + CM_ROWS_END - 1,
+                ),
+                read4(
+                    &trace,
+                    SEG_SPONGE_OFF + RATE_START,
+                    seg_start(4, depth) + CM_ROWS_END - 1,
+                ),
             ],
             fee: w.fee,
             depth,
@@ -1522,10 +1654,7 @@ mod tests {
     /// Idem, sur un témoin QUELCONQUE — permet de rejouer les forges à la
     /// profondeur consensus.
     #[cfg(test)]
-    fn verdict_forge_sur(
-        w: &MonolithWitness,
-        forge: crate::monolith::seg_trace::SegForge,
-    ) -> bool {
+    fn verdict_forge_sur(w: &MonolithWitness, forge: crate::monolith::seg_trace::SegForge) -> bool {
         use crate::monolith::seg_trace::build_seg_trace_forge;
 
         let depth = w.inputs[0].path.len();
@@ -1533,12 +1662,28 @@ mod tests {
         let pi = MonolithPublicInputs {
             root: read4(&trace, ROOT_C, 0),
             nullifiers: vec![
-                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(1, depth) + NF_ROWS_END - 1),
-                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(2, depth) + NF_ROWS_END - 1),
+                read4(
+                    &trace,
+                    SEG_SPONGE_OFF + RATE_START,
+                    seg_start(1, depth) + NF_ROWS_END - 1,
+                ),
+                read4(
+                    &trace,
+                    SEG_SPONGE_OFF + RATE_START,
+                    seg_start(2, depth) + NF_ROWS_END - 1,
+                ),
             ],
             output_commitments: vec![
-                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(3, depth) + CM_ROWS_END - 1),
-                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(4, depth) + CM_ROWS_END - 1),
+                read4(
+                    &trace,
+                    SEG_SPONGE_OFF + RATE_START,
+                    seg_start(3, depth) + CM_ROWS_END - 1,
+                ),
+                read4(
+                    &trace,
+                    SEG_SPONGE_OFF + RATE_START,
+                    seg_start(4, depth) + CM_ROWS_END - 1,
+                ),
             ],
             fee: w.fee,
             depth,
@@ -1775,12 +1920,28 @@ mod tests {
         let pi = MonolithPublicInputs {
             root: read4(&trace, ROOT_C, 0),
             nullifiers: vec![
-                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(1, depth) + NF_ROWS_END - 1),
-                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(2, depth) + NF_ROWS_END - 1),
+                read4(
+                    &trace,
+                    SEG_SPONGE_OFF + RATE_START,
+                    seg_start(1, depth) + NF_ROWS_END - 1,
+                ),
+                read4(
+                    &trace,
+                    SEG_SPONGE_OFF + RATE_START,
+                    seg_start(2, depth) + NF_ROWS_END - 1,
+                ),
             ],
             output_commitments: vec![
-                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(3, depth) + CM_ROWS_END - 1),
-                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(4, depth) + CM_ROWS_END - 1),
+                read4(
+                    &trace,
+                    SEG_SPONGE_OFF + RATE_START,
+                    seg_start(3, depth) + CM_ROWS_END - 1,
+                ),
+                read4(
+                    &trace,
+                    SEG_SPONGE_OFF + RATE_START,
+                    seg_start(4, depth) + CM_ROWS_END - 1,
+                ),
             ],
             fee: w.fee,
             depth,
@@ -1789,7 +1950,10 @@ mod tests {
             options: crate::proof_options_hi(),
             pi: pi.clone(),
         };
-        (pi.clone(), ValidityProof(prover.prove(trace).expect("génération")))
+        (
+            pi.clone(),
+            ValidityProof(prover.prove(trace).expect("génération")),
+        )
     }
 
     /// Ouvertures FRI d'une colonne de trace (parsing des trace queries).
@@ -1822,7 +1986,10 @@ mod tests {
             options: crate::proof_options_hi(),
             pi: pi.clone(),
         };
-        (pi.clone(), ValidityProof(prover.prove(trace).expect("génération")))
+        (
+            pi.clone(),
+            ValidityProof(prover.prove(trace).expect("génération")),
+        )
     }
 
     /// Ouvertures FRI d'une colonne, à la LARGEUR DE LA FORME (le parse a besoin de la
@@ -1871,8 +2038,14 @@ mod tests {
             let depth = w.inputs[0].path.len();
             let (pi1, p1) = preuve_seedee_forme(&w, 51);
             let (pi2, p2) = preuve_seedee_forme(&w, 52);
-            assert!(verify_seg_monolith(&pi1, depth, &p1), "forme {m}/{n} preuve 1");
-            assert!(verify_seg_monolith(&pi2, depth, &p2), "forme {m}/{n} preuve 2");
+            assert!(
+                verify_seg_monolith(&pi1, depth, &p1),
+                "forme {m}/{n} preuve 1"
+            );
+            assert!(
+                verify_seg_monolith(&pi2, depth, &p2),
+                "forme {m}/{n} preuve 2"
+            );
 
             // Témoins reconstruits hors-circuit.
             let owner = rescue::hash(Domain::Owner, w.secret.as_felts());
@@ -1900,12 +2073,18 @@ mod tests {
             for (col, temoin) in cibles {
                 let o1 = ouvertures_colonne_forme(&p1, col, f.width());
                 let o2 = ouvertures_colonne_forme(&p2, col, f.width());
-                assert!(!o1.is_empty(), "forme {m}/{n} : ouvertures non vides @col {col}");
+                assert!(
+                    !o1.is_empty(),
+                    "forme {m}/{n} : ouvertures non vides @col {col}"
+                );
                 assert!(
                     !o1.contains(&temoin),
                     "FUITE forme {m}/{n} : ouverture FRI = témoin en clair @col {col}"
                 );
-                assert!(!o2.contains(&temoin), "FUITE (preuve 2) forme {m}/{n} @col {col}");
+                assert!(
+                    !o2.contains(&temoin),
+                    "FUITE (preuve 2) forme {m}/{n} @col {col}"
+                );
                 assert!(
                     o1.iter().any(|v| *v != o1[0]),
                     "forme {m}/{n} : porteuse non masquée @col {col}"
@@ -1977,8 +2156,14 @@ mod tests {
         let depth = w.inputs[0].path.len();
         let (pi1, p1) = preuve_seedee(&w, 41);
         let (pi2, p2) = preuve_seedee(&w, 42);
-        assert!(verify_seg_monolith(&pi1, depth, &p1), "preuve blindée 1 acceptée");
-        assert!(verify_seg_monolith(&pi2, depth, &p2), "preuve blindée 2 acceptée");
+        assert!(
+            verify_seg_monolith(&pi1, depth, &p1),
+            "preuve blindée 1 acceptée"
+        );
+        assert!(
+            verify_seg_monolith(&pi2, depth, &p2),
+            "preuve blindée 2 acceptée"
+        );
 
         // Témoins reconstruits HORS-CIRCUIT (jamais lus dans la trace).
         let owner = rescue::hash(Domain::Owner, w.secret.as_felts());
@@ -2029,7 +2214,10 @@ mod tests {
 
         // ROOT_C : contrôle de cohérence (valeur PUBLIQUE, pas un secret).
         let or = ouvertures_colonne(&p1, ROOT_C);
-        assert!(or.iter().any(|v| *v != or[0]), "ROOT_C doit aussi être blindée");
+        assert!(
+            or.iter().any(|v| *v != or[0]),
+            "ROOT_C doit aussi être blindée"
+        );
     }
 
     /// SOUNDNESS À LA PROFONDEUR CONSENSUS (32) — comble un trou de couverture.
@@ -2062,7 +2250,10 @@ mod tests {
         let depth = w.inputs[0].path.len();
         assert_eq!(depth, 32);
         // Le cas limite : l'ancre de racine est bien sur la dernière ligne du segment.
-        assert_eq!(MERKLE_LEVEL_ROWS * depth - 1, seg_len(SegKind::Input, depth) - 1);
+        assert_eq!(
+            MERKLE_LEVEL_ROWS * depth - 1,
+            seg_len(SegKind::Input, depth) - 1
+        );
 
         // (a) témoin honnête : accepté.
         let (pi, proof) = prove_seg_monolith(&w);
@@ -2083,7 +2274,10 @@ mod tests {
             ("SecretNk (double-dépense)", SegForge::SecretNk(faux)),
             ("NkConsomme", SegForge::NkConsomme(0, faux)),
             ("RhoNullifier", SegForge::RhoNullifier(1, faux)),
-            ("CmNullifier (anti-double-dépense)", SegForge::CmNullifier(0, faux)),
+            (
+                "CmNullifier (anti-double-dépense)",
+                SegForge::CmNullifier(0, faux),
+            ),
             ("ValeurEntrees (VIN↔VACC)", SegForge::ValeurEntrees(11)),
             ("VaccInitial (inflation)", SegForge::VaccInitial(13)),
         ];
@@ -2123,7 +2317,14 @@ mod tests {
         // Un préambule de merge isolé, à la ligne de début du 1er segment d'entrée.
         let seg = seg_start(1, depth);
         let mut a: Vec<Assertion<BaseElement>> = Vec::new();
-        push_preamble(&mut a, seg, SEG_MERKLE_OFF, 12, Domain::MerkleNode.tag() as u64, 8);
+        push_preamble(
+            &mut a,
+            seg,
+            SEG_MERKLE_OFF,
+            12,
+            Domain::MerkleNode.tag() as u64,
+            8,
+        );
 
         // Cellules de padding attendues : `logical = 3 + 8 + 1 = 12` jusqu'à la
         // frontière de bloc `ceil(12/8)·8 = 16`.
@@ -2153,7 +2354,14 @@ mod tests {
         let seg2 = seg_start(2, depth);
         assert_ne!(seg, seg2);
         let mut b: Vec<Assertion<BaseElement>> = Vec::new();
-        push_preamble(&mut b, seg2, SEG_MERKLE_OFF, 12, Domain::MerkleNode.tag() as u64, 8);
+        push_preamble(
+            &mut b,
+            seg2,
+            SEG_MERKLE_OFF,
+            12,
+            Domain::MerkleNode.tag() as u64,
+            8,
+        );
         let lignes_a: Vec<usize> = a.iter().map(|x| x.first_step()).collect();
         let lignes_b: Vec<usize> = b.iter().map(|x| x.first_step()).collect();
         assert_ne!(
@@ -2282,7 +2490,10 @@ mod tests {
             for i in segments_de(SegKind::Input) {
                 let s = seg_start(i, depth);
                 assert_eq!(col[s], BaseElement::ONE);
-                assert_eq!(col[s + seg_len(SegKind::Input, depth) - 1], BaseElement::ONE);
+                assert_eq!(
+                    col[s + seg_len(SegKind::Input, depth) - 1],
+                    BaseElement::ONE
+                );
             }
             for j in segments_de(SegKind::Output) {
                 let s = seg_start(j, depth);
@@ -2338,7 +2549,11 @@ mod tests {
                 .filter(|(_, k)| matches!(k, SegKind::Input | SegKind::Output))
                 .map(|(i, k)| seg_start(i, depth) + seg_len(*k, depth) - 1)
                 .collect();
-            assert_eq!(indices_non_nuls(&endblk(Forme::F22, depth, l)), attendus, "@ depth {depth}");
+            assert_eq!(
+                indices_non_nuls(&endblk(Forme::F22, depth, l)),
+                attendus,
+                "@ depth {depth}"
+            );
         }
     }
 
@@ -2387,7 +2602,11 @@ mod tests {
 
             // Cycliques : longueurs de cycle attendues.
             assert_eq!(cols[ix.round_flag_s].len(), 8, "éponge : cycle 8");
-            assert_eq!(cols[ix.round_flag_m].len(), MERKLE_LEVEL_ROWS, "Merkle : cycle 16");
+            assert_eq!(
+                cols[ix.round_flag_m].len(),
+                MERKLE_LEVEL_ROWS,
+                "Merkle : cycle 16"
+            );
             assert_eq!(cols[ix.init0].len(), MERKLE_LEVEL_ROWS);
             assert_eq!(indices_non_nuls(&cols[ix.init0]), vec![0]);
             assert_eq!(indices_non_nuls(&cols[ix.init7]), vec![7]);
@@ -2505,7 +2724,11 @@ mod tests {
             let avant = vus.len();
             vus.sort_unstable();
             vus.dedup();
-            assert_eq!(avant, vus.len(), "deux index nommés désignent la même colonne");
+            assert_eq!(
+                avant,
+                vus.len(),
+                "deux index nommés désignent la même colonne"
+            );
         }
     }
 

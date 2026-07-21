@@ -78,8 +78,7 @@ pub const MAX_GROUPES_SUIVIS: usize = 1_024;
 /// CONSIGNÉ À LA COMPILATION : le crédit plein doit permettre de servir au moins un
 /// bloc plein d'un coup, sinon aucun wallet ne pourrait franchir un tel bloc et le
 /// service serait inutilisable exactement quand il sert.
-const _: () =
-    assert!(CAPACITE_SEAU >= (ledger::bloc::MAX_TX_PAR_BLOC as u64) * 2 + COUT_REQUETE);
+const _: () = assert!(CAPACITE_SEAU >= (ledger::bloc::MAX_TX_PAR_BLOC as u64) * 2 + COUT_REQUETE);
 
 /// Le crédit est compté en MILLIÈMES d'entrée.
 ///
@@ -111,10 +110,7 @@ impl Seau {
     fn recharger(&mut self, maintenant_ms: u64) {
         let ecoule = maintenant_ms.saturating_sub(self.dernier_ms);
         let gain = ecoule.saturating_mul(RECHARGE_PAR_SECONDE);
-        self.milli = self
-            .milli
-            .saturating_add(gain)
-            .min(CAPACITE_SEAU * MILLI);
+        self.milli = self.milli.saturating_add(gain).min(CAPACITE_SEAU * MILLI);
         self.dernier_ms = maintenant_ms;
     }
 
@@ -291,7 +287,10 @@ mod tests {
         let mut n = 0u64;
         while e.autoriser(g, 0) {
             n += 1; // on ne sert RIEN : aucun `debiter`
-            assert!(n <= CAPACITE_SEAU, "boucle infinie : le sondage serait gratuit");
+            assert!(
+                n <= CAPACITE_SEAU,
+                "boucle infinie : le sondage serait gratuit"
+            );
         }
         assert_eq!(n, CAPACITE_SEAU / COUT_REQUETE);
     }

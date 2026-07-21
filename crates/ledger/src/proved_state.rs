@@ -247,18 +247,11 @@ impl ProvedLedgerState {
     }
 
     /// Amorçage archivant en profondeur `depth` — tests/dev uniquement.
-    pub fn depuis_genese_depth_archivant(
-        genese: &Bloc,
-        depth: usize,
-    ) -> Result<Self, GeneseRefus> {
+    pub fn depuis_genese_depth_archivant(genese: &Bloc, depth: usize) -> Result<Self, GeneseRefus> {
         Self::amorcer(MerkleFrontier::new(depth), genese, true)
     }
 
-    fn amorcer(
-        tree: MerkleFrontier,
-        genese: &Bloc,
-        archiver: bool,
-    ) -> Result<Self, GeneseRefus> {
+    fn amorcer(tree: MerkleFrontier, genese: &Bloc, archiver: bool) -> Result<Self, GeneseRefus> {
         if genese.parent != PAS_DE_PARENT {
             return Err(GeneseRefus::ParentPresent);
         }
@@ -802,8 +795,18 @@ mod tests {
         }));
         let owner = rescue::hash(Domain::Owner, secret.as_felts());
 
-        let n0 = SpendNote { value: 1_000, owner, rho: digest(20), r: digest(30) };
-        let n1 = SpendNote { value: 500, owner, rho: digest(40), r: digest(50) };
+        let n0 = SpendNote {
+            value: 1_000,
+            owner,
+            rho: digest(20),
+            r: digest(30),
+        };
+        let n1 = SpendNote {
+            value: 500,
+            owner,
+            rho: digest(40),
+            r: digest(50),
+        };
         let cm0 = rescue::note_commitment(n0.value, &n0.owner, &n0.rho, &n0.r);
         let cm1 = rescue::note_commitment(n1.value, &n1.owner, &n1.rho, &n1.r);
 
@@ -821,20 +824,41 @@ mod tests {
         let path0 = wallet_tree.path(i0).unwrap();
         let path1 = wallet_tree.path(i1).unwrap();
 
-        let o0 = SpendNote { value: 900, owner: digest(60), rho: digest(61), r: digest(62) };
-        let o1 = SpendNote { value: 580, owner: digest(70), rho: digest(71), r: digest(72) };
+        let o0 = SpendNote {
+            value: 900,
+            owner: digest(60),
+            rho: digest(61),
+            r: digest(62),
+        };
+        let o1 = SpendNote {
+            value: 580,
+            owner: digest(70),
+            rho: digest(71),
+            r: digest(72),
+        };
         let oc0 = rescue::note_commitment(o0.value, &o0.owner, &o0.rho, &o0.r);
         let oc1 = rescue::note_commitment(o1.value, &o1.owner, &o1.rho, &o1.r);
 
         let inputs = [
-            ProvedInput { note: n0, path: path0, index: i0 },
-            ProvedInput { note: n1, path: path1, index: i1 },
+            ProvedInput {
+                note: n0,
+                path: path0,
+                index: i0,
+            },
+            ProvedInput {
+                note: n1,
+                path: path1,
+                index: i1,
+            },
         ];
         let intent = crypto::sig::SigKeypair::generate();
         // enc_notes RÉELS chiffrés vers deux destinataires (keypairs éphémères ici — le
         // scan de bout en bout est testé par `applique_puis_scanne`). Leur binding dans
         // tx_digest v3 est ainsi exercé sur de vrais ciphertexts.
-        let (r0, r1) = (crypto::kem::KemKeypair::generate(), crypto::kem::KemKeypair::generate());
+        let (r0, r1) = (
+            crypto::kem::KemKeypair::generate(),
+            crypto::kem::KemKeypair::generate(),
+        );
         let enc_notes = [
             crate::proved_wallet::encrypt_note(&r0.public, &oc0, &o0).unwrap(),
             crate::proved_wallet::encrypt_note(&r1.public, &oc1, &o1).unwrap(),
@@ -851,7 +875,7 @@ mod tests {
         assert!(!state.is_spent(&tx.nullifiers[0]));
         let indices = state.apply_proved_tx(&tx).expect("tx valide");
         assert_eq!(indices.len(), 2); // 2 sorties insérées
-        // Nullifiers désormais dépensés.
+                                      // Nullifiers désormais dépensés.
         assert!(state.is_spent(&tx.nullifiers[0]));
         assert!(state.is_spent(&tx.nullifiers[1]));
     }
@@ -866,8 +890,18 @@ mod tests {
             Felt::from_canonical_u64(700 + i as u64).unwrap()
         }));
         let owner = rescue::hash(Domain::Owner, secret.as_felts());
-        let n0 = SpendNote { value: 1_000, owner, rho: digest(20), r: digest(30) };
-        let n1 = SpendNote { value: 500, owner, rho: digest(40), r: digest(50) };
+        let n0 = SpendNote {
+            value: 1_000,
+            owner,
+            rho: digest(20),
+            r: digest(30),
+        };
+        let n1 = SpendNote {
+            value: 500,
+            owner,
+            rho: digest(40),
+            r: digest(50),
+        };
         let cm0 = rescue::note_commitment(n0.value, &n0.owner, &n0.rho, &n0.r);
         let cm1 = rescue::note_commitment(n1.value, &n1.owner, &n1.rho, &n1.r);
 
@@ -883,36 +917,76 @@ mod tests {
         let alice = crypto::kem::KemKeypair::generate();
         let bob = crypto::kem::KemKeypair::generate();
         let (owner_a, owner_b) = (digest(60), digest(70));
-        let o0 = SpendNote { value: 900, owner: owner_a, rho: digest(61), r: digest(62) };
-        let o1 = SpendNote { value: 580, owner: owner_b, rho: digest(71), r: digest(72) };
+        let o0 = SpendNote {
+            value: 900,
+            owner: owner_a,
+            rho: digest(61),
+            r: digest(62),
+        };
+        let o1 = SpendNote {
+            value: 580,
+            owner: owner_b,
+            rho: digest(71),
+            r: digest(72),
+        };
         let oc0 = rescue::note_commitment(o0.value, &o0.owner, &o0.rho, &o0.r);
         let oc1 = rescue::note_commitment(o1.value, &o1.owner, &o1.rho, &o1.r);
 
         let inputs = [
-            ProvedInput { note: n0, path: path0, index: i0 },
-            ProvedInput { note: n1, path: path1, index: i1 },
+            ProvedInput {
+                note: n0,
+                path: path0,
+                index: i0,
+            },
+            ProvedInput {
+                note: n1,
+                path: path1,
+                index: i1,
+            },
         ];
         let enc_notes = [
             crate::proved_wallet::encrypt_note(&alice.public, &oc0, &o0).unwrap(),
             crate::proved_wallet::encrypt_note(&bob.public, &oc1, &o1).unwrap(),
         ];
         let intent = crypto::sig::SigKeypair::generate();
-        let (_root, tx) = prove_tx(&secret, inputs, [o0.clone(), o1.clone()], 20, &intent, enc_notes);
+        let (_root, tx) = prove_tx(
+            &secret,
+            inputs,
+            [o0.clone(), o1.clone()],
+            20,
+            &intent,
+            enc_notes,
+        );
 
         state.apply_proved_tx(&tx).expect("tx valide");
 
         // Alice retrouve o0, Bob retrouve o1 — sur les PUBLICS de la tx (oc + enc_note).
         assert_eq!(
-            crate::proved_wallet::scan_proved_output(&alice, &owner_a, &tx.output_commitments[0], &tx.enc_notes[0]),
+            crate::proved_wallet::scan_proved_output(
+                &alice,
+                &owner_a,
+                &tx.output_commitments[0],
+                &tx.enc_notes[0]
+            ),
             Some(o0)
         );
         assert_eq!(
-            crate::proved_wallet::scan_proved_output(&bob, &owner_b, &tx.output_commitments[1], &tx.enc_notes[1]),
+            crate::proved_wallet::scan_proved_output(
+                &bob,
+                &owner_b,
+                &tx.output_commitments[1],
+                &tx.enc_notes[1]
+            ),
             Some(o1)
         );
         // Alice n'est pas destinataire de la sortie 1.
         assert_eq!(
-            crate::proved_wallet::scan_proved_output(&alice, &owner_a, &tx.output_commitments[1], &tx.enc_notes[1]),
+            crate::proved_wallet::scan_proved_output(
+                &alice,
+                &owner_a,
+                &tx.output_commitments[1],
+                &tx.enc_notes[1]
+            ),
             None
         );
     }
@@ -1204,7 +1278,10 @@ mod tests {
         let saute = crate::bloc::Bloc::sceller(&etat.tete(), 5, Vec::new()).unwrap();
         assert!(matches!(
             etat.appliquer_bloc(&saute),
-            Err(BlocRefus::HauteurInattendue { attendue: 1, recue: 5 })
+            Err(BlocRefus::HauteurInattendue {
+                attendue: 1,
+                recue: 5
+            })
         ));
 
         // Le bloc suivant, lui, passe — et la tête avance.
@@ -1352,7 +1429,10 @@ mod tests {
         let vingt: Vec<circuit::ProvedTx> = (0..20)
             .map(|_| circuit::ProvedTx::from_bytes(&octets).unwrap())
             .collect();
-        assert!(vingt.len() < crate::bloc::MAX_TX_PAR_BLOC, "sous la borne de NOMBRE");
+        assert!(
+            vingt.len() < crate::bloc::MAX_TX_PAR_BLOC,
+            "sous la borne de NOMBRE"
+        );
         assert!(matches!(
             crate::bloc::Bloc::sceller(&etat.tete(), 1, vingt),
             Err(crate::bloc::BlocConstructionError::TropDOctets { .. })
@@ -1463,10 +1543,8 @@ mod tests {
         state.mint(&digest(22)).unwrap();
         state.nullifiers.insert(digest(7).to_bytes());
 
-        let path = std::env::temp_dir().join(format!(
-            "obscura_state_test_{}.bin",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("obscura_state_test_{}.bin", std::process::id()));
         state.save(&path).expect("save");
         let reloaded = ProvedLedgerState::load(&path).expect("load");
         assert_eq!(reloaded.to_bytes(), state.to_bytes());
@@ -1524,14 +1602,21 @@ mod tests {
                 "la racine de fin de bloc {hauteur} doit être celle que le nœud a eue : \
                  c'est l'ancre que tous les wallets à jour publieront"
             );
-            assert_eq!(vues, tranche.fin, "la plage annoncée doit être la plage servie");
+            assert_eq!(
+                vues, tranche.fin,
+                "la plage annoncée doit être la plage servie"
+            );
         }
         assert_eq!(
             rejeu.root(),
             etat.tree.root(),
             "arbre rejoué ≠ arbre du nœud : l'historique n'est pas dans l'ordre de l'arbre"
         );
-        assert_eq!(h.len() as u64, etat.tree.len(), "autant d'entrées que de feuilles");
+        assert_eq!(
+            h.len() as u64,
+            etat.tree.len(),
+            "autant d'entrées que de feuilles"
+        );
     }
 
     /// L'HISTORIQUE D'UNE HAUTEUR EST EXACTEMENT CE QUE LE BLOC ENGAGE DÉJÀ.
@@ -1618,7 +1703,11 @@ mod tests {
 
         let h = etat.historique().unwrap();
         assert_eq!(h.len(), avant_entrees, "aucune sortie ne doit rester");
-        assert_eq!(h.nombre_de_tranches(), avant_tranches, "aucune tranche en trop");
+        assert_eq!(
+            h.nombre_de_tranches(),
+            avant_tranches,
+            "aucune tranche en trop"
+        );
         assert_eq!(
             h.derniere_tranche().unwrap().fin,
             etat.tree.len(),
@@ -1642,7 +1731,10 @@ mod tests {
 
         let mut sobre = ProvedLedgerState::depuis_genese_depth(&genese, 6).unwrap();
         let mut archiviste = ProvedLedgerState::depuis_genese_depth_archivant(&genese, 6).unwrap();
-        assert!(sobre.historique().is_none(), "l'archivage est OFF par défaut");
+        assert!(
+            sobre.historique().is_none(),
+            "l'archivage est OFF par défaut"
+        );
         assert!(archiviste.historique().is_some());
 
         for hauteur in 1..=3u64 {
@@ -1656,7 +1748,10 @@ mod tests {
             archiviste.to_bytes(),
             "l'archivage doit être invisible au consensus, octet pour octet"
         );
-        assert!(sobre.historique().is_none(), "et il ne s'active pas tout seul");
+        assert!(
+            sobre.historique().is_none(),
+            "et il ne s'active pas tout seul"
+        );
         assert_eq!(archiviste.historique().unwrap().hauteur_max(), Some(3));
     }
 

@@ -370,8 +370,8 @@ impl ReponseHistorique {
             let cm: [u8; DIGEST_BYTES] = prendre(b, &mut pos, DIGEST_BYTES)?
                 .try_into()
                 .map_err(|_| ReponseDecodeError::Tronque)?;
-            let commitment =
-                Digest::from_bytes(&cm).map_err(|_| ReponseDecodeError::SortieInvalide(j as u64))?;
+            let commitment = Digest::from_bytes(&cm)
+                .map_err(|_| ReponseDecodeError::SortieInvalide(j as u64))?;
 
             let lk = u32_de(b, &mut pos)? as usize;
             if lk != KEM_CT_LEN {
@@ -635,7 +635,10 @@ mod tests {
         octets[1 + 8 + 8 + 8 + DIGEST_BYTES] = 3; // hauteur_tete = 3
         assert!(matches!(
             ReponseHistorique::from_bytes(&octets),
-            Err(ReponseDecodeError::TeteEnRetard { tete: 3, hauteur: 9 })
+            Err(ReponseDecodeError::TeteEnRetard {
+                tete: 3,
+                hauteur: 9
+            })
         ));
     }
 

@@ -11,10 +11,10 @@
 //! la fin, est une erreur de COMPILATION — pas une vérification à l'exécution qu'on
 //! pourrait oublier.
 
+use crate::session::Session;
 use crate::{NetError, Transcript, D_HS1, D_HS2, D_IDENTITE, D_SESS_I2R, D_SESS_R2I};
 use crypto::kem::{self, KemCiphertext, KemKeypair, KemPublicKey};
 use crypto::sig::{self, HybridSignature, SigKeypair, SigPublicKey};
-use crate::session::Session;
 
 /// Borne de taille d'un champ préfixé (anti-DoS mémoire au décodage). Généreuse
 /// devant les tailles réelles (clé KEM hybride ≈ 1,2 Kio, signature ≈ 3,4 Kio) mais
@@ -60,7 +60,8 @@ fn ouvrir_identite(
     scelle: &[u8],
     transcript_signe: &[u8; 64],
 ) -> Result<SigPublicKey, NetError> {
-    let clair = crypto::aead::decrypt(cle, aad, scelle).map_err(|_| NetError::DechiffrementEchoue)?;
+    let clair =
+        crypto::aead::decrypt(cle, aad, scelle).map_err(|_| NetError::DechiffrementEchoue)?;
     let mut pos = 0usize;
     let id = SigPublicKey::from_bytes(lire_champ(&clair, &mut pos)?)
         .map_err(|_| NetError::EncodageInvalide)?;
@@ -101,7 +102,13 @@ impl Initiateur {
         ecrire_champ(&mut message, &ephemere.public.to_bytes());
         let mut transcript = Transcript::neuf();
         transcript.absorber(&message);
-        (Initiateur { ephemere, transcript }, message)
+        (
+            Initiateur {
+                ephemere,
+                transcript,
+            },
+            message,
+        )
     }
 
     /// Reçoit la passe 2, authentifie le répondeur, et prépare la passe 3.
@@ -121,8 +128,8 @@ impl Initiateur {
         }
 
         // ss₁ : le répondeur a encapsulé vers NOTRE éphémère.
-        let ss1 = kem::decapsulate(&self.ephemere, &ct_r)
-            .map_err(|_| NetError::KemNonContributif)?;
+        let ss1 =
+            kem::decapsulate(&self.ephemere, &ct_r).map_err(|_| NetError::KemNonContributif)?;
 
         // Le transcript signé par le répondeur couvre la passe 1 ET les parties
         // publiques de la passe 2 (éphémère + ciphertext), donc tout ce qui précède
@@ -132,26 +139,26 @@ impl Initiateur {
         ecrire_champ(&mut entete2, &ct_r.to_bytes());
         self.transcript.absorber(&entete2);
         let k1 = self.transcript.deriver(D_HS1, &[&ss1]);
-        let pair = ouvrir_identite(&k1, self.transcript.octets(), scelle, self.transcript.octets())?;
+        let pair = ouvrir_identite(
+            &k1,
+            self.transcript.octets(),
+            scelle,
+            self.transcript.octets(),
+        )?;
 
         // La partie scellée entre à son tour dans le transcript : la passe 3 s'y lie.
         self.transcript.absorber(scelle);
 
         // ss₂ : nous encapsulons vers l'éphémère du répondeur (contribution mutuelle).
-        let (ct_i, ss2) =
-            kem::encapsulate(&eph_r).map_err(|_| NetError::KemNonContributif)?;
+        let (ct_i, ss2) = kem::encapsulate(&eph_r).map_err(|_| NetError::KemNonContributif)?;
         let mut entete3 = Vec::new();
         ecrire_champ(&mut entete3, &ct_i.to_bytes());
         self.transcript.absorber(&entete3);
 
         let k2 = self.transcript.deriver(D_HS2, &[&ss1, &ss2]);
         let signature = identite.sign(D_IDENTITE, self.transcript.octets());
-        let scelle_i = sceller_identite(
-            &k2,
-            self.transcript.octets(),
-            &identite.public,
-            &signature,
-        );
+        let scelle_i =
+            sceller_identite(&k2, self.transcript.octets(), &identite.public, &signature);
 
         let mut passe3 = entete3;
         ecrire_champ(&mut passe3, &scelle_i);
@@ -162,7 +169,11 @@ impl Initiateur {
             self.transcript.deriver(D_SESS_I2R, &[&ss1, &ss2]),
             self.transcript.deriver(D_SESS_R2I, &[&ss1, &ss2]),
         );
-        Ok(InitiateurFinal { session, pair, passe3 })
+        Ok(InitiateurFinal {
+            session,
+            pair,
+            passe3,
+        })
     }
 }
 
@@ -199,8 +210,7 @@ impl Repondeur {
         transcript.absorber(passe1);
 
         let ephemere = KemKeypair::generate();
-        let (ct_r, ss1) =
-            kem::encapsulate(&eph_i).map_err(|_| NetError::KemNonContributif)?;
+        let (ct_r, ss1) = kem::encapsulate(&eph_i).map_err(|_| NetError::KemNonContributif)?;
 
         let mut entete2 = Vec::new();
         ecrire_champ(&mut entete2, &ephemere.public.to_bytes());
@@ -215,7 +225,14 @@ impl Repondeur {
         ecrire_champ(&mut passe2, &scelle);
         transcript.absorber(&scelle);
 
-        Ok((Repondeur { ephemere, transcript, ss1 }, passe2))
+        Ok((
+            Repondeur {
+                ephemere,
+                transcript,
+                ss1,
+            },
+            passe2,
+        ))
     }
 
     /// Reçoit la passe 3, authentifie l'initiateur, établit la session.
@@ -228,14 +245,19 @@ impl Repondeur {
             return Err(NetError::OctetsResiduels);
         }
 
-        let ss2 = kem::decapsulate(&self.ephemere, &ct_i)
-            .map_err(|_| NetError::KemNonContributif)?;
+        let ss2 =
+            kem::decapsulate(&self.ephemere, &ct_i).map_err(|_| NetError::KemNonContributif)?;
         let mut entete3 = Vec::new();
         ecrire_champ(&mut entete3, &ct_i.to_bytes());
         self.transcript.absorber(&entete3);
 
         let k2 = self.transcript.deriver(D_HS2, &[&self.ss1, &ss2]);
-        let pair = ouvrir_identite(&k2, self.transcript.octets(), scelle, self.transcript.octets())?;
+        let pair = ouvrir_identite(
+            &k2,
+            self.transcript.octets(),
+            scelle,
+            self.transcript.octets(),
+        )?;
         self.transcript.absorber(scelle);
 
         // Miroir de l'initiateur : mêmes domaines, rôles d'envoi/réception inversés.
