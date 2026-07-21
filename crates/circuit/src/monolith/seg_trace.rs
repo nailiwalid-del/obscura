@@ -132,6 +132,17 @@ pub(crate) enum SegForge {
     /// rester **ACCEPTÉE**. Aucune contrainte (toutes gatées `blind_off`) ni
     /// assertion (toutes `< used`) ne lit cette région — l'attaquant n'y gagne rien.
     BlindingAdversarial,
+
+    /// `PAD_ZERO*` NON CANONIQUE dans le commitment de l'entrée 0 : la première
+    /// cellule de padding (idx 17) vaut `v ≠ 0`.
+    ///
+    /// L'absorption ADDITIONNE cette cellule au rate, donc le digest devient
+    /// `cm' = H(payload ‖ v ‖ 0…)` — INTERNEMENT cohérent (rondes et absorptions
+    /// valides), et tout l'aval cascade honnêtement sur `cm'`. SEULE l'assertion
+    /// `PAD_ZERO` distingue la forge : sans elle, un prouveur publie un commitment
+    /// HORS du schéma canonique (LEN annonce 13 mais 15 cellules de junk sont
+    /// absorbées) — violation de « hash jamais tronqué ».
+    PaddingCommitment(u64),
 }
 
 impl SegForge {
@@ -144,6 +155,7 @@ impl SegForge {
                 | SegForge::RhoCommitment(..)
                 | SegForge::CmFeuille(..)
                 | SegForge::LeafChemin(..)
+                | SegForge::PaddingCommitment(..)
         )
     }
 
@@ -196,13 +208,49 @@ impl SegForge {
     }
 }
 
-/// Feuille qui sera réellement injectée dans l'arbre pour l'entrée `i`, forges
-/// comprises. Utilisé par la pré-passe de reconstruction d'arbre.
-fn feuille_injectee(w: &MonolithWitness, i: usize, forge: SegForge) -> Digest {
+/// Lignes d'éponge du commitment de l'entrée `i`, forge de padding comprise.
+///
+/// Avec `PaddingCommitment`, on rebâtit le préambule, on écrase la première cellule
+/// `PAD_ZERO` puis on REJOUE l'éponge : la trace reste internement cohérente
+/// (rondes et absorptions valides) et produit un digest `cm'` hors schéma canonique.
+fn lignes_commitment(
+    payload: &[proved_hash::felt::Felt],
+    i: usize,
+    forge: SegForge,
+) -> Vec<[BaseElement; crate::sponge::TRACE_WIDTH]> {
+    match forge {
+        SegForge::PaddingCommitment(v) if i == 0 => {
+            use proved_hash::domain::sponge_preamble;
+            use proved_hash::rescue::absorbed_len;
+            let mut preamble: Vec<BaseElement> =
+                sponge_preamble(Domain::NoteCommitment, payload)
+                    .iter()
+                    .map(|f| f.to_winter())
+                    .collect();
+            preamble.resize(absorbed_len(preamble.len()), BaseElement::ZERO);
+            preamble[17] = BaseElement::new(v); // première cellule PAD_ZERO
+            crate::sponge::sponge_rows(&preamble)
+        }
+        _ => sponge_rows_for(Domain::NoteCommitment, payload),
+    }
+}
+
+/// Commitment tel qu'il apparaîtra RÉELLEMENT dans la trace pour l'entrée `i`
+/// (forges comprises) — y compris la forge de padding, dont le digest ne peut pas
+/// se recalculer via `rescue::note_commitment`.
+fn commitment_injecte(w: &MonolithWitness, i: usize, forge: SegForge) -> Digest {
     let note = &w.inputs[i].note;
     let owner = forge.owner_commit(i, note.owner);
     let rho = forge.rho_commit(i, note.rho);
-    let cm = proved_hash::rescue::note_commitment(note.value, &owner, &rho, &note.r);
+    let payload = note_commit_payload(note.value, &owner, &rho, &note.r);
+    let rows = lignes_commitment(&payload, i, forge);
+    read_digest(&rows, rows.len() - 1, RATE_START)
+}
+
+/// Feuille qui sera réellement injectée dans l'arbre pour l'entrée `i`, forges
+/// comprises. Utilisé par la pré-passe de reconstruction d'arbre.
+fn feuille_injectee(w: &MonolithWitness, i: usize, forge: SegForge) -> Digest {
+    let cm = commitment_injecte(w, i, forge);
     let cm_leaf = forge.cm_feuille(i, cm);
     let leaf = proved_hash::merkle::leaf(&cm_leaf);
     forge.leaf_chemin(i, leaf)
@@ -331,7 +379,8 @@ fn build_seg_trace_interne(
                 let rho_commit = forge.rho_commit(n_in, note.rho);
                 let cm_payload =
                     note_commit_payload(note.value, &owner_commit, &rho_commit, &note.r);
-                let cm_rows = sponge_rows_for(Domain::NoteCommitment, &cm_payload);
+                // Forge PaddingCommitment : préambule au PAD_ZERO non canonique.
+                let cm_rows = lignes_commitment(&cm_payload, n_in, forge);
                 debug_assert_eq!(cm_rows.len(), CM_ROWS_END - CM_ROWS_START);
                 seg_copy(&mut rows, &cm_rows, start + CM_ROWS_START, SEG_SPONGE_OFF);
                 let cm = read_digest(&cm_rows, cm_rows.len() - 1, RATE_START);

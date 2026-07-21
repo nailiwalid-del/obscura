@@ -1438,6 +1438,25 @@ mod tests {
             verdict_forge(SegForge::BlindingAdversarial),
             "un blinding adverse ne doit RIEN changer : la tx reste acceptée"
         );
+
+        // PADDING non canonique dans le commitment : la trace est INTERNEMENT
+        // cohérente (rondes et absorptions valides, aval en cascade honnête sur le
+        // digest forgé) — seule l'assertion PAD_ZERO la distingue. Sans elle, un
+        // prouveur publierait un commitment hors schéma : LEN annonce 13 cellules
+        // mais 15 cellules de junk sont absorbées (« hash jamais tronqué » violé).
+        assert!(
+            !verdict_forge(SegForge::PaddingCommitment(3)),
+            "assertion PAD_ZERO du commitment doit mordre (hash jamais tronqué)"
+        );
+        // CONTRÔLE : la MÊME forge avec la valeur HONNÊTE (0) doit être acceptée.
+        // Elle emprunte exactement le même chemin de code (préambule rebâti, éponge
+        // rejouée, arbre reconstruit) — donc si celui-ci introduisait une incohérence
+        // parasite, ce contrôle échouerait. Le rejet ci-dessus est bien imputable à
+        // la VALEUR de la cellule de padding, à rien d'autre.
+        assert!(
+            verdict_forge(SegForge::PaddingCommitment(0)),
+            "contrôle : padding à la valeur canonique (0) doit être accepté"
+        );
     }
 
     /// ORACLE DE PARITÉ — le test que la construction côte à côte rend possible :
