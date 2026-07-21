@@ -47,7 +47,7 @@ pub use range_check::RANGE_BITS;
 pub use spend::SpendNote;
 pub use tx::{
     prove_tx, verify_proved_tx_full, verify_tx, EncNote, ProvedInput, ProvedTx, TxDecodeError,
-    INTENT_DOMAIN,
+    INTENT_DOMAIN, MAX_IN, MAX_OUT,
 };
 
 // --- Surface DEV (`--features dev-circuits`) : sous-circuits standalone ---

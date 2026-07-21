@@ -987,6 +987,7 @@ fn read4(trace: &TraceTable<BaseElement>, col: usize, row: usize) -> [BaseElemen
 /// Les publics sont extraits de la trace aux positions du SCHEDULE (et non à des
 /// lignes littérales) : la racine sur la porteuse, les nullifiers et commitments à
 /// la fin de la pile de leur segment respectif.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn prove_seg_monolith(w: &MonolithWitness) -> (MonolithPublicInputs, ValidityProof) {
     prove_seg_forme(&super::seg_trace::SegWitness::depuis_2in2out(w))
 }

@@ -245,8 +245,8 @@ mod plan {
     /// de format, pas un patch). La soundness de l'équilibre en permettrait 8 par
     /// côté (`8·2^60 = 2^63 < p`, cf. 3b3a) : 4 est un choix de COÛT — chaque
     /// entrée ajoute 13 colonnes de porteuses, chaque sortie 1.
-    pub(crate) const MAX_IN: usize = 4;
-    pub(crate) const MAX_OUT: usize = 4;
+    pub const MAX_IN: usize = 4;
+    pub const MAX_OUT: usize = 4;
 
     /// Colonnes de porteuses par entrée : rho + cm + leaf (3 digests).
     const PORTEUSES_PAR_ENTREE: usize = 3 * DIGEST_FELTS;

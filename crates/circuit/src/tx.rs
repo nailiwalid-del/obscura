@@ -34,9 +34,15 @@
 // chaque nœud qui stocke et relaie chaque transaction.
 use crate::monolith::air::MonolithPublicInputs;
 use crate::monolith::seg_air::{
-    prove_seg_monolith as prove_monolith, verify_seg_monolith as verify_monolith,
+    verify_seg_monolith as verify_monolith,
 };
-use crate::monolith::trace::MonolithWitness;
+use crate::monolith::seg_air::prove_seg_forme;
+
+/// Bornes de forme, ré-exposées depuis le layout (le module est `pub(crate)` : on
+/// recopie la VALEUR, source unique inchangée). Les changer = nouvelle version wire.
+pub const MAX_IN: usize = crate::monolith::seg_layout::MAX_IN;
+pub const MAX_OUT: usize = crate::monolith::seg_layout::MAX_OUT;
+use crate::monolith::seg_trace::SegWitness;
 use crate::range_check::RANGE_BITS;
 use crate::spend::SpendNote;
 use crate::ValidityProof;
@@ -95,8 +101,11 @@ pub struct ProvedTx {
     pub anchor: Digest,
     /// LA preuve monolithique : établit P1–P7 pour toute la transaction.
     pub proof: ValidityProof,
-    pub nullifiers: [Digest; 2],
-    pub output_commitments: [Digest; 2],
+    /// Un nullifier PAR entrée (`1..=MAX_IN`). La FORME (m, n) est portée par les
+    /// longueurs — comme les publics du monolithe.
+    pub nullifiers: Vec<Digest>,
+    /// Un commitment PAR sortie (`1..=MAX_OUT`).
+    pub output_commitments: Vec<Digest>,
     pub fee: u64,
     /// Clé publique d'intention (liée dans `tx_digest` → non échangeable).
     pub signer: SigPublicKey,
@@ -105,12 +114,23 @@ pub struct ProvedTx {
     /// PAS autorité d'ownership — celle-ci est établie par la liaison `owner` du
     /// monolithe).
     pub intent_sig: HybridSignature,
-    /// Enveloppes chiffrées des deux sorties, dans le même ordre que
-    /// `output_commitments` ; liées dans `tx_digest` (v3) — non prouvées par l'AIR.
-    pub enc_notes: [EncNote; 2],
+    /// Enveloppes chiffrées des sorties (une par commitment, même ordre) ; liées
+    /// dans `tx_digest` (v4) — non prouvées par l'AIR.
+    pub enc_notes: Vec<EncNote>,
 }
 
-const TX_DOMAIN: &str = "obscura/proved-tx/v3";
+impl ProvedTx {
+    /// Nombre d'entrées (forme déclarée).
+    pub fn m(&self) -> usize {
+        self.nullifiers.len()
+    }
+    /// Nombre de sorties (forme déclarée).
+    pub fn n(&self) -> usize {
+        self.output_commitments.len()
+    }
+}
+
+const TX_DOMAIN: &str = "obscura/proved-tx/v4";
 
 /// Encodage canonique injectif des publics : `root ‖ nf₁ ‖ nf₂ ‖ oc₁ ‖ oc₂ ‖ fee LE ‖
 /// signer ‖ [len(kem_ctⱼ) LE ‖ kem_ctⱼ ‖ len(enc_noteⱼ) LE ‖ enc_noteⱼ]ⱼ₌₀,₁` (v3 :
@@ -118,13 +138,18 @@ const TX_DOMAIN: &str = "obscura/proved-tx/v3";
 /// injectif — cf. Tâche 1).
 fn tx_digest_bytes(
     root: &Digest,
-    nullifiers: &[Digest; 2],
-    output_commitments: &[Digest; 2],
+    nullifiers: &[Digest],
+    output_commitments: &[Digest],
     fee: u64,
     signer: &SigPublicKey,
-    enc_notes: &[EncNote; 2],
+    enc_notes: &[EncNote],
 ) -> [u8; 64] {
     let mut b = Vec::new();
+    // v4 : les COMPTES (m, n) préfixent le digest. Sans eux, deux découpages
+    // différents des mêmes digests produiraient le même tx_digest — une preuve
+    // (m=1, n=3) rejouable en (m=2, n=2). La forme fait partie de ce qu'on engage.
+    b.push(nullifiers.len() as u8);
+    b.push(output_commitments.len() as u8);
     b.extend_from_slice(&root.to_bytes());
     for nf in nullifiers {
         b.extend_from_slice(&nf.to_bytes());
@@ -181,30 +206,50 @@ pub fn prove_tx(
     intent: &SigKeypair,
     enc_notes: [EncNote; 2],
 ) -> (Digest, ProvedTx) {
-    let witness = MonolithWitness {
-        secret: secret.clone(),
-        inputs,
-        outputs,
+    // Wrapper 2/2 : convertit vers le chemin à FORME VARIABLE. Conservé pour les
+    // appelants figés (tests, bench) ; le wallet passera par `prove_tx_forme` en
+    // C2-T7.
+    prove_tx_forme(
+        secret,
+        inputs.to_vec(),
+        outputs.to_vec(),
         fee,
-    };
-    let (pi, proof) = prove_monolith(&witness);
+        intent,
+        enc_notes.to_vec(),
+    )
+    .expect("2/2 est une forme valide")
+}
+
+/// Construit une transaction prouvée à FORME VARIABLE (`m` entrées, `n` sorties,
+/// bornées `1..=MAX`). `Err` si la forme est hors bornes ou si les longueurs
+/// (`inputs`/`outputs`/`enc_notes`) sont incohérentes.
+pub fn prove_tx_forme(
+    secret: &ShieldedSecret,
+    inputs: Vec<ProvedInput>,
+    outputs: Vec<SpendNote>,
+    fee: u64,
+    intent: &SigKeypair,
+    enc_notes: Vec<EncNote>,
+) -> Result<(Digest, ProvedTx), TxDecodeError> {
+    // Une enveloppe par sortie, exactement — sinon `tx_digest` lierait un nombre
+    // d'enveloppes ≠ du nombre de commitments, incohérence silencieuse.
+    if enc_notes.len() != outputs.len() {
+        return Err(TxDecodeError::TooShort);
+    }
+    let witness = SegWitness::new(secret.clone(), inputs, outputs, fee)
+        .map_err(|_| TxDecodeError::TooShort)?;
+    let (pi, proof) = prove_seg_forme(&witness);
 
     let root = felts_to_digest(&pi.root);
-    let nullifiers = [
-        felts_to_digest(&pi.nullifiers[0]),
-        felts_to_digest(&pi.nullifiers[1]),
-    ];
-    let output_commitments = [
-        felts_to_digest(&pi.output_commitments[0]),
-        felts_to_digest(&pi.output_commitments[1]),
-    ];
+    let nullifiers: Vec<Digest> = pi.nullifiers.iter().map(felts_to_digest).collect();
+    let output_commitments: Vec<Digest> =
+        pi.output_commitments.iter().map(felts_to_digest).collect();
     let signer = intent.public.clone();
     let tx_digest =
         tx_digest_bytes(&root, &nullifiers, &output_commitments, fee, &signer, &enc_notes);
-    // Enveloppe d'intention : le porteur de la clé signe CETTE transaction.
     let intent_sig = intent.sign(INTENT_DOMAIN, &tx_digest);
 
-    (
+    Ok((
         root,
         ProvedTx {
             anchor: root,
@@ -217,7 +262,7 @@ pub fn prove_tx(
             intent_sig,
             enc_notes,
         },
-    )
+    ))
 }
 
 /// Vérifie la transaction contre l'arbre public `root` (profondeur `depth`).
@@ -239,6 +284,14 @@ pub fn verify_tx(root: &Digest, depth: usize, tx: &ProvedTx) -> bool {
     if tx.fee >= (1u64 << RANGE_BITS) {
         return false;
     }
+    // FORME dans les bornes, et cohérente (une enveloppe par sortie). Vérifié AVANT
+    // toute construction de publics — le vérificateur ne fait pas confiance à la tx.
+    if !(1..=MAX_IN).contains(&tx.m()) || !(1..=MAX_OUT).contains(&tx.n()) {
+        return false;
+    }
+    if tx.enc_notes.len() != tx.n() {
+        return false;
+    }
     // Anti-DoS : rejeter des enc_notes hors-bornes AVANT de les hacher dans le digest
     // (un relais gonflerait sinon la tx et le coût de `tx_digest_bytes`).
     if !tx.enc_notes.iter().all(EncNote::within_bounds) {
@@ -246,14 +299,8 @@ pub fn verify_tx(root: &Digest, depth: usize, tx: &ProvedTx) -> bool {
     }
     let pi = MonolithPublicInputs {
         root: digest_to_felts(root),
-        nullifiers: vec![
-            digest_to_felts(&tx.nullifiers[0]),
-            digest_to_felts(&tx.nullifiers[1]),
-        ],
-        output_commitments: vec![
-            digest_to_felts(&tx.output_commitments[0]),
-            digest_to_felts(&tx.output_commitments[1]),
-        ],
+        nullifiers: tx.nullifiers.iter().map(digest_to_felts).collect(),
+        output_commitments: tx.output_commitments.iter().map(digest_to_felts).collect(),
         fee: tx.fee,
         depth,
     };
@@ -302,6 +349,8 @@ pub enum TxDecodeError {
     BadSigner,
     /// Octets de preuve STARK invalides.
     BadProof,
+    /// Forme (m, n) hors bornes `1..=MAX` (anti-DoS : borne avant allocation).
+    BadForme { m: usize, n: usize },
 }
 
 /// Curseur à lecture BORNÉE : chaque prise vérifie qu'il reste assez d'octets (jamais
@@ -342,6 +391,9 @@ impl ProvedTx {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut b = Vec::new();
         b.extend_from_slice(&self.anchor.to_bytes());
+        // v4 : la FORME en tête (deux u8), avant les digests à compte variable.
+        b.push(self.m() as u8);
+        b.push(self.n() as u8);
         for nf in &self.nullifiers {
             b.extend_from_slice(&nf.to_bytes());
         }
@@ -373,8 +425,22 @@ impl ProvedTx {
     pub fn from_bytes(b: &[u8]) -> Result<Self, TxDecodeError> {
         let mut cur = Cursor { b, pos: 0 };
         let anchor = cur.digest()?;
-        let nullifiers = [cur.digest()?, cur.digest()?];
-        let output_commitments = [cur.digest()?, cur.digest()?];
+        // FORME en tête, BORNÉE avant toute allocation : `m` digests + `n` digests +
+        // `n` enveloppes ne peuvent pas nous faire réserver plus que MAX (règle du
+        // dépôt : la borne du décodeur existe aussi au constructeur, cf. verify_tx).
+        let m = cur.take(1)?[0] as usize;
+        let n = cur.take(1)?[0] as usize;
+        if !(1..=MAX_IN).contains(&m) || !(1..=MAX_OUT).contains(&n) {
+            return Err(TxDecodeError::BadForme { m, n });
+        }
+        let mut nullifiers = Vec::with_capacity(m);
+        for _ in 0..m {
+            nullifiers.push(cur.digest()?);
+        }
+        let mut output_commitments = Vec::with_capacity(n);
+        for _ in 0..n {
+            output_commitments.push(cur.digest()?);
+        }
         let fee = u64::from_le_bytes(cur.take(8)?.try_into().unwrap());
         let tx_digest: [u8; 64] = cur.take(64)?.try_into().unwrap();
         let signer =
@@ -386,7 +452,10 @@ impl ProvedTx {
             let enc_note = cur.lenpref()?.to_vec();
             Ok(EncNote { kem_ct, enc_note })
         };
-        let enc_notes = [en(&mut cur)?, en(&mut cur)?];
+        let mut enc_notes = Vec::with_capacity(n);
+        for _ in 0..n {
+            enc_notes.push(en(&mut cur)?);
+        }
         if !enc_notes.iter().all(EncNote::within_bounds) {
             return Err(TxDecodeError::EncNoteOutOfBounds);
         }
@@ -740,6 +809,79 @@ mod tests {
         tx.enc_notes[0].enc_note = vec![0u8; MAX_ENC_NOTE_LEN + 1];
         let bytes = tx.to_bytes(); // to_bytes n'impose pas les bornes ; from_bytes oui.
         assert!(matches!(ProvedTx::from_bytes(&bytes), Err(TxDecodeError::EncNoteOutOfBounds)));
+    }
+
+    /// FORME VARIABLE de bout en bout (C2-T6) : une tx 1-in/3-out se prouve, passe le
+    /// fil (`to_bytes`/`from_bytes` avec compteurs), et se vérifie.
+    ///
+    /// C'est le test qui prouve que la variabilité du circuit atteint enfin la
+    /// couche transaction : m, n portés par les longueurs, préfixés dans tx_digest ET
+    /// dans le wire, bornés avant allocation.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
+    fn forme_variable_1_in_3_out() {
+        use proved_hash::merkle::ProvedMerkleTree;
+        let secret = ShieldedSecret::from_felts(core::array::from_fn(|i| {
+            Felt::from_canonical_u64(700 + i as u64).unwrap()
+        }));
+        let owner = rescue::hash(Domain::Owner, secret.as_felts());
+        // Une seule entrée qui couvre trois sorties + fee.
+        let note = SpendNote { value: 1_000, owner, rho: digest(20), r: digest(30) };
+        let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
+        let mut arbre = ProvedMerkleTree::new(DEPTH);
+        let i0 = arbre.append(&cm);
+        let inputs = vec![ProvedInput { note, path: arbre.path(i0).unwrap(), index: i0 }];
+
+        let fee = 10u64;
+        let parts = [400u64, 300, 290]; // 400+300+290+10 = 1000
+        let outputs: Vec<SpendNote> = parts
+            .iter()
+            .enumerate()
+            .map(|(j, v)| SpendNote {
+                value: *v,
+                owner: digest(60 + j as u64),
+                rho: digest(70 + j as u64),
+                r: digest(80 + j as u64),
+            })
+            .collect();
+        let enc_notes: Vec<EncNote> = (0..3)
+            .map(|j| EncNote { kem_ct: vec![j as u8; KEM_CT_LEN], enc_note: vec![j as u8; 3] })
+            .collect();
+        let intent = crypto::sig::SigKeypair::generate();
+
+        let (root, tx) =
+            prove_tx_forme(&secret, inputs, outputs, fee, &intent, enc_notes).expect("prouvable");
+        assert_eq!(tx.m(), 1);
+        assert_eq!(tx.n(), 3);
+        assert!(verify_proved_tx_full(&root, DEPTH, &tx), "1/3 valide");
+
+        // Aller-retour wire : compteurs relus, forme préservée.
+        let octets = tx.to_bytes();
+        let relu = ProvedTx::from_bytes(&octets).expect("roundtrip 1/3");
+        assert_eq!((relu.m(), relu.n()), (1, 3));
+        assert_eq!(relu.to_bytes(), octets, "canonique");
+        assert!(verify_proved_tx_full(&root, DEPTH, &relu));
+    }
+
+    /// ANTI-DoS : une forme hors bornes est rejetée AVANT toute allocation. Le test
+    /// n'envoie que l'en-tête (anchor + m/n) — si le code allouait d'après le compteur
+    /// sans le borner, il réserverait pour `m` digests jamais reçus.
+    #[test]
+    fn forme_hors_borne_rejetee_sans_allouer() {
+        let mut b = vec![0u8; 32]; // anchor (32 zéros = digest canonique)
+        b.push(0); // m = 0
+        b.push(2); // n = 2
+        assert!(matches!(
+            ProvedTx::from_bytes(&b),
+            Err(TxDecodeError::BadForme { m: 0, n: 2 })
+        ));
+        let mut b2 = vec![0u8; 32];
+        b2.push((MAX_IN + 1) as u8);
+        b2.push(2);
+        assert!(matches!(
+            ProvedTx::from_bytes(&b2),
+            Err(TxDecodeError::BadForme { .. })
+        ));
     }
 
     /// Anti-DoS (#2) : un `enc_note` hors-bornes (kem_ct de mauvaise taille, ou enc_note
