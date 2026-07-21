@@ -193,8 +193,8 @@
     <p class="lede">Un prototype qui vise deux objectifs : payer sans être surveillé, avec une sécurité qui tiendrait face à un ordinateur quantique. Ce document explique le projet pour tous, puis en détaille l'architecture — en distinguant soigneusement ce qui est <strong>déjà prouvé</strong> de ce qui reste <strong>à venir</strong>.</p>
     <div class="stat-row">
       <div class="stat"><b>7</b><span>crates Rust</span></div>
-      <div class="stat"><b>31&nbsp;147</b><span>lignes de code</span></div>
-      <div class="stat"><b>463</b><span>tests</span></div>
+      <div class="stat"><b>32&nbsp;535</b><span>lignes de code</span></div>
+      <div class="stat"><b>473</b><span>tests</span></div>
       <div class="stat"><b>P1–P7</b><span>prouvés en circuit</span></div>
       <div class="stat"><b>≈68<small> Kio</small></b><span>preuve d'une tx</span></div>
     </div>
@@ -277,7 +277,7 @@
   <p>Le circuit sait aujourd'hui <strong>vérifier qu'une transaction est valide</strong> (elle existe, m'appartient, est équilibrée, sans double-dépense), il gouverne un vrai registre, et la preuve de consensus <strong>masque ses témoins</strong> (witness-hiding par lignes de blinding, 3z-b1 — HVZK en ROM, vérifieur honnête). Depuis les phases 4–5, cette transaction prouvée <strong>voyage entre de vrais nœuds</strong> : liens chiffrés post-quantiques, origine protégée par Dandelion++, admission anti-DoS — testnet local validé, y compris à travers un intermédiaire, avec identité et état qui survivent aux redémarrages. Et depuis la <strong>finalité</strong>, le cycle se ferme : les transactions sont scellées en <strong>blocs ordonnés et chaînés</strong> (deux nœuds qui scellent le même mempool produisent le même bloc et convergent), et le wallet <strong>reçoit</strong> — il rejoue les blocs servis par un nœud, monnaie rendue comprise, puis redépense. Les réserves restantes : pas de zero-knowledge à vérifieur malicieux revendiqué, argument non formalisé au niveau publication, prototype non audité.</p>
   </div>
 
-  <div class="callout"><span class="lab">Les trous de complétude, dits franchement</span><p>Une transaction devient désormais <strong>définitive</strong> : elle entre dans un <em>bloc</em> — un lot de transactions dans un ordre écrit, chaîné à son parent — qui s'applique en tout-ou-rien, et deux nœuds acceptant la même chaîne convergent vers le même arbre (vérifié sur de vraies sockets). Restent deux manques, nommés plutôt que tus&nbsp;: <strong>(1) personne n'a autorité pour sceller</strong> — aucune élection de producteur n'existe, donc l'ordre obtenu est <em>convenu</em> entre participants coopératifs et non <em>défendu</em> contre un adversaire&nbsp;; <strong>(2) un wallet sait payer, pas recevoir</strong> — il lui faudrait rejouer l'historique des commitments pour connaître les index dont ses preuves ont besoin, et aucun nœud ne conserve cet historique. À savoir aussi&nbsp;: l'état étant <em>append-only</em> de bout en bout, <strong>aucune réorganisation de chaîne n'est possible</strong> — les supporter demanderait de redessiner le registre, pas d'ajouter une fonction.</p></div>
+  <div class="callout"><span class="lab">Les trous de complétude, dits franchement</span><p>Une transaction devient désormais <strong>définitive</strong> : elle entre dans un <em>bloc</em> — un lot de transactions dans un ordre écrit, chaîné à son parent, <em>borné en octets</em> pour rester diffusable — qui s'applique en tout-ou-rien, et deux nœuds acceptant la même chaîne convergent vers le même arbre (vérifié sur de vraies sockets). Et le wallet <strong>reçoit</strong> : il rejoue l'historique des sorties servi par un nœud archiviste. Restent deux manques, nommés plutôt que tus&nbsp;: <strong>(1) personne n'a autorité pour sceller</strong> — aucune élection de producteur n'existe, donc l'ordre obtenu est <em>convenu</em> entre participants coopératifs et non <em>défendu</em> contre un adversaire&nbsp;; <strong>(2) le nœud qui sert l'historique apprend l'IP, la cadence et la position du wallet, et peut mentir par omission</strong> — servir est un rôle d'archiviste optionnel et coûteux. À savoir aussi&nbsp;: l'état étant <em>append-only</em> de bout en bout, <strong>aucune réorganisation de chaîne n'est possible</strong> — les supporter demanderait de redessiner le registre, pas d'ajouter une fonction.</p></div>
 
   <div class="col">
   <h3 id="briques">4. Comment ça marche, en clair</h3>
@@ -360,13 +360,13 @@
     <table>
       <thead><tr><th>Crate</th><th>Rôle</th><th>Lignes</th></tr></thead>
       <tbody>
-        <tr><td><code>crypto</code></td><td>Primitives à défense en profondeur : hachage dual, échange de clés hybride, signatures hybrides, chiffrement en cascade.</td><td>790</td></tr>
+        <tr><td><code>crypto</code></td><td>Primitives à défense en profondeur : hachage dual, échange de clés hybride (contributif : les points X25519 d'ordre faible sont rejetés — la moitié courbe ne peut pas être annulée en silence), signatures hybrides, chiffrement en cascade.</td><td>870</td></tr>
         <tr><td><code>proved-hash</code></td><td>Le monde « prouvé » : corps de Goldilocks (<code>Felt</code>), hachage Rescue-Prime, arbre de Merkle Rescue incrémental + <em>frontier</em> append-only à mémoire bornée. Sans prouveur.</td><td>1&nbsp;470</td></tr>
-        <tr><td><code>circuit</code></td><td>Le cœur : les circuits AIR pour winterfell, le monolithe segmenté witness-hiding à FORME VARIABLE (m-in/n-out ≤ 4, 3z-c2), et <code>ProvedTx</code> v4.</td><td>11&nbsp;917</td></tr>
-        <tr><td><code>ledger</code></td><td>Notes, arbre des commitments, nullifiers, application des transactions prouvées, enveloppes chiffrées (scan), mempool anti-DoS, <strong>blocs</strong> (lot ordonné chaîné, émission en genèse seule, <code>appliquer_bloc</code> atomique), historique des sorties pour la synchronisation, persistance disque.</td><td>5&nbsp;250</td></tr>
-        <tr><td><code>net</code></td><td>Transport chiffré post-quantique (handshake hybride 3 passes, forward secrecy), cadrage anti-DoS, table de pairs anti-eclipse, Dandelion++.</td><td>1&nbsp;979</td></tr>
-        <tr><td><code>wallet</code></td><td>Détention des notes, scan des sorties chiffrées, construction de transactions prouvées (arbre de Merkle propre au wallet), encodage d'adresse à somme de contrôle, rejeu des blocs (<code>synchro</code> : ordre structurel, idempotence, ancre en frontière de bloc), fichier de wallet chiffré au repos (Argon2id + cascade AEAD, phrase de passe ; le clair reste un choix explicite), aux permissions restreintes.</td><td>2&nbsp;417</td></tr>
-        <tr><td><code>node</code></td><td>Le câblage : protocole applicatif (annonces par digest), orchestration en fonction pure, runtime sockets, scellement de blocs, service d'historique étranglé, rattrapage de bloc, persistance, binaires <code>obscura-node</code> / <code>obscura-demo</code> / <code>obscura-wallet</code>.</td><td>7&nbsp;324</td></tr>
+        <tr><td><code>circuit</code></td><td>Le cœur : les circuits AIR pour winterfell, le monolithe segmenté witness-hiding à FORME VARIABLE (m-in/n-out ≤ 4, 3z-c2), et <code>ProvedTx</code> v4.</td><td>12&nbsp;248</td></tr>
+        <tr><td><code>ledger</code></td><td>Notes, arbre des commitments, nullifiers, application des transactions prouvées, enveloppes chiffrées (scan), mempool anti-DoS, <strong>blocs</strong> (lot ordonné chaîné, émission en genèse seule, <code>appliquer_bloc</code> atomique, plafond de scellement en octets — un bloc valide est toujours diffusable), historique des sorties pour la synchronisation, persistance disque.</td><td>5&nbsp;356</td></tr>
+        <tr><td><code>net</code></td><td>Transport chiffré post-quantique (handshake hybride 3 passes, forward secrecy), cadrage anti-DoS, table de pairs anti-eclipse, Dandelion++.</td><td>1&nbsp;989</td></tr>
+        <tr><td><code>wallet</code></td><td>Détention des notes, scan des sorties chiffrées, construction de transactions prouvées (arbre de Merkle propre au wallet), encodage d'adresse à somme de contrôle, rejeu des blocs (<code>synchro</code> : ordre structurel, idempotence, ancre en frontière de bloc), fichier de wallet chiffré au repos (Argon2id + cascade AEAD, phrase de passe ; le clair reste un choix explicite), aux permissions restreintes.</td><td>2&nbsp;638</td></tr>
+        <tr><td><code>node</code></td><td>Le câblage : protocole applicatif (annonces par digest), orchestration en fonction pure, runtime sockets, scellement de blocs, services d'historique et de blocs étranglés par groupe réseau, rattrapage de bloc, persistance, binaires <code>obscura-node</code> / <code>obscura-demo</code> / <code>obscura-wallet</code>.</td><td>7&nbsp;483</td></tr>
       </tbody>
     </table>
   </div>
@@ -498,13 +498,13 @@
 
   <div class="col">
   <h3 id="bench">16. Mesures : une transaction complète à profondeur 32</h3>
-  <p>Un bench construit un arbre consensus (profondeur 32), génère puis vérifie une transaction 2-entrées/2-sorties — <strong>une seule preuve monolithique witness-hiding</strong>, dans sa disposition <em>segmentée</em> (3z-c1). Valeurs <strong>indicatives</strong> (une seule mesure, machine de développement) — reproductibles via <code>cargo run --release --example tx_bench -p circuit</code>&nbsp;:</p>
+  <p>Un bench construit un arbre consensus (profondeur 32), génère puis vérifie une transaction dans la forme par défaut 2-entrées/2-sorties — <strong>une seule preuve monolithique witness-hiding</strong>, disposition <em>segmentée</em> à <em>forme variable</em> (3z-c2). Valeurs <strong>indicatives</strong> (une seule mesure, machine de développement) — reproductibles via <code>cargo run --release --example tx_bench -p circuit</code>&nbsp;:</p>
   </div>
 
   <div class="bench">
-    <div class="metric"><b>≈1,78<small> s</small></b><span>Génération de preuve</span></div>
-    <div class="metric"><b>4,1<small> ms</small></b><span>Vérification</span></div>
-    <div class="metric"><b>67,9<small> Kio</small></b><span>Taille de preuve</span></div>
+    <div class="metric"><b>≈1,8<small> s</small></b><span>Génération de preuve</span></div>
+    <div class="metric"><b>3,8<small> ms</small></b><span>Vérification</span></div>
+    <div class="metric"><b>67,7<small> Kio</small></b><span>Taille de preuve</span></div>
     <div class="metric"><b>1</b><span>STARK dans la tx</span></div>
   </div>
 
@@ -565,7 +565,8 @@
       <div class="item"><span class="dot done"></span><span class="t">Monolithe (1 preuve)</span></div>
       <div class="item"><span class="dot done"></span><span class="t">Witness-hiding (3z-b1)</span></div>
       <div class="item"><span class="dot done"></span><span class="t">Segmenté −24&nbsp;% (3z-c1)</span></div>
-      <div class="item"><span class="dot done"></span><span class="t">ProvedTx v3 + enc_notes</span></div>
+      <div class="item"><span class="dot done"></span><span class="t">Forme variable ≤ 4 (3z-c2)</span></div>
+      <div class="item"><span class="dot done"></span><span class="t">ProvedTx v4 + enc_notes</span></div>
       <div class="item"><span class="dot done"></span><span class="t">Sérialisation canonique</span></div>
       <div class="item"><span class="dot done"></span><span class="t">apply_proved_tx</span></div>
       <div class="item"><span class="dot done"></span><span class="t">Durcissement #7</span></div>
@@ -581,12 +582,12 @@
       <div class="item"><span class="dot done"></span><span class="t">Finalité : blocs scellés</span></div>
       <div class="item"><span class="dot done"></span><span class="t">Synchro wallet : recevoir</span></div>
       <div class="item"><span class="dot done"></span><span class="t">CLI obscura-wallet</span></div>
+      <div class="item"><span class="dot done"></span><span class="t">Wallet chiffré au repos</span></div>
     </div>
     <div class="lane">
       <h4>À venir</h4>
       <div class="item todo"><span class="dot todo"></span><span class="t">Élection de producteur</span></div>
-      <div class="item todo"><span class="dot todo"></span><span class="t">M-in / N-out (3z-c2)</span></div>
-      <div class="item todo"><span class="dot todo"></span><span class="t">Wallet chiffré au repos</span></div>
+      <div class="item todo"><span class="dot todo"></span><span class="t">Retrait du côte-à-côte (C2-T8)</span></div>
       <div class="item todo"><span class="dot todo"></span><span class="t">Mempool persistant</span></div>
       <div class="item todo"><span class="dot todo"></span><span class="t">Migration FIPS 203/204</span></div>
       <div class="item todo"><span class="dot todo"></span><span class="t">Audit externe</span></div>
@@ -600,11 +601,9 @@
 
   <figure class="fig" aria-label="Feuille de route">
     <div class="flow">
-      <div class="node accent"><span class="h">✅ Fait</span><span class="m">Primitives · Circuit WH segmenté · Ledger + blocs · Réseau PQ · Nœud &amp; wallet CLI · cycle payer→sceller→recevoir</span></div>
+      <div class="node accent"><span class="h">✅ Fait</span><span class="m">Primitives · Circuit WH à forme variable (3z-c2) · Ledger + blocs · Réseau PQ · Nœud &amp; wallet CLI chiffré · cycle payer→sceller→recevoir</span></div>
       <div class="arrow" aria-hidden="true">→</div>
       <div class="node"><span class="h">Consensus</span><span class="m">élection de producteur (l'ordre est convenu, pas défendu)</span></div>
-      <div class="arrow" aria-hidden="true">→</div>
-      <div class="node"><span class="h">3z-c2</span><span class="m">M-in/N-out variable ≤ MAX</span></div>
       <div class="arrow" aria-hidden="true">→</div>
       <div class="node"><span class="h">Testnet élargi</span><span class="m">multi-machines · migration FIPS 0x02</span></div>
       <div class="arrow" aria-hidden="true">→</div>
@@ -614,9 +613,9 @@
   </figure>
 
   <footer class="footer">
-    <p><span class="tag ok">Phases 1–5 · prototypées</span> &nbsp; <span class="tag ok">Cycle payer→sceller→recevoir · validé</span> &nbsp; <span class="tag wip">Élection de producteur · 3z-c2 · à venir</span></p>
+    <p><span class="tag ok">Phases 1–5 · prototypées</span> &nbsp; <span class="tag ok">Cycle payer→sceller→recevoir · validé</span> &nbsp; <span class="tag ok">3z-c2 forme variable · livrée</span> &nbsp; <span class="tag wip">Élection de producteur · à venir</span></p>
     <p class="mono">Obscura — prototype de recherche · Rust · dépôt privé <code>nailiwalid-del/obscura</code><br>Défense en profondeur · post-quantique · STARK witness-hiding (HVZK en ROM) sur le chemin de consensus (winterfell / Goldilocks / Rescue-Prime) · réseau chiffré PQ avec Dandelion++.</p>
-    <p style="font-size:13px">Document de synthèse — 21 juillet 2026, au commit <code>dfa541a</code>. Chiffres reproductibles : <code>find crates -name '*.rs' | xargs wc -l</code> → 29&nbsp;518 lignes (dont 481 pour le banc <code>zk-spike</code>) ; <code>grep -rn '#[test]' crates</code> → 436 marqueurs ; performances via <code>cargo run --release --example tx_bench -p circuit</code> (une mesure, machine de développement). Ce prototype n'est pas audité et ne doit pas être utilisé en production.</p>
+    <p style="font-size:13px">Document de synthèse — 21 juillet 2026, au commit <code>6c58e5e</code>. Chiffres reproductibles : <code>find crates -name '*.rs' -exec cat {} + | wc -l</code> → 32&nbsp;535 lignes (dont 481 pour le banc <code>zk-spike</code>) ; <code>grep -rn '#[test]' crates</code> → 473 marqueurs ; performances via <code>cargo run --release --example tx_bench -p circuit</code> (une mesure, machine de développement). Ce prototype n'est pas audité et ne doit pas être utilisé en production.</p>
   </footer>
 
   </main>

@@ -17,7 +17,7 @@
 Chaque fonction de sécurité combine deux primitives de familles mathématiques indépendantes :
 la sécurité tient tant qu'AU MOINS UNE des deux tient.
 
-- **Échange de clés** : X25519 (courbes elliptiques) + ML-KEM-768 (réseaux euclidiens), secrets combinés par KDF sur le transcript complet.
+- **Échange de clés** : X25519 (courbes elliptiques) + ML-KEM-768 (réseaux euclidiens), secrets combinés par KDF sur le transcript complet. **Contributivité** : un point X25519 d'ordre faible est rejeté des DEUX côtés (`CryptoError::NonContributif`) — sans ce contrôle, un pair hostile force un DH nul et la moitié courbes disparaît en silence, Kyber portant seul la sécurité.
 - **Signatures** : Ed25519 + ML-DSA-65 — la vérification exige les DEUX signatures.
 - **Chiffrement** : cascade XChaCha20-Poly1305 ∘ AES-256-GCM, clés indépendantes dérivées.
 - **Hachage / commitments** : dual_hash = BLAKE3(x) ‖ SHA3-256(x) — résistant aux collisions si l'un des deux l'est (ARX vs éponge Keccak).
@@ -157,6 +157,12 @@ reproduira :
    pouvait sceller un bloc localement valide, indiffusable et inacceptable par
    quiconque - partition definitive, l'etat etant append-only. Regle qui en decoule :
    *toute borne de `from_bytes` doit exister aussi dans le constructeur*.
+   **La variante OCTETS du meme defaut a ete fermee depuis** : `MAX_TX_PAR_BLOC` borne
+   le NOMBRE, pas le POIDS (a ≈ 68 Kio la transaction, une quinzaine suffit a depasser
+   le cadre reseau de 1 Mio). `MAX_OCTETS_BLOC` (cadre − surcout AEAD − marge message)
+   est desormais verifie au scellement ET au decodage — et comme le cadre borne le
+   CHIFFRE, le surcout de la cascade est soustrait du budget, sinon un bloc scelle a la
+   borne passait le constructeur puis etait refuse une fois chiffre, 5 octets trop gros.
 2. **La fenetre d'ancres etait plus courte qu'un bloc.** `RECENT_ROOTS_WINDOW = 100`
    contre `MAX_TX_PAR_BLOC = 512`, `remember_root` appele a chaque insertion : un
    bloc charge purgeait toutes les ancres. Un wallet passant environ 1,8 s a prouver
@@ -172,9 +178,13 @@ reproduira :
    (sanction).
 4. **Aucune echeance sur les sockets.** Un pair ouvrant une connexion sans jamais
    parler figeait la boucle principale dans le handshake ; un pair cessant de lire
-   figeait `executer`, verrou tenu. Le noeud restait debout et muet. Correction
-   partielle : les echeances transforment le blocage en lien mort, mais `executer`
-   tient toujours le verrou pendant l'ecriture.
+   figeait `executer`, verrou tenu. Le noeud restait debout et muet. Corrige en deux
+   temps : les echeances transforment d'abord le blocage en lien mort, puis
+   `executer` a cesse de faire des E/S — un thread d'ECRITURE par lien, file
+   d'envoi bornee (`FILE_ENVOI` = 16 messages, ≈ 16 Mio au pire par lien), la
+   boucle principale ne fait que DEPOSER. Une file pleine vaut lien mort (le pair
+   n'absorbe plus), decide immediatement plutot que subi 20 s sous echeance ; un
+   pair lent ne retarde plus ni `pomper`, ni `tick`, ni le scellement.
 5. **`apply_proved_tx` etait publique** : une seconde porte d'insertion dans l'arbre,
    hors de tout bloc. Desormais `pub(crate)` - son seul appelant legitime est
    `appliquer_bloc`.
@@ -200,10 +210,12 @@ Le protocole tient en trois pièces (`crates/node`) :
   La réponse réutilise `Message::Bloc` : un bloc rattrapé passe par `appliquer_bloc`,
   avec les mêmes contrôles que n'importe quel bloc diffusé — aucun chemin parallèle.
 - `node::archive::ArchiveBlocs` — les N derniers blocs APPLIQUÉS, sous forme
-  sérialisée. Bornée **deux fois** : 64 blocs et 64 Mio. Une seule borne ne suffirait
-  pas — un bloc plein pèse ≈ 34 Mio, donc 64 blocs pleins vaudraient ≈ 2,1 Gio décidés
-  par les producteurs de blocs et pas par nous ; à l'inverse, borner les seuls octets
-  laisserait des blocs vides remplir l'archive. L'état de CONSENSUS reste borné et
+  sérialisée. Bornée **deux fois** : 64 blocs et 64 Mio. Les deux bornes datent d'avant
+  le plafond de scellement en octets, quand un bloc plein pouvait peser ≈ 34 Mio (64
+  blocs pleins auraient valu ≈ 2,1 Gio décidés par les producteurs et pas par nous) ;
+  depuis `MAX_OCTETS_BLOC`, aucun bloc appliqué ne dépasse ≈ 1 Mio et les deux bornes
+  coïncident (64 × 1 Mio) — la borne en octets reste, ceinture et bretelles qui ne
+  dépendent pas du plafond du ledger. L'état de CONSENSUS reste borné et
   inchangé (frontier) : l'archive vit à côté, n'entre dans aucune règle de validation,
   et un noeud qui la vide reste valide.
 - `Noeud::sur_bloc` / `sur_demande_bloc` — un bloc en avance déclenche une demande de
@@ -230,10 +242,11 @@ s'éteint ; demande de hauteur inconnue sans réponse ni sanction).
 
 ### Ce que le rattrapage NE ferme PAS
 
-- **Aucun étranglement.** Servir un bloc (34 Kio à 34 Mio) pour une demande de 9 octets
-  est une asymétrie d'AMPLIFICATION. Le seul frein actuel est le score de pair et
-  l'échéance d'écriture ; l'étranglement par `GroupeReseau` exigé plus bas pour le
-  service d'historique n'est PAS écrit ici. Limite consignée, pas fermée.
+- **L'étranglement est branché depuis** : `sur_demande_bloc` débite le même seau à
+  jetons, indexé sur `GroupeReseau`, que le service d'historique (fail-closed sans
+  adresse connue, silence à crédit épuisé — indistinguable des autres silences).
+  L'amplification résiduelle d'une demande de 9 octets est celle d'UN bloc par jeton,
+  bornée à ≈ 1 Mio depuis le plafond de scellement en octets — plus jamais 34 Mio.
 - **Aucune réorganisation, donc aucune réparation d'un fork réel.** Le rattrapage rend
   un noeud EN RETARD à sa chaîne. Un noeud sur une chaîne divergente reste divergent
   pour toujours : l'état est append-only (voir plus haut). Le rattrapage rend cet état

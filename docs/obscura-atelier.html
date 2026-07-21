@@ -211,7 +211,7 @@
         <span class="k">owner</span><span><span class="hash" id="v-owner"></span><span class="pill">= H_owner(secret)</span></span>
         <span class="k">nk</span><span><span class="hash" id="v-nk"></span><span class="pill">= H_nk(secret)</span></span>
       </div>
-      <p class="why">👉 <code>owner</code> identifie tes notes, <code>nk</code> servira à fabriquer les nullifiers. Les deux dérivent du même secret — et le circuit le prouvera. (Dans le vrai prototype, ton adresse textuelle <code>obs1…</code> porte <code>owner</code> + ta clé de chiffrement, avec une somme de contrôle.)</p>
+      <p class="why">👉 <code>owner</code> identifie tes notes, <code>nk</code> servira à fabriquer les nullifiers. Les deux dérivent du même secret — et le circuit le prouvera. (Dans le vrai prototype, ton adresse textuelle <code>obs1…</code> porte <code>owner</code> + ta clé de chiffrement, avec une somme de contrôle — et ton fichier de wallet est chiffré au repos par une phrase de passe, Argon2id + cascade AEAD ; le laisser en clair est un choix explicite, jamais un défaut.)</p>
     </div>
   </section>
 
@@ -234,7 +234,7 @@
   <!-- ÉTAPE 3 -->
   <section class="step locked" id="s3">
     <h2><span class="n">3</span> Paie Bob — avec une preuve, pas des aveux</h2>
-    <p class="why">Choisis une note, un montant pour <strong>Bob</strong> et des frais. Ton wallet fabrique une preuve des règles P1–P7 et une transaction : le <strong>nullifier</strong> de la note dépensée (tampon « utilisée », inreliable à sa feuille) et deux commitments de sortie — Bob, et ta <strong>monnaie rendue</strong> rechiffrée vers toi-même. Elle part au <strong>mempool</strong> : rien n'est encore définitif.</p>
+    <p class="why">Choisis une note, un montant pour <strong>Bob</strong> et des frais. Ton wallet fabrique une preuve des règles P1–P7 et une transaction : le <strong>nullifier</strong> de la note dépensée (tampon « utilisée », inreliable à sa feuille) et deux commitments de sortie — Bob, et ta <strong>monnaie rendue</strong> rechiffrée vers toi-même. Elle part au <strong>mempool</strong> : rien n'est encore définitif. (Ici 1 entrée / 2 sorties ; le vrai circuit accepte de 1 à 4 entrées et sorties — la forme est publique, le wallet vise 2/2 par défaut pour rester dans le seau le plus peuplé.)</p>
     <p class="why" id="pick-hint">👇 Clique une note non dépensée pour la sélectionner.</p>
     <div class="spendform">
       <div class="field"><label>Vers Bob</label><input type="number" id="in-amount" min="0" value="7"></div>
@@ -259,7 +259,7 @@
   <!-- ÉTAPE 4 -->
   <section class="step locked" id="s4">
     <h2><span class="n">4</span> Scelle un bloc — la finalité</h2>
-    <p class="why">Une transaction au mempool n'a rien changé à l'état : si chaque nœud appliquait dans son coin, les arbres divergeraient. Un nœud <strong>scelle</strong> donc un <strong>bloc</strong> : un lot <em>ordonné</em> (tri par digest — deux nœuds honnêtes produisent le MÊME bloc), <em>chaîné</em> à son parent, appliqué <em>atomiquement</em>. C'est là que le nullifier devient public et que les sorties entrent dans l'arbre. (Vrai prototype : <code>obscura-node --sceller</code>.)</p>
+    <p class="why">Une transaction au mempool n'a rien changé à l'état : si chaque nœud appliquait dans son coin, les arbres divergeraient. Un nœud <strong>scelle</strong> donc un <strong>bloc</strong> : un lot <em>ordonné</em> (tri par digest — deux nœuds honnêtes produisent le MÊME bloc), <em>chaîné</em> à son parent, appliqué <em>atomiquement</em>. C'est là que le nullifier devient public et que les sorties entrent dans l'arbre. Le bloc est aussi <em>borné en octets</em> au scellement : un bloc valide doit tenir dans un cadre réseau, sinon son producteur serait le seul à pouvoir l'appliquer. (Vrai prototype : <code>obscura-node --sceller</code>.)</p>
     <div class="btnrow"><button class="primary" id="btn-seal">⛏ Sceller le bloc</button></div>
     <div class="chain" id="chain" aria-label="Chaîne de blocs"></div>
     <div class="verdict" id="verdict-seal"></div>

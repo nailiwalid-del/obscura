@@ -129,10 +129,14 @@ Tx { proof, root, nullifiers[], output_commitments[], enc_notes[], fee }
 Validation = vérifier la preuve STARK (statement P1–P7) contre tx_digest + unicité
 des nullifiers. Aucune clé publique, aucun chemin de Merkle, aucun montant d'entrée publié.
 
-**État (2-in/2-out, implémenté) :** `circuit::ProvedTx` v3 porte tous ces champs, dont
-`enc_notes` (liés dans `tx_digest` v3, anti-substitution). Scan des destinataires :
-`ledger::proved_wallet::{encrypt_note, scan_proved_output}`. Arité fixe 2/2 (la
-généralisation M-in/N-out = phase 3z-c). P8 (cohérence enc_note↔commitment) différé.
+**État (implémenté, forme variable — 3z-c2) :** `circuit::ProvedTx` v4 porte tous ces
+champs à forme variable m-in/n-out (`1..=4`) : Vec bornés (comptes vérifiés avant
+allocation), comptes portés au wire et liés dans `tx_digest` v4 avec les `enc_notes`
+(anti-substitution), et forme PRÉFIXÉE dans la graine Fiat-Shamir — deux découpages
+des mêmes digests ne partagent pas leur transcript. La forme est PUBLIQUE (au plus
+16 seaux, cf. THREAT_MODEL) ; le wallet vise 2/2 par défaut. Scan des destinataires :
+`ledger::proved_wallet::{encrypt_note, scan_proved_output}`. P8 (cohérence
+enc_note↔commitment) différé.
 
 ### Mode transparent (DEV UNIQUEMENT — actuel)
 
@@ -160,6 +164,12 @@ attendant le circuit. Fonctions suffixées `_transparent` dans le code.
 | HybridSig | Ed25519 ET Dilithium3 | EUF-CMA si l'un tient |
 | CascadeAead | XChaCha20-Poly1305( AES-256-GCM(m) ) | confidentialité si l'un tient |
 
+**Contributivité du KEM** : `encapsulate` rejette une clé publique X25519 d'ordre
+faible, `decapsulate` rejette un éphémère d'ordre faible (`CryptoError::NonContributif`,
+points de RFC 7748 §6.1). Sans ce contrôle, un point de petit sous-groupe force un DH
+nul : la moitié courbes du KEM disparaît EN SILENCE et Kyber porte seul la sécurité —
+la défense en profondeur serait perdue sans qu'aucune erreur ne le dise.
+
 ## Phases (recentrées)
 
 1. ✅ Primitives crypto hybrides
@@ -168,7 +178,8 @@ attendant le circuit. Fonctions suffixées `_transparent` dans le code.
    witness-hiding, `apply_proved_tx` = règle de consensus) + migration
    Rescue-Prime des commitments/Merkle + retrait de spend_pk/path des
    transactions (le mode transparent est gaté `dev-transparent`, hors consensus).
-   Reste dans ce chantier : **3z-c2**, la variabilité M-in/N-out (voir
+   **3z-c2** (variabilité M-in/N-out ≤ 4) livrée ; reste C2-T8 partiel — suppression
+   du côte-à-côte et forges à reconstruction d'arbre en profondeur 32 (voir
    STARK_STATEMENT.md)
 4. ✅ Réseau P2P chiffré PQ + Dandelion++ + test de key privacy — briques livrées
    (crate `net` : transport, cadrage, pairs anti-eclipse, Dandelion++ ;
@@ -206,7 +217,9 @@ cadrage réseau — longueur préfixée, borne anti-DoS — est celui de `net::f
   ne pilote rien (refus au décodage si `hauteur_tete < hauteur`). `MAX_SORTIES_PAR_REPONSE`
   est CALCULÉ sur `MAX_CADRE − surcoût AEAD − en-tête` : le cadrage borne le CHIFFRÉ.
 - `DemandeBloc { hauteur: u64 }` / réponse `Bloc` — **rattrapage** d'un nœud qui a manqué
-  une hauteur (même discipline : un seul champ, débit par fréquence).
+  une hauteur (même discipline : un seul champ, débit par fréquence). Un bloc est borné
+  en OCTETS au scellement ET au décodage (`MAX_OCTETS_BLOC` = cadre réseau − surcoût
+  AEAD − marge message, ≈ 1 Mio) : un bloc valide est toujours diffusable en un cadre.
 
 Côté wallet, la BOUCLE (`node::client`) demande `hauteur = prochaine_hauteur()`,
 rassemble tous les morceaux du bloc, les rejoue en UNE fois (`Wallet::synchroniser`),
