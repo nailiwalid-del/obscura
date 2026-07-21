@@ -1281,6 +1281,89 @@ mod tests {
         );
     }
 
+    /// Prouve une trace FORGÉE et rend le verdict du vérifieur. Les publics sont
+    /// relus de la trace forgée (self-consistants) : le rejet ne peut donc venir
+    /// que d'une contrainte ou d'une assertion, jamais d'un public incohérent.
+    #[cfg(test)]
+    fn verdict_forge(forge: crate::monolith::seg_trace::SegForge) -> bool {
+        use crate::monolith::seg_trace::build_seg_trace_forge;
+
+        let (w, _root) = witness_de_test();
+        let depth = w.inputs[0].path.len();
+        let trace = build_seg_trace_forge(&w, forge);
+        let pi = MonolithPublicInputs {
+            root: read4(&trace, ROOT_C, 0),
+            nullifiers: [
+                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(1, depth) + NF_ROWS_END - 1),
+                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(2, depth) + NF_ROWS_END - 1),
+            ],
+            output_commitments: [
+                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(3, depth) + CM_ROWS_END - 1),
+                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(4, depth) + CM_ROWS_END - 1),
+            ],
+            fee: w.fee,
+            depth,
+        };
+        let prover = SegMonolithProver {
+            options: crate::proof_options_hi(),
+            pi: pi.clone(),
+        };
+        let proof = ValidityProof(prover.prove(trace).expect("génération"));
+        verify_seg_monolith(&pi, depth, &proof)
+    }
+
+    /// FORGES (RED) des liaisons ANTI-DOUBLE-DÉPENSE, ré-ancrées par segment.
+    ///
+    /// Chacune réécrit UN côté d'une liaison en laissant la porteuse honnête et
+    /// toute la cascade cohérente : la trace forgée ne diffère d'une trace honnête
+    /// QUE par l'égalité ciblée. Un verdict `true` signifierait que la liaison
+    /// correspondante ne mord pas.
+    ///
+    /// Ces quatre-là ne demandent aucune reconstruction d'arbre (elles n'altèrent
+    /// ni le commitment ni la feuille), donc elles ne peuvent pas être masquées par
+    /// la liaison `root_in`.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
+    fn forges_liaisons_nullifier_rejetees() {
+        use crate::monolith::seg_trace::SegForge;
+        use proved_hash::digest::Digest;
+        use proved_hash::felt::Felt;
+
+        let dg = |seed: u64| {
+            Digest(core::array::from_fn(|i| {
+                Felt::from_canonical_u64(seed + i as u64).unwrap()
+            }))
+        };
+
+        // Témoin de contrôle : sans forge, la trace DOIT être acceptée — sinon les
+        // verdicts négatifs ci-dessous ne prouveraient rien.
+        assert!(
+            verdict_forge(SegForge::Aucune),
+            "contrôle : la trace honnête doit être acceptée"
+        );
+
+        // Secret owner↔nk : owner d'une note possédée, nk d'une autre.
+        assert!(
+            !verdict_forge(SegForge::SecretNk(dg(4242))),
+            "liaison secret owner↔nk doit mordre (sinon double-dépense)"
+        );
+        // nk consommé ≠ nk produit par la clé.
+        assert!(
+            !verdict_forge(SegForge::NkConsomme(0, dg(5150))),
+            "liaison NK doit mordre"
+        );
+        // rho consommé dans le nullifier ≠ rho de la porteuse.
+        assert!(
+            !verdict_forge(SegForge::RhoNullifier(1, dg(6161))),
+            "liaison RHO (côté nullifier) doit mordre"
+        );
+        // cm consommé dans le nullifier ≠ cm produit : LA liaison anti-double-dépense.
+        assert!(
+            !verdict_forge(SegForge::CmNullifier(0, dg(7272))),
+            "liaison CM (côté nullifier) doit mordre — nullifier sur un autre cm"
+        );
+    }
+
     /// ORACLE DE PARITÉ — le test que la construction côte à côte rend possible :
     /// le MÊME témoin doit produire les MÊMES publics par les deux monolithes.
     ///

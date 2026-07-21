@@ -116,7 +116,7 @@ pub(crate) fn key_rows(secret: &[Felt; DIGEST_FELTS]) -> Vec<[BaseElement; KEY_W
 /// `s_nk` pour nk). Pour un témoin honnête `s_owner == s_nk` (la liaison secret
 /// owner↔nk l'exige) ; le paramètre séparé sert uniquement à la forge
 /// `Forge::SecretNk` (miroir de `key::build_key_trace` à deux secrets).
-fn key_rows_split(
+pub(crate) fn key_rows_split(
     s_owner: &[Felt; DIGEST_FELTS],
     s_nk: &[Felt; DIGEST_FELTS],
 ) -> Vec<[BaseElement; KEY_WIDTH]> {

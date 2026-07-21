@@ -23,7 +23,8 @@
 
 use super::seg_layout::*;
 use super::trace::{
-    felt_alea, key_rows, read_digest, sponge_rows_for, MonolithWitness, KEY_NK_LOCAL_OFF,
+    felt_alea, key_rows, key_rows_split, read_digest, sponge_rows_for, MonolithWitness,
+    KEY_NK_LOCAL_OFF,
 };
 use crate::sponge::RATE_START;
 use proved_hash::digest::{Digest, DIGEST_FELTS};
@@ -64,10 +65,55 @@ fn set_carrier_scalar(rows: &mut [[BaseElement; WIDTH]], col: usize, v: u64) {
     }
 }
 
+/// Point de forge : réécrit UN côté d'une liaison porteuse↔gadget en gardant le
+/// PRODUCTEUR (la porteuse) honnête, pour qu'une trace forgée ne diffère d'une
+/// trace honnête QUE par l'égalité de liaison ciblée.
+///
+/// Contrairement au côte-à-côte — qui a DEUX constructeurs quasi identiques
+/// (`build_monolith_trace_seeded` et `build_monolith_trace_forge`), un piège de
+/// maintenance : une correction sur l'un peut manquer l'autre — la forge est ici
+/// un PARAMÈTRE du constructeur unique.
+///
+/// Ne figurent ici que les forges SANS reconstruction d'arbre : celles qui
+/// altèrent le commitment ou la feuille changent la racine, ce qui ferait mordre
+/// la liaison `root_in` au lieu de la liaison visée — il faut alors rebâtir
+/// l'arbre pour que les deux entrées restent sur la MÊME racine. Reste à porter.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub(crate) enum SegForge {
+    /// Trace honnête.
+    #[default]
+    Aucune,
+    /// Le bloc nk dérive d'un secret `s' ≠ s` (le bloc owner garde `s`). owner et
+    /// nk restent INDIVIDUELLEMENT corrects pour leur propre secret et toute la
+    /// cascade est honnête : SEULE la liaison secret owner↔nk peut mordre. Sans
+    /// elle, un prouveur dérive owner d'une note qu'il possède et nk d'une AUTRE
+    /// → nullifier arbitraire → double-dépense.
+    SecretNk(Digest),
+    /// `nk` CONSOMMÉ dans le nullifier de l'entrée `i` ≠ nk produit par la clé
+    /// (porteuse `NK_C` honnête). Aval : le nullifier change, rien d'autre.
+    NkConsomme(usize, Digest),
+    /// `rho` CONSOMMÉ dans le NULLIFIER de l'entrée `i` ≠ rho de la porteuse
+    /// (côté commitment intact). Aval : le nullifier change.
+    RhoNullifier(usize, Digest),
+    /// `cm` CONSOMMÉ dans le NULLIFIER de l'entrée `i` ≠ cm produit par le
+    /// commitment. C'est LA liaison anti-double-dépense : sans elle un nullifier
+    /// peut être calculé sur un autre commitment que celui réellement dépensé.
+    CmNullifier(usize, Digest),
+}
+
 /// Construit la trace segmentée avec un aléa de blinding tiré d'`OsRng`
 /// (production). Voir `build_seg_trace_seeded` pour la couture de test.
 pub(crate) fn build_seg_trace(w: &MonolithWitness) -> TraceTable<BaseElement> {
     build_seg_trace_seeded(w, &mut rand::rngs::OsRng)
+}
+
+/// Trace segmentée FORGÉE (tests de soundness) : aléa de production, mais une
+/// liaison sabotée.
+pub(crate) fn build_seg_trace_forge(
+    w: &MonolithWitness,
+    forge: SegForge,
+) -> TraceTable<BaseElement> {
+    build_seg_trace_interne(w, &mut rand::rngs::OsRng, forge)
 }
 
 /// Construit la trace segmentée du monolithe 2-in/2-out à partir du témoin `w`.
@@ -89,6 +135,16 @@ pub(crate) fn build_seg_trace_seeded(
     w: &MonolithWitness,
     rng: &mut impl rand::Rng,
 ) -> TraceTable<BaseElement> {
+    build_seg_trace_interne(w, rng, SegForge::Aucune)
+}
+
+/// Cœur du constructeur, paramétré par le point de forge (`SegForge::Aucune` pour
+/// une trace honnête). UN seul chemin de code pour l'honnête et le forgé.
+fn build_seg_trace_interne(
+    w: &MonolithWitness,
+    rng: &mut impl rand::Rng,
+    forge: SegForge,
+) -> TraceTable<BaseElement> {
     let depth = w.inputs[0].path.len();
     assert_eq!(
         depth,
@@ -102,7 +158,13 @@ pub(crate) fn build_seg_trace_seeded(
     // --- Segment KEY : owner ∧ nk du MÊME secret. ---
     let key_i = 0;
     debug_assert_eq!(schedule[key_i], SegKind::Key);
-    let kr = key_rows(w.secret.as_felts());
+    // Forge SecretNk : le bloc nk part d'un secret DIFFÉRENT. La porteuse NK_C et
+    // le nullifier consomment ensuite ce nk = H_nk(s') en cascade HONNÊTE — seule
+    // la liaison secret owner↔nk peut donc mordre.
+    let kr = match forge {
+        SegForge::SecretNk(s_nk) => key_rows_split(w.secret.as_felts(), &s_nk.0),
+        _ => key_rows(w.secret.as_felts()),
+    };
     // Le calcul de clé occupe `KEY_USED_ROWS` (8) des `KEY_LEN` (16) lignes du
     // segment ; le reste est inactif (voir seg_layout : alignement sur le cycle 16).
     debug_assert_eq!(kr.len(), KEY_USED_ROWS);
@@ -149,10 +211,24 @@ pub(crate) fn build_seg_trace_seeded(
                 let leaf_d = read_digest(&leaf_rows, leaf_rows.len() - 1, RATE_START);
 
                 // nullifier = H_Nullifier(nk ‖ rho ‖ cm) — lignes 40..56.
+                // Points de forge : chacun réécrit UN opérande consommé ici, en
+                // laissant la porteuse correspondante (NK_C / RHO_C / CM_C) honnête.
+                let nk_nf = match forge {
+                    SegForge::NkConsomme(fi, a) if fi == n_in => a,
+                    _ => nk,
+                };
+                let rho_nf = match forge {
+                    SegForge::RhoNullifier(fi, a) if fi == n_in => a,
+                    _ => note.rho,
+                };
+                let cm_nf = match forge {
+                    SegForge::CmNullifier(fi, a) if fi == n_in => a,
+                    _ => cm,
+                };
                 let mut nf_payload = Vec::with_capacity(3 * DIGEST_FELTS);
-                nf_payload.extend_from_slice(&nk.0);
-                nf_payload.extend_from_slice(&note.rho.0);
-                nf_payload.extend_from_slice(&cm.0);
+                nf_payload.extend_from_slice(&nk_nf.0);
+                nf_payload.extend_from_slice(&rho_nf.0);
+                nf_payload.extend_from_slice(&cm_nf.0);
                 let nf_rows = sponge_rows_for(Domain::Nullifier, &nf_payload);
                 debug_assert_eq!(nf_rows.len(), NF_ROWS_END - NF_ROWS_START);
                 seg_copy(&mut rows, &nf_rows, start + NF_ROWS_START, SEG_SPONGE_OFF);
