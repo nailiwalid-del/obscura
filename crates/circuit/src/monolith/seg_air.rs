@@ -1674,6 +1674,67 @@ mod tests {
         );
     }
 
+    /// Les cellules `PAD_ZERO*` des préambules de MERGE sont bien épinglées, à la
+    /// bonne ligne ABSOLUE de leur segment.
+    ///
+    /// Motivation : le roundtrip honnête ne prouve RIEN ici — les `PAD_ZERO` y
+    /// valent zéro naturellement, donc une assertion manquante passerait inaperçue
+    /// et laisserait un prouveur absorber du junk (`node' = H(l ‖ r ‖ v ‖ 0…)`,
+    /// violation de « hash jamais tronqué »). La forge `PaddingCommitment` couvre le
+    /// mécanisme pour `m = 32` ; ce test couvre la borne `m = 12` du merge, dont le
+    /// nombre de cellules de padding diffère (12..16, soit 4 — contre 17..32 pour le
+    /// commitment).
+    ///
+    /// Test DIRECT sur les assertions produites, sans prouveur : il vérifie les
+    /// cellules exactes, là où une forge se contenterait de constater « quelque
+    /// chose rejette ».
+    #[test]
+    fn padding_des_merges_epingle_aux_bonnes_lignes() {
+        use crate::sponge::locate;
+
+        let depth = 2usize;
+        // Un préambule de merge isolé, à la ligne de début du 1er segment d'entrée.
+        let seg = seg_start(1, depth);
+        let mut a: Vec<Assertion<BaseElement>> = Vec::new();
+        push_preamble(&mut a, seg, SEG_MERKLE_OFF, 12, Domain::MerkleNode.tag() as u64, 8);
+
+        // Cellules de padding attendues : `logical = 3 + 8 + 1 = 12` jusqu'à la
+        // frontière de bloc `ceil(12/8)·8 = 16`.
+        let attendues: Vec<(usize, usize)> = (12..16)
+            .map(|i| {
+                let (row, col) = locate(i);
+                (SEG_MERKLE_OFF + col, seg + row)
+            })
+            .collect();
+        assert_eq!(attendues.len(), 4, "m=12 → 4 cellules PAD_ZERO");
+
+        for (col, row) in attendues {
+            let trouvee = a.iter().any(|assertion| {
+                assertion.column() == col
+                    && assertion.first_step() == row
+                    && assertion.values() == [BaseElement::ZERO]
+            });
+            assert!(
+                trouvee,
+                "cellule PAD_ZERO non épinglée à (col {col}, ligne {row}) — un \
+                 prouveur pourrait y absorber du junk"
+            );
+        }
+
+        // Et le décalage par segment est réel : le MÊME préambule au segment suivant
+        // vise des lignes différentes.
+        let seg2 = seg_start(2, depth);
+        assert_ne!(seg, seg2);
+        let mut b: Vec<Assertion<BaseElement>> = Vec::new();
+        push_preamble(&mut b, seg2, SEG_MERKLE_OFF, 12, Domain::MerkleNode.tag() as u64, 8);
+        let lignes_a: Vec<usize> = a.iter().map(|x| x.first_step()).collect();
+        let lignes_b: Vec<usize> = b.iter().map(|x| x.first_step()).collect();
+        assert_ne!(
+            lignes_a, lignes_b,
+            "les préambules des deux entrées doivent viser des lignes DISTINCTES"
+        );
+    }
+
     /// ORACLE DE PARITÉ — le test que la construction côte à côte rend possible :
     /// le MÊME témoin doit produire les MÊMES publics par les deux monolithes.
     ///
