@@ -12,6 +12,12 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
 ## État
 
 - `crates/crypto` : hash, kem, sig, aead — testés
+- `crates/net` : **transport chiffré PQ** (phase 4, brique 1/4) — handshake hybride
+  3 passes avec **forward secrecy** (éphémères jetés) et **masquage d'identité**
+  (identités chiffrées sur le fil), machine à états en typestate, canal anti-rejeu
+  par compteur de séquence en AAD. Réutilise kem/sig/aead sans primitive nouvelle.
+  ⚠️ L'identité du RÉPONDEUR reste révélée à un MitM actif (inhérent au rôle ;
+  fermable par un motif Noise-IK pour les sorties) — cf. spec transport-pq.
 - `crates/ledger` : notes engagées, nullifiers, Merkle (BLAKE3, prof. 16), tx, validation — testés
 - `crates/circuit` : circuit STARK **monolithe** (`monolith/`) — P1–P7 d'une tx
   2-in/2-out en UNE SEULE trace/preuve, publics minimaux (root, nullifiers,
@@ -54,18 +60,22 @@ avant sophistication crypto**. Reste :
    « arbre plein » ; racine identique à `ProvedMerkleTree`, test différentiel) ;
    **persistance disque faite** (`ProvedLedgerState::{to_bytes, from_bytes, save,
    load}` — dump canonique frontier+nullifiers+racines, écriture atomique
-   tmp+rename). Ne reste que les tests key-privacy IK-CCA (**phase 4**) → #7
-   effectivement bouclé pour la phase 3.
+   tmp+rename) ; **test distingueur key-privacy fait** (`ledger::proved_wallet` :
+   invariance de longueur, aucun fragment de clé en clair, chiffrement randomisé,
+   et aucun octet ne sépare deux destinataires sur 24 échantillons — RED vérifié
+   en injectant une empreinte). ⚠️ Portée : non-fuite STRUCTURELLE, PAS une preuve
+   d'IK-CCA (qui repose sur X25519/ANO-CCA Kyber, cf. PROTOCOL.md). **#7 bouclé.**
 2. **3z-c — généralisation M-in/N-out**. La 1re tranche **3z-c1 (monolithe
-   segmenté) est LIVRÉE** sur la branche `3z-c1-monolithe-segmente` (pas encore
-   fusionnée) : trace en segments séquentiels `[KEY][IN][IN][OUT][OUT]`
-   (`monolith/seg_{layout,trace,air}.rs`), largeur **92 vs 201**, **209 slots de
-   contraintes vs 263**, preuve **67,9 Kio vs 89,3 (−24 %)** à profondeur 32 pour
-   ×1,41 en génération et ×1,46 en vérification (4,1 ms). `tx.rs` a basculé ;
-   l'API et tous les tests préexistants sont inchangés. Le côte-à-côte est
-   conservé pour l'**oracle de parité** (mêmes publics, même témoin).
+   segmenté) est LIVRÉE et fusionnée** : trace en segments séquentiels
+   `[KEY][IN][IN][OUT][OUT]` (`monolith/seg_{layout,trace,air}.rs`), largeur
+   **92 vs 201**, **209 slots de contraintes vs 263**, preuve **67,9 Kio vs 89,3
+   (−24 %)** à profondeur 32 pour ×1,41 en génération et ×1,46 en vérification
+   (4,1 ms). `tx.rs` a basculé ; l'API et tous les tests préexistants sont
+   inchangés. Le côte-à-côte est conservé pour l'**oracle de parité** (mêmes
+   publics, même témoin) et sera supprimé avec 3z-c2.
    Reste : **3z-c2** (variabilité M/N ≤ MAX — la couture `SegKind`/schedule est en
-   place), plus 2 forges non portées (`PaddingMerkle`, `VaccInitial` fine).
+   place), plus 2 forges non portées (`PaddingMerkle`, `VaccInitial` fine) et les
+   forges à reconstruction d'arbre qui restent en profondeur 2.
    ⚠️ Piège identifié à ne pas rejouer : mutualiser des colonnes peut SUPPRIMER
    une garantie que la redondance offrait gratuitement (cf. « Liaison de racine »
    dans STARK_STATEMENT.md) — auditer chaque fusion sous cet angle.
@@ -84,7 +94,8 @@ Puis phase 4 (P2P PQ + Dandelion++ + test key privacy) et phase 5 (nœud/wallet/
 - Versioning d'algos partout : byte 0x01 = round-3 en tête des sérialisations
   KEM/sig ; la migration FIPS 203/204 = nouvelle version 0x02, PAS un simple import
 - spend_pk publié = fuite acceptée UNIQUEMENT en mode transparent dev
-- Key privacy (IK-CCA) exigée pour enc_note — test distingueur à écrire en phase 4
+- Key privacy (IK-CCA) exigée pour enc_note — test distingueur ÉCRIT (non-fuite
+  structurelle ; la réduction IK-CCA elle-même reste un argument, cf. PROTOCOL.md)
 - Hash consensus (BLAKE3‖SHA3) ≠ hash prouvé (Rescue-Prime, migration avec le circuit)
 
 ## Notes de build

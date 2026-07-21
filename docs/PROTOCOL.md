@@ -68,6 +68,16 @@ Construction actuelle et arguments :
 - Kyber768 avec rejet implicite est réputé anonyme (ANO-CCA) dans la littérature
   post-Round-3 — à re-vérifier sur ML-KEM final lors de la migration ;
 - l'AEAD cascade ne contient aucun identifiant de clé ; `aad = commitment` seulement ;
+
+Vérification côté implémentation (`ledger::proved_wallet`, tests `key_privacy_*`) :
+les arguments ci-dessus sont THÉORIQUES et ne couvrent pas les fuites qu'une
+implémentation introduit réellement. Quatre tests ferment cette classe : invariance
+de longueur, absence de tout fragment de clé publique en clair, chiffrement
+randomisé, et — jeu du distingueur — aucun octet du chiffré n'est constant par
+destinataire et différent entre deux destinataires (24 échantillons chacun, même
+note et même commitment, seul le destinataire varie). Ils établissent la non-fuite
+STRUCTURELLE ; ils n'établissent PAS IK-CCA, qui reste adossé aux arguments
+ci-dessus.
 - le scan se fait par essai de déchiffrement, identique pour toutes les sorties.
 
 Test à écrire (phase réseau) : un distingueur avec 2 adresses candidates et une
