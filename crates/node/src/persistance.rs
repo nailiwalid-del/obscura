@@ -5,12 +5,32 @@
 //! reconnaissent pas, et la réputation accumulée est effacée). C'est aussi une
 //! aubaine pour un nœud malveillant, qui se blanchirait en redémarrant.
 //!
-//! Deux fichiers dans un répertoire de données :
+//! Trois fichiers dans un répertoire de données :
 //!
 //! | fichier | contenu | sensibilité |
 //! |---|---|---|
 //! | `identite.cle` | paire de signature hybride | **SECRET** |
 //! | `etat.bin` | frontier + nullifiers + racines récentes | public |
+//! | `historique.bin` | sorties ordonnées — **archiviste seulement** | public |
+//!
+//! # Pourquoi l'historique est un fichier SÉPARÉ
+//!
+//! L'archivage est un rôle d'opérateur, pas une obligation de consensus : un nœud qui
+//! n'archive pas est valide (cf. `ledger::historique`). L'embarquer dans `etat.bin`
+//! aurait imposé plusieurs Gio à tous les nœuds et changé `VERSION_ETAT`.
+//!
+//! Deux fichiers = deux écritures, donc un crash peut les laisser désaccordés.
+//! [`Donnees::enregistrer_etat`] écrit **l'historique D'ABORD, l'état ensuite**, et ce
+//! n'est pas indifférent : si le crash tombe entre les deux, l'archive est en AVANCE
+//! d'un bloc — un écart nommé, dont le contenu excédentaire existe encore. L'ordre
+//! inverse aurait laissé l'état en avance, c'est-à-dire une archive à qui il manque des
+//! sorties que PLUS AUCUN état ne peut reproduire (la frontier ne garde que le bord
+//! droit).
+//!
+//! Dans les deux cas, aucune réparation muette : le désaccord remonte en erreur
+//! (`HistoriqueDesaccorde`), l'appelant le journalise et tourne en mode DÉGRADÉ, sans
+//! archive. Le fichier n'est ni tronqué ni effacé — le bloc en trop a peut-être été
+//! relayé à tout le réseau.
 //!
 //! # Le fichier d'identité est du matériel de clé
 //!
@@ -24,12 +44,15 @@
 //! prototype ; c'est écrit ici plutôt que laissé à supposer.
 
 use crypto::sig::SigKeypair;
+use ledger::bloc::Bloc;
+use ledger::historique::HistoriqueSorties;
 use ledger::proved_state::ProvedLedgerState;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 const FICHIER_IDENTITE: &str = "identite.cle";
 const FICHIER_ETAT: &str = "etat.bin";
+const FICHIER_HISTORIQUE: &str = "historique.bin";
 
 #[derive(Debug, thiserror::Error)]
 pub enum PersistanceError {
@@ -39,6 +62,37 @@ pub enum PersistanceError {
     IdentiteInvalide,
     #[error("fichier d'état illisible ou corrompu : {0}")]
     EtatInvalide(String),
+    #[error("fichier de genèse illisible ou corrompu : {0}")]
+    GeneseInvalide(String),
+    #[error("genèse inapplicable : {0}")]
+    GeneseRefusee(String),
+    #[error("fichier d'historique illisible ou corrompu : {0}")]
+    HistoriqueInvalide(String),
+    /// L'archive et l'état ne racontent pas la même chaîne.
+    ///
+    /// Erreur DISTINCTE d'une corruption : les deux fichiers sont individuellement bien
+    /// formés, c'est leur accord qui manque. La distinction compte pour l'opérateur —
+    /// « corrompu » invite à effacer, « désaccordé » invite à comprendre lequel des deux
+    /// est en avance avant de décider.
+    #[error("archive désaccordée avec l'état : {0} — mode DÉGRADÉ (sans archive), rien n'est réparé")]
+    HistoriqueDesaccorde(String),
+    /// Le nœud doit archiver mais l'état est déjà à une hauteur non nulle sans archive.
+    #[error("archivage demandé sur un état déjà à la hauteur {hauteur} sans fichier d'historique : le préfixe est irrécupérable")]
+    HistoriqueAbsent { hauteur: u64 },
+}
+
+/// Charge un bloc de GENÈSE depuis un fichier (octets de `Bloc::to_bytes`).
+///
+/// Passe par `Bloc::from_bytes`, c'est-à-dire le décodeur BORNÉ du réseau : un fichier
+/// de genèse vient d'un tiers (l'opérateur de la chaîne qu'on rejoint) et n'est pas
+/// plus digne de confiance qu'un octet arrivé par socket.
+///
+/// ⚠️ Aucune variante « charger ou créer » : une genèse absente doit faire ÉCHOUER le
+/// démarrage. Se rabattre en silence sur la genèse vide donnerait un nœud d'apparence
+/// saine, à la hauteur 0, refusant tous les blocs — indiscernable d'un nœud neuf.
+pub fn charger_genese(chemin: impl AsRef<Path>) -> Result<Bloc, PersistanceError> {
+    let octets = fs::read(chemin.as_ref())?;
+    Bloc::from_bytes(&octets).map_err(|e| PersistanceError::GeneseInvalide(e.to_string()))
 }
 
 /// Répertoire de données d'un nœud.
@@ -76,17 +130,96 @@ impl Donnees {
         Ok((kp, true))
     }
 
-    /// Charge l'état, ou en crée un neuf (profondeur consensus) s'il n'existe pas.
-    pub fn charger_ou_creer_etat(&self) -> Result<ProvedLedgerState, PersistanceError> {
+    /// Charge l'état, ou l'AMORCE sur `genese` s'il n'existe pas encore.
+    ///
+    /// La genèse est un paramètre EXPLICITE : c'est elle qui fixe la monnaie initiale
+    /// et la tête de départ. Un nœud ne peut pas la deviner, et en inventer une
+    /// reviendrait à démarrer une chaîne à soi tout en croyant rejoindre celle des
+    /// autres.
+    ///
+    /// ⚠️ **Limite consignée** : quand le fichier d'état EXISTE, il est chargé tel
+    /// quel et `genese` est ignorée — l'état ne mémorise pas sur quelle genèse il a
+    /// été amorcé. Repartir avec une autre genèse sur un répertoire de données déjà
+    /// peuplé ne produit donc aucune erreur ; le désaccord n'apparaîtra qu'au premier
+    /// bloc refusé. Fermer ce trou demanderait d'ajouter l'identifiant de genèse au
+    /// dump (nouvelle version de format) — c'est écrit ici plutôt que laissé à
+    /// supposer.
+    pub fn charger_ou_amorcer_etat(
+        &self,
+        genese: &Bloc,
+    ) -> Result<ProvedLedgerState, PersistanceError> {
         let chemin = self.chemin(FICHIER_ETAT);
         if !chemin.exists() {
-            return Ok(ProvedLedgerState::new());
+            return ProvedLedgerState::depuis_genese(genese)
+                .map_err(|e| PersistanceError::GeneseRefusee(e.to_string()));
         }
         ProvedLedgerState::load(&chemin).map_err(|e| PersistanceError::EtatInvalide(e.to_string()))
     }
 
-    /// Enregistre l'état (écriture atomique, cf. `ProvedLedgerState::save`).
+    /// Charge l'état en ARCHIVANT l'historique des sorties, ou l'amorce sur `genese`.
+    ///
+    /// Trois cas, et aucun n'est silencieux :
+    ///
+    /// - **répertoire neuf** : l'état est amorcé archivant, la genèse devient la
+    ///   première tranche de l'historique ;
+    /// - **répertoire peuplé, archive présente et concordante** : elle est adoptée ;
+    /// - **archive absente ou désaccordée** : erreur. L'appelant journalise et tourne
+    ///   en mode DÉGRADÉ (sans archive). On ne fabrique JAMAIS une archive partielle à
+    ///   partir de l'état : elle démarrerait à la hauteur courante, servirait des index
+    ///   décalés de tout le préfixe manquant, et rien ne le dirait à un wallet.
+    ///
+    /// Un état à la hauteur 0 sans fichier d'historique est le seul cas rattrapable :
+    /// l'historique de la genèse se reconstruit depuis la genèse elle-même.
+    pub fn charger_ou_amorcer_archive(
+        &self,
+        genese: &Bloc,
+    ) -> Result<ProvedLedgerState, PersistanceError> {
+        let chemin_etat = self.chemin(FICHIER_ETAT);
+        if !chemin_etat.exists() {
+            return ProvedLedgerState::depuis_genese_archivant(genese)
+                .map_err(|e| PersistanceError::GeneseRefusee(e.to_string()));
+        }
+        let mut etat = ProvedLedgerState::load(&chemin_etat)
+            .map_err(|e| PersistanceError::EtatInvalide(e.to_string()))?;
+
+        let chemin_hist = self.chemin(FICHIER_HISTORIQUE);
+        if !chemin_hist.exists() {
+            if etat.hauteur() == 0 {
+                // Rien n'a encore été scellé : l'historique de la genèse se
+                // reconstruit exactement, sans rien inventer.
+                let neuf = ProvedLedgerState::depuis_genese_archivant(genese)
+                    .map_err(|e| PersistanceError::GeneseRefusee(e.to_string()))?;
+                let hist = neuf
+                    .historique()
+                    .expect("amorçage archivant")
+                    .to_bytes();
+                let hist = HistoriqueSorties::from_bytes(&hist)
+                    .map_err(|e| PersistanceError::HistoriqueInvalide(e.to_string()))?;
+                etat.adopter_historique(hist)
+                    .map_err(|e| PersistanceError::HistoriqueDesaccorde(e.to_string()))?;
+                return Ok(etat);
+            }
+            return Err(PersistanceError::HistoriqueAbsent {
+                hauteur: etat.hauteur(),
+            });
+        }
+
+        let hist = HistoriqueSorties::load(&chemin_hist)
+            .map_err(|e| PersistanceError::HistoriqueInvalide(e.to_string()))?;
+        etat.adopter_historique(hist)
+            .map_err(|e| PersistanceError::HistoriqueDesaccorde(e.to_string()))?;
+        Ok(etat)
+    }
+
+    /// Enregistre l'état (écriture atomique, cf. `ProvedLedgerState::save`), et
+    /// l'historique AVANT lui si ce nœud archive.
+    ///
+    /// L'ordre est délibéré — voir la tête de module : un crash entre les deux doit
+    /// laisser l'archive EN AVANCE (récupérable) plutôt qu'en retard (irrécupérable).
     pub fn enregistrer_etat(&self, etat: &ProvedLedgerState) -> Result<(), PersistanceError> {
+        if let Some(h) = etat.historique() {
+            h.save(&self.chemin(FICHIER_HISTORIQUE))?;
+        }
         etat.save(&self.chemin(FICHIER_ETAT))?;
         Ok(())
     }
@@ -159,32 +292,222 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// L'état survit lui aussi : les nullifiers déjà dépensés restent connus, sinon
-    /// un redémarrage rouvrirait la porte aux double-dépenses déjà rejetées.
+    fn digest(seed: u64) -> proved_hash::digest::Digest {
+        proved_hash::digest::Digest(core::array::from_fn(|i| {
+            proved_hash::felt::Felt::from_canonical_u64(seed + i as u64).unwrap()
+        }))
+    }
+
+    /// L'état survit lui aussi : la monnaie de la genèse et les racines connues
+    /// restent en place, sinon un redémarrage rouvrirait la porte aux double-dépenses
+    /// déjà rejetées.
     #[test]
     fn etat_survit_au_redemarrage() {
-        use proved_hash::digest::Digest;
-        use proved_hash::felt::Felt;
-
         let dir = repertoire_temporaire("etat");
         let d = Donnees::ouvrir(&dir).unwrap();
 
-        let cm = Digest(core::array::from_fn(|i| {
-            Felt::from_canonical_u64(1 + i as u64).unwrap()
-        }));
-        let mut etat = d.charger_ou_creer_etat().unwrap();
-        etat.mint(&cm).unwrap();
+        let genese =
+            Bloc::genese_avec(vec![ledger::proved_wallet::emission_factice(&digest(1))]).unwrap();
+        let etat = d.charger_ou_amorcer_etat(&genese).unwrap();
         let racine = etat.tree.root();
         let taille = etat.tree.len();
+        assert_eq!(taille, 1, "la genèse a bien émis sa note");
         d.enregistrer_etat(&etat).unwrap();
 
-        let recharge = d.charger_ou_creer_etat().unwrap();
+        // Au redémarrage la genèse est passée à nouveau — mais c'est le FICHIER qui
+        // fait foi : ré-amorcer effacerait la chaîne accumulée depuis.
+        let recharge = d.charger_ou_amorcer_etat(&genese).unwrap();
         assert_eq!(recharge.tree.root(), racine, "même racine après redémarrage");
         assert_eq!(recharge.tree.len(), taille);
+        assert_eq!(recharge.tete(), etat.tete(), "même tête de chaîne");
         assert!(
             recharge.anchor_connu(&racine),
             "la fenêtre de racines doit survivre : sinon les tx en vol seraient rejetées"
         );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// DEUX GENÈSES DIFFÉRENTES ⇒ DEUX TÊTES DIFFÉRENTES, à hauteur égale.
+    ///
+    /// C'est ce qui rend une erreur d'amorçage détectable au lieu de silencieuse : un
+    /// nœud parti de la mauvaise genèse refuse tout, et sa tête le dit. Deux
+    /// opérateurs comparent une ligne (l'identifiant imprimé au démarrage) plutôt que
+    /// de chercher pourquoi « rien ne se passe ».
+    #[test]
+    fn deux_geneses_deux_tetes() {
+        let dir_a = repertoire_temporaire("genese_a");
+        let dir_b = repertoire_temporaire("genese_b");
+        let (a, b) = (
+            Donnees::ouvrir(&dir_a).unwrap(),
+            Donnees::ouvrir(&dir_b).unwrap(),
+        );
+
+        let g1 =
+            Bloc::genese_avec(vec![ledger::proved_wallet::emission_factice(&digest(1))]).unwrap();
+        let g2 =
+            Bloc::genese_avec(vec![ledger::proved_wallet::emission_factice(&digest(2))]).unwrap();
+
+        let ea = a.charger_ou_amorcer_etat(&g1).unwrap();
+        let eb = b.charger_ou_amorcer_etat(&g2).unwrap();
+        assert_eq!(ea.hauteur(), eb.hauteur(), "tous deux à la hauteur 0");
+        assert_ne!(
+            ea.tete(),
+            eb.tete(),
+            "des genèses différentes doivent produire des têtes différentes"
+        );
+
+        // Même genèse des deux côtés : accord parfait.
+        let dir_c = repertoire_temporaire("genese_c");
+        let ec = Donnees::ouvrir(&dir_c)
+            .unwrap()
+            .charger_ou_amorcer_etat(&g1)
+            .unwrap();
+        assert_eq!(ec.tete(), ea.tete());
+        assert_eq!(ec.tree.root(), ea.tree.root());
+
+        for d in [&dir_a, &dir_b, &dir_c] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    /// Un fichier de genèse ABSENT ou CORROMPU est signalé, jamais remplacé par la
+    /// genèse vide : un repli silencieux donnerait un nœud d'apparence saine sur une
+    /// chaîne qui n'est pas celle qu'on croyait rejoindre.
+    #[test]
+    fn genese_absente_ou_corrompue_signalee() {
+        let dir = repertoire_temporaire("genese_fichier");
+        fs::create_dir_all(&dir).unwrap();
+
+        let absent = dir.join("introuvable.genese");
+        assert!(matches!(
+            charger_genese(&absent),
+            Err(PersistanceError::Io(_))
+        ));
+
+        let corrompu = dir.join("corrompu.genese");
+        fs::write(&corrompu, b"pas un bloc").unwrap();
+        assert!(matches!(
+            charger_genese(&corrompu),
+            Err(PersistanceError::GeneseInvalide(_))
+        ));
+
+        // Aller-retour d'une vraie genèse par fichier : c'est l'artefact que deux
+        // opérateurs s'échangent.
+        let g =
+            Bloc::genese_avec(vec![ledger::proved_wallet::emission_factice(&digest(9))]).unwrap();
+        let chemin = dir.join("bonne.genese");
+        fs::write(&chemin, g.to_bytes()).unwrap();
+        let relue = charger_genese(&chemin).expect("genèse relue");
+        assert_eq!(relue.id(), g.id(), "le fichier doit désigner LA MÊME chaîne");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// L'ARCHIVE SURVIT AU REDÉMARRAGE, dans son propre fichier.
+    ///
+    /// Sans cela, un nœud archiviste redémarré repartirait avec une archive vide (ou
+    /// pire, une archive commençant à la hauteur courante) : il servirait des index
+    /// décalés de tout le préfixe manquant, et un wallet obtiendrait des chemins de
+    /// Merkle faux sans qu'aucune erreur ne le dise.
+    #[test]
+    fn archive_survit_au_redemarrage() {
+        let dir = repertoire_temporaire("archive");
+        let d = Donnees::ouvrir(&dir).unwrap();
+
+        let genese = Bloc::genese_avec(vec![
+            ledger::proved_wallet::emission_factice(&digest(1)),
+            ledger::proved_wallet::emission_factice(&digest(2)),
+        ])
+        .unwrap();
+        let mut etat = d.charger_ou_amorcer_archive(&genese).unwrap();
+        assert_eq!(etat.historique().unwrap().len(), 2);
+        let bloc = Bloc::sceller(&etat.tete(), 1, Vec::new());
+        etat.appliquer_bloc(&bloc).unwrap();
+        d.enregistrer_etat(&etat).unwrap();
+
+        let recharge = d.charger_ou_amorcer_archive(&genese).unwrap();
+        let h = recharge.historique().expect("archive rechargée");
+        assert_eq!(h.hauteur_max(), Some(1), "la hauteur servie survit");
+        assert_eq!(h.len(), 2);
+        assert_eq!(
+            h.sorties_du_bloc(0).unwrap()[0].commitment.to_bytes(),
+            digest(1).to_bytes(),
+            "et l'ORDRE des feuilles avec elle"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// UN DÉSACCORD ARCHIVE/ÉTAT EST SIGNALÉ, ET RIEN N'EST RÉPARÉ.
+    ///
+    /// Le cas simulé est celui d'un crash entre les deux écritures : l'archive reste à
+    /// la hauteur 0 alors que l'état est passé à 1. Tronquer ou compléter en silence
+    /// serait le pire choix — les sorties d'un bloc ne se reconstruisent depuis aucun
+    /// état (la frontier ne garde que le bord droit), et le bloc en trop a peut-être
+    /// été relayé à tout le réseau. Le fichier doit donc être INTACT après l'échec.
+    #[test]
+    fn archive_desaccordee_est_signalee_et_le_fichier_reste_intact() {
+        let dir = repertoire_temporaire("archive_desaccord");
+        let d = Donnees::ouvrir(&dir).unwrap();
+
+        let genese =
+            Bloc::genese_avec(vec![ledger::proved_wallet::emission_factice(&digest(1))]).unwrap();
+        let mut etat = d.charger_ou_amorcer_archive(&genese).unwrap();
+        d.enregistrer_etat(&etat).unwrap();
+        let archive_avant = fs::read(dir.join(FICHIER_HISTORIQUE)).unwrap();
+
+        // L'état avance d'un bloc et est sauvegardé SEUL — exactement ce qu'un crash
+        // entre les deux écritures produirait dans le mauvais sens.
+        let bloc = Bloc::sceller(&etat.tete(), 1, Vec::new());
+        etat.appliquer_bloc(&bloc).unwrap();
+        etat.save(&dir.join(FICHIER_ETAT)).unwrap();
+
+        // `ProvedLedgerState` n'est pas `Debug` : on filtre le résultat sans `unwrap_err`.
+        let rendu = d.charger_ou_amorcer_archive(&genese);
+        assert!(
+            matches!(rendu, Err(PersistanceError::HistoriqueDesaccorde(_))),
+            "un écart doit être NOMMÉ, pas rattrapé"
+        );
+        assert_eq!(
+            fs::read(dir.join(FICHIER_HISTORIQUE)).unwrap(),
+            archive_avant,
+            "l'échec ne doit ni tronquer ni réécrire l'archive"
+        );
+
+        // Et le nœud reste utilisable SANS archive : le rôle est optionnel.
+        let sobre = d.charger_ou_amorcer_etat(&genese).unwrap();
+        assert_eq!(sobre.hauteur(), 1);
+        assert!(sobre.historique().is_none());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Demander l'archivage sur un état DÉJÀ AVANCÉ et sans fichier d'historique
+    /// échoue, au lieu de fabriquer une archive qui commencerait au milieu.
+    ///
+    /// Une archive partielle est le pire des deux mondes : elle a l'air de fonctionner,
+    /// et tous les index qu'elle sert sont décalés du préfixe manquant.
+    #[test]
+    fn archivage_active_trop_tard_est_refuse() {
+        let dir = repertoire_temporaire("archive_tardive");
+        let d = Donnees::ouvrir(&dir).unwrap();
+
+        let genese =
+            Bloc::genese_avec(vec![ledger::proved_wallet::emission_factice(&digest(1))]).unwrap();
+        let mut etat = d.charger_ou_amorcer_etat(&genese).unwrap(); // SANS archive
+        let bloc = Bloc::sceller(&etat.tete(), 1, Vec::new());
+        etat.appliquer_bloc(&bloc).unwrap();
+        d.enregistrer_etat(&etat).unwrap();
+        assert!(
+            !dir.join(FICHIER_HISTORIQUE).exists(),
+            "un nœud sobre n'écrit pas d'archive"
+        );
+
+        assert!(matches!(
+            d.charger_ou_amorcer_archive(&genese),
+            Err(PersistanceError::HistoriqueAbsent { hauteur: 1 })
+        ));
 
         let _ = fs::remove_dir_all(&dir);
     }

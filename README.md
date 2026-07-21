@@ -46,7 +46,7 @@ consensus : `dev-transparent` (ledger transparent, non-privé) et `dev-circuits`
 4. ✅ Réseau P2P chiffré PQ + Dandelion++ + test de key privacy
 5. ✅ Nœud, wallet CLI, testnet local multi-nœuds
 6. 🟡 **Finalité** : bloc + application atomique + convergence entre nœuds ✅ ;
-   élection du producteur et synchronisation wallet ↔ nœud ⬜
+   synchronisation wallet ↔ nœud ✅ (le wallet REÇOIT) ; élection du producteur ⬜
 
 > Phase 3 : intégrité prouvée (P1–P7, monolithe 2-in/2-out) ; depuis 3z-b1 la preuve
 > de consensus est **witness-hiding (HVZK dans le modèle de l'oracle aléatoire)** —
@@ -65,15 +65,32 @@ ordonné, chaîné à son parent), le bloc s'applique **atomiquement**, et deux 
 acceptent la même chaîne convergent vers la même racine de Merkle — vérifié sur de
 vraies sockets (`crates/node/tests/finalite.rs`).
 
-Restent deux manques, tous deux consignés en détail dans docs/THREAT_MODEL.md :
+Le wallet SAIT désormais **recevoir** : `obscura-wallet synchroniser --noeud <ip:port>`
+rejoue l'historique des sorties servi par un nœud archiviste, retrouve les index des
+notes, découvre les paiements reçus et récupère la monnaie rendue — le cycle payer →
+sceller → recevoir → redépenser est exercé de bout en bout sur de vraies sockets
+(`crates/node/tests/cycle_wallet.rs`).
+
+Restent des manques, tous consignés en détail dans docs/THREAT_MODEL.md :
 
 1. **Personne n'a autorité pour sceller.** Aucune élection de producteur n'existe :
    tout nœud lancé avec `--sceller` fabrique des blocs. L'ordre obtenu est *convenu*
    entre participants coopératifs, pas *défendu* contre un adversaire. Testnet local
    uniquement.
-2. **Un wallet peut payer, pas recevoir.** Il lui faut rejouer l'historique des
-   commitments pour connaître ses index ; le nœud n'en conserve pas la trace
-   (`MerkleFrontier` = bord droit seulement) et n'a rien à servir.
+2. **Le nœud qui sert l'historique en apprend long, et peut MENTIR PAR OMISSION.** Il
+   voit l'IP du wallet, la CADENCE de ses demandes et sa POSITION de chaîne ; et taire
+   une sortie donne une chaîne parfaitement close dont la racine est celle qu'il annonce
+   — le paiement omis reste invisible. S'en prémunir exige des identifiants de blocs
+   venus d'AILLEURS (plusieurs nœuds, point de contrôle hors bande). Servir l'historique
+   est en outre un rôle d'ARCHIVISTE coûteux et optionnel (`obscura-node --archiver`,
+   ≈1,4 Kio/sortie, jamais élagué) : un nœud qui ne l'active pas est valide mais ne peut
+   pas amorcer de wallet.
+3. **La monnaie ne naît que dans la GENÈSE**, et il n'y a pas de coinbase. La règle de
+   consensus est `hauteur > 0 ⇒ aucune émission` : c'est ce qui empêche l'inflation
+   d'être *diffusée et acceptée*. Une chaîne s'amorce donc sur un bloc 0 paramétré
+   (`obscura-node --genese <fichier>`, échec franc s'il manque) et sa monnaie initiale
+   est fixée une fois pour toutes. Une récompense de producteur supposerait d'abord une
+   règle qui BORNE le montant émis — or ce montant est ce que le chiffrement cache.
 
 Et une conséquence structurelle à connaître : **aucune réorganisation n'est
 possible**. L'état est append-only de bout en bout ; supporter les réorganisations

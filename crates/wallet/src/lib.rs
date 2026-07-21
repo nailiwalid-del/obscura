@@ -48,9 +48,28 @@
 //! prouvé dans le circuit, jamais du signataire. Rien n'a donc besoin de reconnaître
 //! une clé d'intention d'une transaction à l'autre — et c'est précisément ce qui
 //! permet de ne jamais la réutiliser.
+//!
+//! # L'ancre publiée est celle d'une FRONTIÈRE DE BLOC
+//!
+//! `ProvedTx::anchor` est public et vaut la racine de l'arbre du wallet, c'est-à-dire
+//! sa position de synchronisation EXACTE. Un wallet arrêté au milieu d'un bloc
+//! publierait donc une ancre quasi unique — le même défaut que la clé d'intention
+//! stable, sous une autre forme. Le wallet mémorise le nombre de feuilles de la
+//! dernière frontière de bloc adoptée (`feuilles_ancrees`) et `construire` REFUSE de
+//! prouver contre un arbre qui a débordé de cette frontière. Voir [`synchro`].
+//!
+//! ⚠️ Portée EXACTE de la garantie : « même ancre » ne vaut qu'entre wallets
+//! synchronisés à la MÊME hauteur. Un wallet EN RETARD — arrêté à un bloc ancien
+//! encore dans la fenêtre d'ancres — publie la racine de fin de CE bloc-là :
+//! acceptée par le consensus, mais partagée seulement par les wallets arrêtés au
+//! même bloc. L'ancre partitionne donc l'ensemble d'anonymat par hauteur de
+//! dernière synchronisation, en autant de seaux que la fenêtre contient de blocs.
+//! Fuite ACCEPTÉE faute de mieux (bornée par la taille de la fenêtre) — la parade
+//! pratique est de se resynchroniser juste avant d'émettre. Cf. THREAT_MODEL.
 
 pub mod adresse;
 pub mod persistance;
+pub mod synchro;
 
 use circuit::{prove_tx, EncNote, ProvedInput, ProvedTx, SpendNote};
 use crypto::kem::{KemKeypair, KemPublicKey};
@@ -77,6 +96,11 @@ pub enum WalletError {
     SoldeInsuffisant { disponible: u64, requis: u64 },
     #[error("montant hors bornes du circuit (< 2^60)")]
     MontantHorsBornes,
+    #[error(
+        "arbre hors frontière de bloc : {feuilles} feuilles pour une ancre à {ancre} — \
+         prouver ici publierait une ancre quasi unique"
+    )]
+    ArbreHorsFrontiereDeBloc { feuilles: u64, ancre: u64 },
 }
 
 /// Une note possédée, avec sa position dans l'arbre (indispensable au chemin).
@@ -101,6 +125,17 @@ pub struct Wallet {
     /// Arbre COMPLET : le nœud n'en a qu'une frontier, incapable de produire les
     /// chemins dont les preuves ont besoin.
     arbre: ProvedMerkleTree,
+    /// Prochaine hauteur de bloc à demander — LA position de synchronisation.
+    ///
+    /// Elle n'avance que sur une tranche COMPLÈTE de la hauteur demandée, jamais sur
+    /// une `hauteur_tete` annoncée par un nœud (cf. [`synchro`]).
+    prochaine_hauteur: u64,
+    /// Nombre de feuilles à la dernière frontière de bloc adoptée.
+    ///
+    /// Séparé de `arbre.len()` À DESSEIN : la divergence des deux est exactement le cas
+    /// « arbre à moitié rempli », que [`Wallet::construire`] doit refuser plutôt que
+    /// d'en publier la racine comme ancre.
+    feuilles_ancrees: u64,
 }
 
 impl Wallet {
@@ -126,6 +161,8 @@ impl Wallet {
             reception: KemKeypair::generate(),
             notes: Vec::new(),
             arbre: ProvedMerkleTree::new(profondeur),
+            prochaine_hauteur: 0,
+            feuilles_ancrees: 0,
         }
     }
 
@@ -149,11 +186,17 @@ impl Wallet {
         &self.notes
     }
 
-    /// Observe un commitment inséré dans l'arbre du consensus.
+    /// Observe un commitment inséré dans l'arbre du consensus. **Primitive de bas
+    /// niveau** : le chemin normal est [`Wallet::synchroniser`].
     ///
     /// ⚠️ Doit être appelé pour CHAQUE commitment, dans le MÊME ordre que le nœud —
     /// sinon les index divergent et les chemins produits sont invalides. C'est le
     /// prix du partage de rôles : le wallet rejoue l'arbre que le nœud ne garde pas.
+    ///
+    /// ⚠️ **N'avance PAS l'ancre.** Rien ici ne dit qu'on se trouve sur une frontière
+    /// de bloc, et c'est justement ce qu'`observer` ne peut pas savoir. Un wallet
+    /// alimenté par cette porte seule verra `construire` refuser de prouver
+    /// (`ArbreHorsFrontiereDeBloc`) plutôt que publier une ancre à mi-bloc.
     pub fn observer(&mut self, commitment: &Digest) -> u64 {
         self.arbre.append(commitment)
     }
@@ -161,16 +204,6 @@ impl Wallet {
     /// Racine courante de l'arbre du wallet — doit coïncider avec celle du nœud.
     pub fn racine(&self) -> Digest {
         self.arbre.root()
-    }
-
-    /// Crédite directement une note possédée (émission/faucet du prototype).
-    ///
-    /// Réservé aux démonstrations et à l'amorçage : en fonctionnement normal, les
-    /// notes arrivent par `scanner`, qui vérifie qu'elles nous sont bien destinées.
-    pub fn crediter_pour_demo(&mut self, note: SpendNote, commitment: &Digest) -> u64 {
-        let index = self.observer(commitment);
-        self.notes.push(NoteDetenue { note, index });
-        index
     }
 
     /// Tente de reconnaître une sortie comme nous étant destinée, et la retient.
@@ -201,6 +234,18 @@ impl Wallet {
     ) -> Result<ProvedTx, WalletError> {
         if montant >= MONTANT_MAX || frais >= MONTANT_MAX {
             return Err(WalletError::MontantHorsBornes);
+        }
+        // L'ANCRE AVANT TOUT : `tx.anchor` est public et vaut la racine de cet arbre.
+        // S'il a débordé de la dernière frontière de bloc, cette racine n'est celle
+        // d'aucun autre wallet — elle nous désignerait aussi sûrement qu'un nom.
+        // Refuser ici est la seule protection possible : rien, plus loin dans la
+        // chaîne, ne peut distinguer une ancre à mi-bloc d'une ancre légitime.
+        let feuilles = self.arbre.len() as u64;
+        if feuilles != self.feuilles_ancrees {
+            return Err(WalletError::ArbreHorsFrontiereDeBloc {
+                feuilles,
+                ancre: self.feuilles_ancrees,
+            });
         }
         if self.notes.len() < N_ENTREES {
             return Err(WalletError::PasAssezDeNotes(self.notes.len()));
@@ -302,10 +347,12 @@ impl Wallet {
     ///
     /// ⚠️ Ne fait PAS rentrer la monnaie rendue. Le wallet connaît sa note de
     /// monnaie, mais pas son INDEX dans l'arbre — celui-ci n'existe qu'une fois la
-    /// transaction appliquée par le consensus, et rien ne le lui rapporte
-    /// aujourd'hui. Tant que la synchronisation wallet ↔ nœud n'existe pas, dépenser
-    /// fait donc DISPARAÎTRE la monnaie de la vue du wallet. C'est une limite du
-    /// protocole, pas de cette fonction, et l'appelant doit le dire à l'utilisateur.
+    /// transaction appliquée par le consensus. La monnaie sort donc de la vue du
+    /// wallet au moment de la dépense, et y revient à la SYNCHRONISATION
+    /// ([`Wallet::synchroniser`]) : elle est chiffrée vers notre propre clé de
+    /// réception, donc `scan_proved_output` la reconnaît comme n'importe quel
+    /// paiement reçu. C'est ce qui ferme le cycle payer → recevoir, et c'est pourquoi
+    /// il ne faut SURTOUT pas la recréditer ici avec un index deviné.
     pub fn oublier_depensees(&mut self, tx: &ProvedTx) -> usize {
         let publies: Vec<[u8; 32]> = tx.nullifiers.iter().map(|n| n.to_bytes()).collect();
         // Les nôtres sont calculés AVANT le `retain` : la fermeture ne peut pas
@@ -332,38 +379,104 @@ impl Wallet {
     }
 }
 
+/// Fabriques partagées par les tests des trois modules du crate.
+#[cfg(test)]
+pub(crate) mod tests_communs {
+    use super::*;
+    use crate::synchro::MorceauHistorique;
+    use ledger::bloc::Bloc;
+    use ledger::historique::Sortie;
+    use ledger::proved_state::ProvedLedgerState;
+
+    pub fn secret(graine: u64) -> ShieldedSecret {
+        ShieldedSecret::from_felts(core::array::from_fn(|i| {
+            Felt::from_canonical_u64(graine + i as u64).unwrap()
+        }))
+    }
+
+    /// Une GENÈSE dont les émissions vont à `w`, l'état amorcé dessus, et le lot
+    /// d'historique que servirait un nœud archiviste pour cette hauteur.
+    ///
+    /// La monnaie n'existe plus que par la genèse : le wallet la découvre par SCAN,
+    /// exactement comme un paiement reçu — c'est le même chemin, exercé au même
+    /// endroit, plutôt qu'un crédit hors bande qui ne prouverait rien.
+    pub fn lot_de_genese(
+        w: &Wallet,
+        valeurs: &[u64],
+        profondeur: usize,
+    ) -> (MorceauHistorique, ProvedLedgerState) {
+        let emissions = valeurs
+            .iter()
+            .map(|valeur| {
+                let note = SpendNote {
+                    value: *valeur,
+                    owner: w.owner(),
+                    rho: w.alea(),
+                    r: w.alea(),
+                };
+                let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
+                ledger::proved_wallet::emission_vers(&w.adresse().kem, &cm, &note)
+            })
+            .collect();
+        let genese = Bloc::genese_avec(emissions).expect("genèse bornée");
+        // ARCHIVANT : c'est l'historique qui alimente le rejeu, et l'activer ne change
+        // aucun octet de l'état de consensus (vérifié côté ledger).
+        let etat = ProvedLedgerState::depuis_genese_depth_archivant(&genese, profondeur)
+            .expect("amorçage");
+        let sorties: Vec<Sortie> = genese.emissions.iter().map(Sortie::from).collect();
+        (
+            MorceauHistorique::bloc_entier(0, 0, etat.tree.root(), sorties),
+            etat,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::synchro::{MorceauHistorique, Statut};
+    use crate::tests_communs::{lot_de_genese, secret};
 
     const PROFONDEUR: usize = 4;
 
     // `matches!` plutôt que `assert_eq!` : `ProvedTx` n'est ni `Debug` ni
     // `PartialEq` (preuve STARK, signature hybride).
 
-    fn secret(graine: u64) -> ShieldedSecret {
-        ShieldedSecret::from_felts(core::array::from_fn(|i| {
-            Felt::from_canonical_u64(graine + i as u64).unwrap()
-        }))
+    /// Crédite `w` par une genèse rejouée : même porte que le réseau.
+    fn crediter(w: &mut Wallet, a: u64, b: u64) -> ledger::proved_state::ProvedLedgerState {
+        let (lot, etat) = lot_de_genese(w, &[a, b], PROFONDEUR);
+        let p = w.synchroniser(&[lot]).expect("rejeu de la genèse");
+        assert_eq!(p.notes_recues, 2, "le bénéficiaire retrouve ses émissions");
+        etat
     }
 
-    /// Crédite `w` de deux notes, en observant les commitments comme le ferait un
-    /// nœud, et retourne l'état ledger correspondant.
-    fn crediter(w: &mut Wallet, a: u64, b: u64) -> ledger::proved_state::ProvedLedgerState {
-        let mut etat = ledger::proved_state::ProvedLedgerState::with_depth(PROFONDEUR);
-        for valeur in [a, b] {
-            let note = SpendNote {
-                value: valeur,
-                owner: w.owner(),
-                rho: w.alea(),
-                r: w.alea(),
-            };
-            let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
-            etat.mint(&cm).unwrap();
-            let index = w.observer(&cm);
-            w.notes.push(NoteDetenue { note, index });
-        }
-        etat
+    /// LE BÉNÉFICIAIRE D'UNE ÉMISSION LA RETROUVE, UN TIERS NON.
+    ///
+    /// Une émission de genèse doit passer par le MÊME chemin de scan qu'un paiement :
+    /// s'il fallait créditer le wallet hors bande, la monnaie initiale ne serait
+    /// distribuable qu'à ceux qui hébergent le nœud.
+    #[test]
+    fn emission_de_genese_scannee_par_son_beneficiaire() {
+        let mut w = Wallet::depuis_secret(secret(700), PROFONDEUR);
+        let etat = crediter(&mut w, 1_000, 500);
+        assert_eq!(w.solde(), 1_500, "les deux émissions ont été reconnues");
+        assert_eq!(w.racine(), etat.tree.root());
+
+        // Un tiers rejoue la MÊME genèse : il reconstruit le même arbre (il en a
+        // besoin pour ses propres chemins) mais n'y reconnaît aucune note.
+        let mut autre = Wallet::depuis_secret(secret(901), PROFONDEUR);
+        let (lot, etat_tiers) = lot_de_genese(&w, &[10, 20], PROFONDEUR);
+        let p = autre.synchroniser(&[lot]).expect("rejeu");
+        assert_eq!(
+            p.notes_recues, 0,
+            "une émission destinée à autrui ne doit pas créditer ce wallet"
+        );
+        assert_eq!(autre.solde(), 0);
+        assert_eq!(
+            autre.racine(),
+            etat_tiers.tree.root(),
+            "l'arbre est rejoué même quand rien ne nous revient"
+        );
     }
 
     #[test]
@@ -514,6 +627,146 @@ mod tests {
         let _ = crediter(&mut nous, 1_000, 500);
         assert_eq!(nous.oublier_depensees(&tx), 0);
         assert_eq!(nous.solde(), 1_500);
+    }
+
+    /// LE CYCLE PAYER → RECEVOIR EST FERMÉ : LA MONNAIE RENDUE REVIENT.
+    ///
+    /// `oublier_depensees` retire les notes consommées sans recréditer la monnaie —
+    /// son index n'existe qu'une fois la transaction dans un bloc. Le wallet est donc
+    /// momentanément à zéro : c'est correct, et c'était jusqu'ici DÉFINITIF. La
+    /// synchronisation est ce qui la ramène, par le chemin ordinaire du scan (elle est
+    /// chiffrée vers notre propre clé de réception).
+    ///
+    /// Sans ce test, le protocole pourrait « fonctionner » de bout en bout tout en
+    /// faisant disparaître les fonds à chaque paiement — la panne la plus coûteuse
+    /// imaginable, et parfaitement silencieuse.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "preuve gatée : --release")]
+    fn la_monnaie_rendue_revient_par_la_synchronisation() {
+        let mut w = Wallet::depuis_secret(secret(700), PROFONDEUR);
+        let (lot0, mut etat) = lot_de_genese(&w, &[1_000, 500], PROFONDEUR);
+        w.synchroniser(&[lot0]).expect("genèse rejouée");
+        assert_eq!(w.solde(), 1_500);
+
+        let destinataire = Wallet::depuis_secret(secret(900), PROFONDEUR);
+        let tx = w
+            .construire(&destinataire.adresse(), 300, 20)
+            .expect("transaction constructible");
+        assert_eq!(w.oublier_depensees(&tx), 2);
+        assert_eq!(w.solde(), 0, "la monnaie est hors de vue tant que le bloc n'est pas là");
+
+        // Le nœud scelle et applique le bloc 1, ce qui inscrit les DEUX sorties dans
+        // l'arbre (le paiement du destinataire et notre monnaie).
+        let bloc = ledger::bloc::Bloc::sceller(&etat.tete(), 1, vec![tx]);
+        etat.appliquer_bloc(&bloc).expect("bloc valide");
+        let historique = etat.historique().expect("état archivant");
+        let tranche = historique.tranche(1).expect("tranche du bloc 1").clone();
+        let sorties = historique.sorties_du_bloc(1).expect("sorties").to_vec();
+        assert_eq!(sorties.len(), 2);
+
+        let lot1 = MorceauHistorique::bloc_entier(1, tranche.debut, tranche.racine_apres, sorties);
+        let p = w.synchroniser(std::slice::from_ref(&lot1)).expect("rejeu du bloc 1");
+        assert_eq!(p.notes_recues, 1, "exactement UNE note nous revient : la monnaie");
+        assert_eq!(p.solde, 1_180, "1500 − 300 − 20");
+        assert_eq!(w.solde(), 1_180);
+        assert_eq!(w.racine(), etat.tree.root(), "ancre alignée sur le nœud");
+
+        // L'index de la monnaie est celui du NŒUD : c'est ce qui rendra son chemin de
+        // Merkle valide. Il vaut 3 (2 émissions de genèse, puis paiement, puis monnaie).
+        assert_eq!(w.notes()[0].index, 3);
+
+        // Et surtout : elle n'est pas comptée DEUX fois si le bloc revient.
+        let p2 = w.synchroniser(&[lot1]).expect("livraison en double");
+        assert_eq!(p2.statut, Statut::DejaApplique);
+        assert_eq!(w.solde(), 1_180);
+        assert_eq!(w.notes().len(), 1);
+    }
+
+    /// L'ANCRE N'EST PAS UN PSEUDONYME : deux wallets à jour en publient la MÊME.
+    ///
+    /// `ProvedTx::anchor` circule en clair. Si chaque wallet s'ancrait où bon lui
+    /// semble — à une feuille, au milieu d'un bloc — son ancre serait quasi unique et
+    /// relierait publiquement toutes ses transactions, exactement comme le ferait une
+    /// clé d'intention stable. C'est la propriété qui justifie que l'unité de
+    /// synchronisation soit le BLOC et non la plage de feuilles.
+    ///
+    /// Le test le montre là où cela compte : sur deux transactions RÉELLEMENT prouvées,
+    /// par deux wallets aux notes différentes, qui ont rejoué le même historique.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "preuve gatée : --release")]
+    fn deux_wallets_a_jour_publient_la_meme_ancre() {
+        let alice = Wallet::depuis_secret(secret(700), PROFONDEUR);
+        let bob = Wallet::depuis_secret(secret(900), PROFONDEUR);
+
+        // UNE genèse, quatre émissions : deux pour chacun, entrelacées.
+        let mut emissions = Vec::new();
+        for (w, valeur) in [(&alice, 1_000u64), (&bob, 700), (&alice, 500), (&bob, 300)] {
+            let note = SpendNote {
+                value: valeur,
+                owner: w.owner(),
+                rho: w.alea(),
+                r: w.alea(),
+            };
+            let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
+            emissions.push(ledger::proved_wallet::emission_vers(
+                &w.adresse().kem,
+                &cm,
+                &note,
+            ));
+        }
+        let genese = ledger::bloc::Bloc::genese_avec(emissions).expect("genèse bornée");
+        let etat = ledger::proved_state::ProvedLedgerState::depuis_genese_depth_archivant(
+            &genese, PROFONDEUR,
+        )
+        .expect("amorçage");
+        let sorties: Vec<ledger::historique::Sortie> =
+            genese.emissions.iter().map(Into::into).collect();
+
+        let mut alice = alice;
+        let mut bob = bob;
+        for w in [&mut alice, &mut bob] {
+            let lot = MorceauHistorique::bloc_entier(0, 0, etat.tree.root(), sorties.clone());
+            w.synchroniser(&[lot]).expect("rejeu");
+        }
+        assert_eq!(alice.solde(), 1_500);
+        assert_eq!(bob.solde(), 1_000);
+
+        let tx_alice = alice.construire(&bob.adresse(), 100, 5).expect("tx alice");
+        let tx_bob = bob.construire(&alice.adresse(), 50, 5).expect("tx bob");
+
+        assert_eq!(
+            tx_alice.anchor.to_bytes(),
+            tx_bob.anchor.to_bytes(),
+            "deux wallets à jour doivent être INDISCERNABLES par leur ancre"
+        );
+        assert_eq!(
+            tx_alice.anchor.to_bytes(),
+            etat.tree.root().to_bytes(),
+            "et cette ancre est bien la racine de fin de bloc du nœud"
+        );
+    }
+
+    /// PROUVER CONTRE UN ARBRE À MOITIÉ REMPLI EST REFUSÉ.
+    ///
+    /// C'est le pendant structurel du test précédent : dès qu'une feuille entre hors
+    /// d'une frontière de bloc, la racine de l'arbre n'est plus celle d'aucun autre
+    /// wallet. Rien en aval ne pourrait distinguer cette ancre d'une ancre légitime —
+    /// la transaction serait acceptée et le pseudonyme publié pour de bon.
+    #[test]
+    fn construire_refuse_un_arbre_hors_frontiere_de_bloc() {
+        let mut w = Wallet::depuis_secret(secret(700), PROFONDEUR);
+        let _ = crediter(&mut w, 1_000, 500);
+        // Une sortie observée « en avance », avant que son bloc ne soit complet.
+        w.observer(&rescue::note_commitment(1, &w.owner(), &w.owner(), &w.owner()));
+
+        let dest = Wallet::depuis_secret(secret(900), PROFONDEUR).adresse();
+        assert!(matches!(
+            w.construire(&dest, 100, 10),
+            Err(WalletError::ArbreHorsFrontiereDeBloc {
+                feuilles: 3,
+                ancre: 2
+            })
+        ));
     }
 
     /// Le destinataire retrouve SON paiement, et pas la monnaie.

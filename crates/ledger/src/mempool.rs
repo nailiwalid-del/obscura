@@ -228,12 +228,18 @@ mod tests {
         let cm0 = rescue::note_commitment(n0.value, &n0.owner, &n0.rho, &n0.r);
         let cm1 = rescue::note_commitment(n1.value, &n1.owner, &n1.rho, &n1.r);
 
-        let mut etat = ProvedLedgerState::with_depth(DEPTH);
+        // La monnaie n'existe QUE par la genèse : les deux notes d'entrée sont des
+        // émissions du bloc 0, insérées dans l'ordre (donc index 0 et 1).
+        let genese = crate::bloc::Bloc::genese_avec(vec![
+            crate::proved_wallet::emission_factice(&cm0),
+            crate::proved_wallet::emission_factice(&cm1),
+        ])
+        .expect("genèse bornée");
+        let etat = ProvedLedgerState::depuis_genese_depth(&genese, DEPTH).expect("amorçage");
         let mut arbre = merkle::ProvedMerkleTree::new(DEPTH);
-        let i0 = etat.mint(&cm0).unwrap();
-        let i1 = etat.mint(&cm1).unwrap();
         arbre.append(&cm0);
         arbre.append(&cm1);
+        let (i0, i1) = (0u64, 1u64);
 
         let o0 = SpendNote { value: 900, owner: digest(60), rho: digest(61), r: digest(62) };
         let o1 = SpendNote { value: 580, owner: digest(70), rho: digest(71), r: digest(72) };

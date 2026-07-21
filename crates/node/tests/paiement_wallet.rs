@@ -16,6 +16,7 @@
 //! consensus ne peut pas attraper cela — ce test, si.
 
 use crypto::sig::SigKeypair;
+use ledger::bloc::Bloc;
 use ledger::proved_state::ProvedLedgerState;
 use net::connexion::Connexion;
 use node::message::Message;
@@ -47,29 +48,48 @@ fn attendre<F: FnMut() -> bool>(mut c: F, delai: Duration) -> bool {
     c()
 }
 
-/// Émet deux notes vers `w` et construit l'état de nœud CORRESPONDANT.
+/// Construit LA genèse : deux notes émises vers `w`.
 ///
-/// Wallet et nœud doivent voir les mêmes commitments dans le même ordre, sinon les
-/// index divergent et la transaction est rejetée pour « ancre inconnue ».
-fn amorcer(w: &mut Wallet) -> ProvedLedgerState {
-    let mut etat = ProvedLedgerState::with_depth(PROFONDEUR);
-    for valeur in [1_000u64, 500] {
-        let note = circuit::SpendNote {
-            value: valeur,
-            owner: w.owner(),
-            rho: rescue::hash(
-                proved_hash::domain::Domain::Owner,
-                &[Felt::from_canonical_u64(valeur).unwrap(); 4],
-            ),
-            r: rescue::hash(
-                proved_hash::domain::Domain::Nk,
-                &[Felt::from_canonical_u64(valeur).unwrap(); 4],
-            ),
-        };
-        let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
-        etat.mint(&cm).expect("émission");
-        w.crediter_pour_demo(note, &cm);
-    }
+/// Une seule genèse est fabriquée puis PARTAGÉE : wallet et nœud doivent voir les
+/// mêmes commitments dans le même ordre, sinon les index divergent et la transaction
+/// est rejetée pour « ancre inconnue ».
+fn genese_pour(w: &Wallet) -> Bloc {
+    let emissions = [1_000u64, 500]
+        .iter()
+        .map(|valeur| {
+            let note = circuit::SpendNote {
+                value: *valeur,
+                owner: w.owner(),
+                rho: rescue::hash(
+                    proved_hash::domain::Domain::Owner,
+                    &[Felt::from_canonical_u64(*valeur).unwrap(); 4],
+                ),
+                r: rescue::hash(
+                    proved_hash::domain::Domain::Nk,
+                    &[Felt::from_canonical_u64(*valeur).unwrap(); 4],
+                ),
+            };
+            let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
+            ledger::proved_wallet::emission_vers(&w.adresse().kem, &cm, &note)
+        })
+        .collect();
+    Bloc::genese_avec(emissions).expect("genèse bornée")
+}
+
+/// Amorce un état sur `genese` et fait découvrir à `w` ce qui lui revient (par scan).
+fn amorcer_sur(genese: &Bloc, w: &mut Wallet) -> ProvedLedgerState {
+    let etat = ProvedLedgerState::depuis_genese_depth(genese, PROFONDEUR).expect("amorçage");
+    let lot = wallet::synchro::MorceauHistorique::bloc_entier(
+        0,
+        0,
+        etat.tree.root(),
+        genese
+            .emissions
+            .iter()
+            .map(ledger::historique::Sortie::from)
+            .collect(),
+    );
+    w.synchroniser(&[lot]).expect("rejeu de la genèse");
     etat
 }
 
@@ -82,7 +102,8 @@ fn amorcer(w: &mut Wallet) -> ProvedLedgerState {
 #[cfg_attr(debug_assertions, ignore = "preuve gatée : --release")]
 fn paiement_via_adresse_textuelle_jusqu_au_mempool() {
     let mut payeur = Wallet::depuis_secret(secret(700), PROFONDEUR);
-    let etat_payeur = amorcer(&mut payeur);
+    let genese = genese_pour(&payeur);
+    let etat_payeur = amorcer_sur(&genese, &mut payeur);
     let beneficiaire = Wallet::depuis_secret(secret(900), PROFONDEUR);
 
     // Le seul lien entre les deux : une chaîne de caractères.
@@ -94,9 +115,10 @@ fn paiement_via_adresse_textuelle_jusqu_au_mempool() {
         .expect("transaction constructible");
     let digest = tx.tx_digest;
 
-    // Nœud receveur : même état initial que le payeur (pas de chaîne à synchroniser).
+    // Nœud receveur : amorcé sur LA MÊME genèse que le payeur (pas de chaîne à
+    // synchroniser).
     let mut noeud_receveur = Wallet::depuis_secret(secret(700), PROFONDEUR);
-    let etat_noeud = amorcer(&mut noeud_receveur);
+    let etat_noeud = amorcer_sur(&genese, &mut noeud_receveur);
     assert_eq!(
         etat_noeud.tree.root(),
         etat_payeur.tree.root(),

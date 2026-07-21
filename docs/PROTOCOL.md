@@ -173,13 +173,42 @@ attendant le circuit. Fonctions suffixées `_transparent` dans le code.
 4. ✅ Réseau P2P chiffré PQ + Dandelion++ + test de key privacy — briques livrées
    (crate `net` : transport, cadrage, pairs anti-eclipse, Dandelion++ ;
    `ledger::mempool`) ET câblées dans le nœud (phase 5)
-5. 🟡 Nœud, wallet CLI, testnet local — **nœud fonctionnel** (`crates/node` :
+5. ✅ Nœud, wallet CLI, testnet local — **nœud fonctionnel** (`crates/node` :
    protocole applicatif, orchestration en fonction pure, runtime sockets+threads).
    Testnet local validé : une transaction PROUVÉE se propage entre nœuds réels sur
    de vraies sockets, y compris à travers un intermédiaire. **Binaires livrés** :
-   `obscura-node` (nœud autonome : écoute, connexion aux pairs, boucle
-   d'événements, rotation d'époque Dandelion++) et `obscura-demo` (démonstration
-   locale de bout en bout). Restent le **wallet CLI** (le crate `wallet` est une
-   bibliothèque, seul `obscura-demo` l'exerce) et la **PERSISTANCE** : identité,
-   état et mempool sont neufs à chaque lancement (`ProvedLedgerState::{save,
-   load}` existe côté ledger, pas encore câblé dans le nœud).
+   `obscura-node` (nœud autonome), `obscura-demo` (démonstration locale) et
+   `obscura-wallet` (`creer`/`adresse`/`synchroniser`/`solde`/`envoyer`). PERSISTANCE
+   câblée (identité + état du nœud, position du wallet). **Synchronisation wallet ↔
+   nœud** livrée : le wallet REÇOIT (cycle payer → sceller → recevoir → redépenser
+   exercé sur sockets, `crates/node/tests/cycle_wallet.rs`).
+
+## Protocole applicatif de synchronisation (crate `node`)
+
+Messages circulant DANS le canal chiffré (le premier octet est un tag applicatif ; le
+cadrage réseau — longueur préfixée, borne anti-DoS — est celui de `net::frame`).
+
+- `DemandeHistorique { hauteur: u64 }` — **9 octets**, longueur EXACTE : `tag(1) ‖
+  hauteur(8, LE)`. Émise par un wallet, en clair de bout en bout pour le nœud qui la
+  sert. Un seul champ, la POSITION : tout autre paramètre choisi par le client (un
+  `max`, une plage) serait une empreinte qui survit à l'identité de transport éphémère.
+  Le débit se règle par la FRÉQUENCE des demandes. Deux wallets à la même position
+  émettent des octets identiques.
+- `Historique` — un MORCEAU des sorties d'un bloc (réponse à `DemandeHistorique`).
+  En-tête : `tag(1) ‖ version(1=0x01) ‖ hauteur(8) ‖ debut(8) ‖ fin(8) ‖ racine_apres(64)
+  ‖ hauteur_tete(8) ‖ morceau(4) ‖ morceaux(4) ‖ decalage(8) ‖ n_sorties(4)`, puis `n`
+  entrées `commitment(64) ‖ len(kem_ct)(4) ‖ kem_ct(1121) ‖ len(enc_note)(4) ‖ enc_note`.
+  L'unité est le BLOC (jamais la plage de feuilles : `ProvedTx::anchor` est public, et un
+  wallet arrêté à mi-bloc publierait une ancre quasi unique). Découpage décidé par le
+  SERVEUR et **canonique** : `morceaux`/`decalage`/`n_sorties` sont RECALCULÉS au
+  décodage à partir de (`debut`, `fin`, `morceau`), fermant recouvrements, morceaux
+  fantômes et segmentation-marqueur. `hauteur_tete` est une indication NON vérifiable qui
+  ne pilote rien (refus au décodage si `hauteur_tete < hauteur`). `MAX_SORTIES_PAR_REPONSE`
+  est CALCULÉ sur `MAX_CADRE − surcoût AEAD − en-tête` : le cadrage borne le CHIFFRÉ.
+- `DemandeBloc { hauteur: u64 }` / réponse `Bloc` — **rattrapage** d'un nœud qui a manqué
+  une hauteur (même discipline : un seul champ, débit par fréquence).
+
+Côté wallet, la BOUCLE (`node::client`) demande `hauteur = prochaine_hauteur()`,
+rassemble tous les morceaux du bloc, les rejoue en UNE fois (`Wallet::synchroniser`),
+enregistre après chaque bloc, et s'arrête au premier silence. Elle ne lit jamais
+`hauteur_tete` ; `DejaApplique` n'est pas un pas ; le travail est borné par invocation.

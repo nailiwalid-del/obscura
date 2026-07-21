@@ -12,6 +12,7 @@
 //! sans que rien ne désigne la cause.
 
 use crypto::sig::SigKeypair;
+use ledger::bloc::Bloc;
 use ledger::proved_state::ProvedLedgerState;
 use node::message::Message;
 use node::orchestration::{Action, Noeud};
@@ -42,26 +43,54 @@ fn attendre<F: FnMut() -> bool>(mut c: F, delai: Duration) -> bool {
     c()
 }
 
-/// Émet deux notes vers `w` et rend l'état de nœud correspondant.
-fn amorcer(w: &mut Wallet) -> ProvedLedgerState {
-    let mut etat = ProvedLedgerState::with_depth(PROFONDEUR);
-    for valeur in [1_000u64, 500] {
-        let note = circuit::SpendNote {
-            value: valeur,
-            owner: w.owner(),
-            rho: rescue::hash(
-                proved_hash::domain::Domain::Owner,
-                &[Felt::from_canonical_u64(valeur).unwrap(); 4],
-            ),
-            r: rescue::hash(
-                proved_hash::domain::Domain::Nk,
-                &[Felt::from_canonical_u64(valeur).unwrap(); 4],
-            ),
-        };
-        let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
-        etat.mint(&cm).expect("émission");
-        w.crediter_pour_demo(note, &cm);
-    }
+/// Construit LA genèse : deux notes émises vers `w`.
+///
+/// Une seule genèse est fabriquée, puis PARTAGÉE entre les nœuds. La version
+/// précédente de ce fichier rejouait la même séquence d'émissions de chaque côté ;
+/// cela ne fonctionnait que parce que les notes étaient déterministes, et masquait la
+/// propriété qui compte : deux nœuds sont d'accord parce qu'ils partent du MÊME
+/// bloc 0, pas parce qu'ils répètent les mêmes gestes.
+fn genese_pour(w: &Wallet) -> Bloc {
+    let emissions = [1_000u64, 500]
+        .iter()
+        .map(|valeur| {
+            let note = circuit::SpendNote {
+                value: *valeur,
+                owner: w.owner(),
+                rho: rescue::hash(
+                    proved_hash::domain::Domain::Owner,
+                    &[Felt::from_canonical_u64(*valeur).unwrap(); 4],
+                ),
+                r: rescue::hash(
+                    proved_hash::domain::Domain::Nk,
+                    &[Felt::from_canonical_u64(*valeur).unwrap(); 4],
+                ),
+            };
+            let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
+            ledger::proved_wallet::emission_vers(&w.adresse().kem, &cm, &note)
+        })
+        .collect();
+    Bloc::genese_avec(emissions).expect("genèse bornée")
+}
+
+/// Amorce un état sur `genese`, et fait DÉCOUVRIR à `w` les notes qui lui reviennent
+/// (par scan — le même chemin que pour un paiement reçu).
+fn amorcer_sur(genese: &Bloc, w: &mut Wallet) -> ProvedLedgerState {
+    let etat = ProvedLedgerState::depuis_genese_depth(genese, PROFONDEUR).expect("amorçage");
+    // Le wallet REJOUE la genèse par la même porte que l'historique servi sur le fil :
+    // chaque feuille dans l'ordre du nœud, qu'elle lui appartienne ou non, et une ancre
+    // adoptée sur la frontière de bloc.
+    let lot = wallet::synchro::MorceauHistorique::bloc_entier(
+        0,
+        0,
+        etat.tree.root(),
+        genese
+            .emissions
+            .iter()
+            .map(ledger::historique::Sortie::from)
+            .collect(),
+    );
+    w.synchroniser(&[lot]).expect("rejeu de la genèse");
     etat
 }
 
@@ -74,12 +103,14 @@ fn amorcer(w: &mut Wallet) -> ProvedLedgerState {
 #[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
 fn un_bloc_scelle_fait_converger_deux_noeuds() {
     let mut payeur = Wallet::depuis_secret(secret(700), PROFONDEUR);
-    let etat_a = amorcer(&mut payeur);
+    let genese = genese_pour(&payeur);
+    let etat_a = amorcer_sur(&genese, &mut payeur);
     let beneficiaire = Wallet::depuis_secret(secret(900), PROFONDEUR);
 
-    // B part du MÊME état initial (aucune synchronisation d'historique n'existe).
+    // B part de LA MÊME genèse — c'est l'unique artefact que les deux nœuds partagent
+    // (aucune synchronisation d'historique n'existe).
     let mut miroir = Wallet::depuis_secret(secret(700), PROFONDEUR);
-    let etat_b = amorcer(&mut miroir);
+    let etat_b = amorcer_sur(&genese, &mut miroir);
     assert_eq!(etat_a.tree.root(), etat_b.tree.root());
     assert_eq!(etat_a.tete(), etat_b.tete(), "même genèse");
 
@@ -151,7 +182,8 @@ fn un_bloc_scelle_fait_converger_deux_noeuds() {
 #[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
 fn rejouer_un_bloc_ne_change_rien() {
     let mut payeur = Wallet::depuis_secret(secret(700), PROFONDEUR);
-    let etat = amorcer(&mut payeur);
+    let genese = genese_pour(&payeur);
+    let etat = amorcer_sur(&genese, &mut payeur);
     let beneficiaire = Wallet::depuis_secret(secret(900), PROFONDEUR);
     let tx = payeur
         .construire(&beneficiaire.adresse(), 300, 20)

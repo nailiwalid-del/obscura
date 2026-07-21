@@ -11,6 +11,21 @@ use zeroize::Zeroize;
 
 const AES_NONCE_LEN: usize = 12;
 const XCHACHA_NONCE_LEN: usize = 24;
+/// Longueur d'un tag Poly1305 comme d'un tag GCM.
+const TAG_LEN: usize = 16;
+
+/// Surcoût EXACT de la cascade, en octets : `|chiffré| = |clair| + SURCOUT`.
+///
+/// Deux nonces et deux tags — un par couche — soit 12 + 16 + 24 + 16 = 68.
+///
+/// # Pourquoi cette constante est publique
+///
+/// Ce que le cadrage réseau borne (`net::MAX_CADRE`) est la quantité **chiffrée**,
+/// pas le clair. Toute couche qui découpe un message pour qu'il tienne dans un cadre
+/// doit donc soustraire ce surcoût de son budget : l'ignorer produit un message
+/// accepté par son propre constructeur et refusé par le transport — un service qui ne
+/// fonctionne qu'en dessous d'une taille que rien n'écrit nulle part.
+pub const SURCOUT: usize = AES_NONCE_LEN + TAG_LEN + XCHACHA_NONCE_LEN + TAG_LEN;
 
 fn keys(master: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
     (
@@ -119,5 +134,21 @@ mod tests {
     fn non_deterministe() {
         let k = [7u8; 32];
         assert_ne!(encrypt(&k, b"", b"m"), encrypt(&k, b"", b"m"));
+    }
+
+    /// LE SURCOÛT ANNONCÉ EST LE SURCOÛT RÉEL, quelle que soit la taille du clair.
+    ///
+    /// `SURCOUT` sert à calculer combien d'entrées tiennent dans un cadre réseau. S'il
+    /// sous-estimait ne serait-ce que d'un octet, un message dimensionné au plus juste
+    /// serait construit avec succès puis refusé par `net::ecrire_cadre` — un service
+    /// qui échoue exactement sur ses réponses les plus grosses, c'est-à-dire dans le
+    /// cas qu'on avait pris la peine de découper.
+    #[test]
+    fn surcout_exact_et_independant_de_la_taille() {
+        let k = [7u8; 32];
+        for n in [0usize, 1, 17, 4096] {
+            let ct = encrypt(&k, b"aad", &vec![0xABu8; n]);
+            assert_eq!(ct.len(), n + SURCOUT, "clair de {n} octets");
+        }
     }
 }

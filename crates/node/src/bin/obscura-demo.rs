@@ -46,13 +46,20 @@ fn main() {
     println!("=== Obscura — démonstration locale ===\n");
     println!("⚠️  Prototype non audité : à ne pas utiliser pour détenir de la valeur.\n");
 
-    // ---- 1. Deux wallets et un état initial partagé ----
-    println!("[1/5] Création des wallets et de l'état initial");
+    // ---- 1. Deux wallets et UNE genèse partagée ----
+    println!("[1/5] Création des wallets et de la GENÈSE");
     let mut alice = wallet::Wallet::depuis_secret(secret(700), PROFONDEUR);
     let bob = wallet::Wallet::depuis_secret(secret(900), PROFONDEUR);
 
-    // Émission (faucet du prototype) : deux notes vers Alice.
-    let mut etat = ProvedLedgerState::with_depth(PROFONDEUR);
+    // La monnaie n'existe QUE par la genèse : deux notes émises vers Alice, chiffrées
+    // vers sa clé de réception comme n'importe quel paiement.
+    //
+    // Elle est construite UNE SEULE FOIS, puis SÉRIALISÉE et partagée avec le second
+    // nœud. La version précédente de cette démo rejouait la même séquence d'émissions
+    // dans les deux processus : cela ne marchait que parce que les notes étaient
+    // déterministes, et cachait justement la question à laquelle la genèse répond —
+    // « ces deux nœuds parlent-ils de la même chaîne ? ».
+    let mut emissions = Vec::new();
     for valeur in [1_000u64, 500u64] {
         let note = circuit::SpendNote {
             value: valeur,
@@ -67,10 +74,36 @@ fn main() {
             ),
         };
         let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
-        etat.mint(&cm).expect("émission");
-        alice.crediter_pour_demo(note, &cm);
+        emissions.push(ledger::proved_wallet::emission_vers(
+            &alice.adresse().kem,
+            &cm,
+            &note,
+        ));
     }
-    println!("      solde d'Alice : {} unités", alice.solde());
+    let genese = ledger::bloc::Bloc::genese_avec(emissions).expect("genèse bornée");
+    let octets_genese = genese.to_bytes();
+    println!(
+        "      genèse {} ({} émissions, {} o)",
+        hex::encode(&genese.id()[..8]),
+        genese.emissions.len(),
+        octets_genese.len()
+    );
+
+    // Alice DÉCOUVRE ses notes en REJOUANT la genèse — même chemin que l'historique
+    // servi par un nœud archiviste. Rien ne lui est crédité de force.
+    let etat = ProvedLedgerState::depuis_genese_depth(&genese, PROFONDEUR).expect("amorçage");
+    let lot = wallet::synchro::MorceauHistorique::bloc_entier(
+        0,
+        0,
+        etat.tree.root(),
+        genese
+            .emissions
+            .iter()
+            .map(ledger::historique::Sortie::from)
+            .collect(),
+    );
+    alice.synchroniser(&[lot]).expect("rejeu de la genèse");
+    println!("      solde d'Alice après scan : {} unités", alice.solde());
     println!(
         "      racines nœud/wallet concordantes : {}",
         etat.tree.root() == alice.racine()
@@ -98,33 +131,14 @@ fn main() {
     println!("      nœud B écoute sur {adresse}");
 
     let b = std::thread::spawn(move || {
-        let mut rt = Runtime::new(Noeud::new(
-            SigKeypair::generate(),
-            {
-                // B reconstruit le MÊME état initial (sinon : « ancre inconnue »).
-                let mut e = ProvedLedgerState::with_depth(PROFONDEUR);
-                let w = wallet::Wallet::depuis_secret(secret(700), PROFONDEUR);
-                for valeur in [1_000u64, 500u64] {
-                    let note = circuit::SpendNote {
-                        value: valeur,
-                        owner: w.owner(),
-                        rho: rescue::hash(
-                            proved_hash::domain::Domain::Owner,
-                            &[Felt::from_canonical_u64(valeur).unwrap(); 4],
-                        ),
-                        r: rescue::hash(
-                            proved_hash::domain::Domain::Nk,
-                            &[Felt::from_canonical_u64(valeur).unwrap(); 4],
-                        ),
-                    };
-                    let cm =
-                        rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
-                    e.mint(&cm).unwrap();
-                }
-                e
-            },
-            [2u8; 32],
-        ));
+        // B amorce sur LA MÊME genèse, reçue sous forme d'octets et re-décodée par le
+        // décodeur borné du réseau. C'est l'unique chose qu'il faut partager pour que
+        // deux nœuds soient d'accord ; toute autre méthode serait une reconstruction
+        // parallèle qu'aucune erreur ne signalerait si elle divergeait.
+        let genese_b = ledger::bloc::Bloc::from_bytes(&octets_genese).expect("genèse relue");
+        let etat_b =
+            ProvedLedgerState::depuis_genese_depth(&genese_b, PROFONDEUR).expect("amorçage");
+        let mut rt = Runtime::new(Noeud::new(SigKeypair::generate(), etat_b, [2u8; 32]));
         let (flux, _) = ecoute.accept().unwrap();
         rt.accepter(flux, &id_b).expect("handshake");
         let recu = attendre(

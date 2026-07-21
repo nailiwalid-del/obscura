@@ -107,8 +107,20 @@ impl Runtime {
     /// Accepte une connexion entrante, fait le handshake, et enregistre le lien.
     pub fn accepter(&mut self, flux: TcpStream, identite: &SigKeypair) -> Result<PeerId, NetError> {
         Self::poser_echeances(&flux)?;
+        // Relevée AVANT le handshake (le flux part ensuite dans `Connexion`). C'est
+        // l'adresse SOURCE : son port est éphémère et sans intérêt, seul le préfixe
+        // compte — c'est lui qui donne le `GroupeReseau` auquel imputer le coût du
+        // service d'historique.
+        let adresse = flux.peer_addr().ok();
         let connexion = Connexion::accepter(flux, identite)?;
-        self.enregistrer(connexion)
+        let id = self.enregistrer(connexion)?;
+        // Volontairement PAS `pairs.ajouter` : la table de pairs sert la sélection
+        // SORTANTE anti-eclipse, et y verser les entrants offrirait à un attaquant un
+        // moyen d'entrer dans nos emplacements sortants en nous appelant.
+        if let Some(a) = adresse {
+            self.noeud.noter_adresse(id, a);
+        }
+        Ok(id)
     }
 
     /// Se connecte à un pair sortant, fait le handshake, et enregistre le lien.
@@ -124,6 +136,7 @@ impl Runtime {
         // Le pair est authentifié : on le retient avec son adresse, pour que la
         // sélection anti-eclipse (groupes réseau) puisse en tenir compte.
         self.noeud.pairs.ajouter(id, adresse);
+        self.noeud.noter_adresse(id, adresse);
         Ok(id)
     }
 
@@ -187,6 +200,12 @@ impl Runtime {
                 },
                 Evenement::Deconnecte(de) => {
                     self.liens.lock().unwrap().remove(&de);
+                    // L'adresse ne survit pas au lien : sans cela, la table croîtrait
+                    // d'une entrée par identité de transport éphémère — et le wallet en
+                    // tire une neuve à chaque commande. Le crédit, lui, RESTE : il est
+                    // indexé sur le groupe réseau, pas sur le pair, précisément pour
+                    // qu'une reconnexion ne le remette pas à plein.
+                    self.noeud.oublier_adresse(&de);
                 }
             }
         }

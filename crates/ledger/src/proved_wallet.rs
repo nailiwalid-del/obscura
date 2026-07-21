@@ -16,10 +16,13 @@
 //! qu'un `WalletKeys` complet — le modèle d'identité prouvé (owner Rescue) diffère du
 //! modèle transparent (owner BLAKE3) ; ce découplage évite de mélanger les deux.
 
+use crate::bloc::Emission;
 use circuit::{EncNote, SpendNote};
 use crypto::{aead, kem};
 use proved_hash::digest::Digest;
+use proved_hash::felt::Felt;
 use proved_hash::rescue;
+use rand_core::{OsRng, RngCore};
 
 /// Chiffre `note` (sortie prouvée) vers `recipient_kem_pk`. `commitment` (public) sert
 /// d'`aad` AEAD → lie cryptographiquement le chiffré à SON commitment (au-delà du digest).
@@ -51,6 +54,66 @@ pub fn scan_proved_output(
     let note = SpendNote::from_bytes(&pt)?;
     let recomputed = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
     (recomputed == *commitment && note.owner == *expected_owner).then_some(note)
+}
+
+/// Émission de genèse DESTINÉE à quelqu'un : le bénéficiaire retrouve sa note par
+/// `scan_proved_output` sur `(commitment, enc_note)`, exactement comme pour une
+/// sortie de transaction — l'amorçage n'introduit aucun chemin de scan parallèle.
+///
+/// Précondition (comme `encrypt_note`) : `commitment` est bien celui de `note`.
+pub fn emission_vers(
+    beneficiaire_kem_pk: &kem::KemPublicKey,
+    commitment: &Digest,
+    note: &SpendNote,
+) -> Emission {
+    Emission {
+        commitment: *commitment,
+        enc_note: encrypt_note(beneficiaire_kem_pk, commitment, note),
+    }
+}
+
+/// Émission SANS bénéficiaire : enveloppe **factice**, indistinguable d'une vraie.
+///
+/// # Pourquoi une enveloppe factice et pas un `Option<EncNote>`
+///
+/// Un drapeau de présence partitionnerait publiquement les feuilles de l'arbre en
+/// « émises sans destinataire » et « attribuées ». Ce gabarit serait recopié le jour
+/// d'une coinbase shielded, et il annulerait le witness-hiding du circuit pour un
+/// octet de sérialisation. On paie donc ici le prix d'un vrai chiffrement (≈1,3 Kio)
+/// pour que le fil ne dise rien.
+///
+/// La clé KEM est **jetable** : la moitié secrète est créée sur la pile et détruite
+/// au retour de la fonction, si bien que le contenu n'est déchiffrable par PERSONNE —
+/// ni par nous. C'est ce qui rend l'émission réellement sans bénéficiaire plutôt que
+/// « chiffrée vers un secret qu'on garde ».
+///
+/// Le clair chiffré est une note de forme normale à champs aléatoires : `SpendNote`
+/// ayant un encodage de taille FIXE (104 o), la longueur du chiffré est celle de
+/// n'importe quelle émission réelle.
+pub fn emission_factice(commitment: &Digest) -> Emission {
+    let jetable = kem::KemKeypair::generate();
+    let note = SpendNote {
+        value: alea_u64() % (1u64 << circuit::RANGE_BITS),
+        owner: alea_digest(),
+        rho: alea_digest(),
+        r: alea_digest(),
+    };
+    Emission {
+        commitment: *commitment,
+        enc_note: encrypt_note(&jetable.public, commitment, &note),
+    }
+}
+
+fn alea_u64() -> u64 {
+    OsRng.next_u64()
+}
+
+/// Digest aléatoire CANONIQUE (chaque felt < p) : `>> 4` garantit la réduction sans
+/// biais observable ici, le clair n'étant jamais déchiffré.
+fn alea_digest() -> Digest {
+    Digest(core::array::from_fn(|_| {
+        Felt::from_canonical_u64(alea_u64() >> 4).expect("réduit")
+    }))
 }
 
 #[cfg(test)]

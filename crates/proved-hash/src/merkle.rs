@@ -148,6 +148,37 @@ impl ProvedMerkleTree {
         Some(siblings)
     }
 
+    /// Retire les feuilles au-delà de `feuilles`, ramenant l'arbre à un état ANTÉRIEUR
+    /// qu'il a réellement eu.
+    ///
+    /// # Pourquoi une structure append-only expose une troncature
+    ///
+    /// Elle n'existe QUE pour défaire une application qui vient d'échouer : le wallet
+    /// rejoue un bloc entier, compare la racine obtenue à celle que le nœud annonce,
+    /// et — si elles diffèrent — doit revenir exactement au préfixe qu'il avait une
+    /// seconde plus tôt. Sans elle, un seul bloc mensonger laisserait l'arbre du wallet
+    /// à moitié rempli de feuilles qu'aucun nœud n'a, et TOUS ses chemins suivants
+    /// seraient faux sans qu'aucune erreur ne le dise.
+    ///
+    /// ⚠️ Les feuilles retirées doivent être celles que l'appelant vient d'ajouter
+    /// LUI-MÊME dans la même opération. L'employer pour effacer des feuilles confirmées
+    /// décalerait en silence l'index de toutes les suivantes — c'est-à-dire exactement
+    /// la divergence que l'ordre d'insertion existe pour empêcher.
+    ///
+    /// Refuse d'« allonger » l'arbre : `feuilles > len()` désigne un état qui n'a jamais
+    /// existé, et le nier silencieusement (en ne faisant rien) laisserait l'appelant
+    /// croire qu'il a rembobiné.
+    pub fn tronquer(&mut self, feuilles: usize) -> Result<(), TroncatureInvalide> {
+        if feuilles > self.leaves.len() {
+            return Err(TroncatureInvalide {
+                demandee: feuilles,
+                feuilles: self.leaves.len(),
+            });
+        }
+        self.leaves.truncate(feuilles);
+        Ok(())
+    }
+
     /// Encodage canonique : `depth (u8) ‖ n (u64 LE) ‖ feuilles (n × 32 o)`.
     ///
     /// Les octets sont les feuilles DÉJÀ HACHÉES (`leaf(cm)`), pas les commitments —
@@ -222,6 +253,13 @@ pub enum TreeDecodeError {
 /// L'arbre a atteint `2^depth` feuilles : plus aucune insertion possible.
 #[derive(Debug, PartialEq, Eq)]
 pub struct TreeFull;
+
+/// Troncature vers un état que l'arbre n'a jamais eu (`demandee` > `feuilles`).
+#[derive(Debug, PartialEq, Eq)]
+pub struct TroncatureInvalide {
+    pub demandee: usize,
+    pub feuilles: usize,
+}
 
 /// Erreur de désérialisation d'une `MerkleFrontier` (`from_bytes`). Le fichier
 /// d'état est local et trusté : la validation détecte la CORRUPTION (troncature,
@@ -472,6 +510,61 @@ mod tests {
             ProvedMerkleTree::from_bytes(&enorme),
             Err(TreeDecodeError::BadCount)
         ));
+    }
+
+    /// TRONQUER REND EXACTEMENT L'ARBRE D'AVANT — racines ET chemins.
+    ///
+    /// C'est la propriété dont dépend l'atomicité du rejeu côté wallet : quand un lot
+    /// reçu du réseau échoue sa vérification de racine, l'arbre doit revenir au préfixe
+    /// qu'il avait, pas à « quelque chose qui a la bonne longueur ». Une troncature qui
+    /// laisserait un état interne résiduel donnerait des chemins faux pour toutes les
+    /// feuilles suivantes — et un chemin faux ne se voit pas : la transaction du wallet
+    /// est simplement refusée pour « ancre inconnue ».
+    #[test]
+    fn tronquer_restaure_l_arbre_anterieur() {
+        let mut reference = ProvedMerkleTree::new(5);
+        for i in 0..6u64 {
+            reference.append(&digest(i * 10 + 1));
+        }
+
+        let mut t = ProvedMerkleTree::new(5);
+        for i in 0..6u64 {
+            t.append(&digest(i * 10 + 1));
+        }
+        // Trois feuilles de plus, puis rembobinage.
+        for i in 6..9u64 {
+            t.append(&digest(i * 10 + 1));
+        }
+        assert_eq!(t.tronquer(6), Ok(()));
+
+        assert_eq!(t.len(), reference.len());
+        assert_eq!(t.root(), reference.root(), "racine restaurée");
+        for i in 0..6u64 {
+            assert_eq!(t.path(i), reference.path(i), "chemin divergent en {i}");
+        }
+        assert_eq!(t.to_bytes(), reference.to_bytes(), "état interne identique");
+        // Et l'arbre repart correctement : la feuille suivante reprend l'index 6.
+        assert_eq!(t.append(&digest(999)), 6);
+    }
+
+    /// Tronquer au-delà de la longueur désigne un état qui n'a JAMAIS existé : refusé
+    /// bruyamment plutôt que traité comme un no-op, sans quoi l'appelant croirait avoir
+    /// rembobiné un arbre resté en avance.
+    #[test]
+    fn tronquer_au_dela_est_refuse() {
+        let mut t = ProvedMerkleTree::new(4);
+        t.append(&digest(1));
+        assert_eq!(
+            t.tronquer(2),
+            Err(TroncatureInvalide {
+                demandee: 2,
+                feuilles: 1
+            })
+        );
+        assert_eq!(t.len(), 1, "aucune mutation après refus");
+        assert_eq!(t.tronquer(0), Ok(()));
+        assert!(t.is_empty());
+        assert_eq!(t.root(), ProvedMerkleTree::new(4).root());
     }
 
     #[test]

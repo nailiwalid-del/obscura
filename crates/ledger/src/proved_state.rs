@@ -30,9 +30,19 @@
 //! est bon marché côté arbre grâce à la frontier (O(depth)) ; seul l'ensemble des
 //! nullifiers est volumineux (inhérent).
 //!
+//! Historique des sorties (synchronisation wallet) : l'état peut, EN OPTION, conserver
+//! à côté de la frontier la liste ordonnée des sorties insérées
+//! (`crate::historique::HistoriqueSorties`). C'est ce qui permet à un wallet de rejouer
+//! l'arbre et d'en connaître les index. Le rôle est SÉPARÉ et OPTIONNEL : un nœud qui
+//! ne l'active pas reste parfaitement valide, et l'état de consensus reste borné.
+//! **Une seule porte d'insertion** : `mint` (genèse) et `apply_proved_tx` sont privées,
+//! et l'historique n'est écrit que par `amorcer` et `appliquer_bloc` — les deux seuls
+//! endroits qui font grandir l'arbre.
+//!
 //! Hors périmètre (→ ledger/Phase 3z-c) : généralisation M-in/N-out.
 
-use crate::bloc::{Bloc, TAILLE_ID};
+use crate::bloc::{Bloc, MAX_EMISSIONS_PAR_BLOC, PAS_DE_PARENT, TAILLE_ID};
+use crate::historique::{HistoriqueDesaccord, HistoriqueSorties, Sortie};
 use crate::LedgerError;
 use circuit::{verify_tx, ProvedTx, INTENT_DOMAIN};
 use crypto::sig;
@@ -96,10 +106,15 @@ pub const RECENT_ROOTS_WINDOW: usize = 4 * crate::bloc::MAX_TX_PAR_BLOC;
 /// ajustement de l'une des deux constantes qui romprait la marge casse le build.
 const _: () = assert!(RECENT_ROOTS_WINDOW > crate::bloc::MAX_TX_PAR_BLOC);
 
-/// Version du format de dump de l'état (`to_bytes`). L'ajout du chaînage (tête de
-/// chaîne + hauteur) change le format : un dump antérieur est REFUSÉ avec une version
-/// inconnue plutôt que lu de travers.
-pub const VERSION_ETAT: u8 = 0x01;
+/// Version du format de dump de l'état (`to_bytes`).
+///
+/// `0x01` : ajout du chaînage (tête + hauteur). `0x02` : l'arrivée des émissions
+/// change l'encodage du bloc, donc `Bloc::id`, donc l'identifiant de la genèse VIDE
+/// elle-même. La disposition des octets de l'état n'a pas bougé, mais la SIGNIFICATION
+/// du champ `tete` a changé : un dump `0x01` rechargé tel quel porterait une tête que
+/// plus aucun bloc ne prolonge, et le nœud refuserait tout en silence. On le refuse
+/// donc explicitement plutôt que de le lire de travers.
+pub const VERSION_ETAT: u8 = 0x02;
 
 pub struct ProvedLedgerState {
     pub tree: MerkleFrontier,
@@ -110,6 +125,13 @@ pub struct ProvedLedgerState {
     tete: [u8; TAILLE_ID],
     /// Hauteur de cette tête (genèse = 0).
     hauteur: u64,
+    /// Historique des sorties — `None` par DÉFAUT.
+    ///
+    /// Un `Option` et pas un champ toujours présent : l'archivage est un rôle
+    /// d'opérateur, pas une obligation de consensus (cf. `crate::historique`). Le champ
+    /// est privé et n'est écrit que par `amorcer` et `appliquer_bloc`, exactement là où
+    /// l'arbre grandit — c'est ce qui garantit que les deux ne peuvent pas diverger.
+    historique: Option<HistoriqueSorties>,
 }
 
 /// Refus d'un bloc. Distinct de `LedgerError` : un bloc peut être parfaitement formé
@@ -122,6 +144,10 @@ pub enum BlocRefus {
     HauteurInattendue { attendue: u64, recue: u64 },
     #[error("bloc de {recues} transactions (borne : {borne})")]
     TropDeTransactions { borne: usize, recues: usize },
+    /// Émission hors genèse : **tentative d'inflation**, à la différence des refus de
+    /// chaînage qui sont le cas normal d'un nœud en retard.
+    #[error("{recues} émissions à la hauteur {hauteur} : seule la genèse peut émettre")]
+    EmissionHorsGenese { hauteur: u64, recues: usize },
     #[error("transaction {index} refusée : {source}")]
     Transaction {
         index: usize,
@@ -130,15 +156,151 @@ pub enum BlocRefus {
     },
 }
 
+/// Refus d'un bloc de GENÈSE (`ProvedLedgerState::depuis_genese`).
+///
+/// Enum distinct de `BlocRefus` à dessein : aucune de ces variantes ne peut naître
+/// d'un bloc reçu du réseau, et les confondre obligerait `node::orchestration` à
+/// traiter — ou pire, à oublier — des cas inatteignables.
+#[derive(Debug, thiserror::Error)]
+pub enum GeneseRefus {
+    #[error("bloc de genèse chaîné à un parent : une genèse n'en a pas")]
+    ParentPresent,
+    #[error("hauteur {recue} : une genèse est à la hauteur 0")]
+    HauteurNonNulle { recue: u64 },
+    /// Une transaction dans la genèse ne pourrait de toute façon pas s'appliquer
+    /// (aucune ancre n'existe encore). La refuser explicitement évite qu'une genèse
+    /// en contienne en donnant l'illusion qu'elle sera exécutée.
+    #[error("{recues} transactions dans la genèse : aucune ancre n'existe encore")]
+    TransactionsPresentes { recues: usize },
+    #[error("{recues} émissions dans la genèse (borne : {borne})")]
+    TropDEmissions { borne: usize, recues: usize },
+    #[error("émission {index} refusée : {source}")]
+    Emission {
+        index: usize,
+        #[source]
+        source: LedgerError,
+    },
+}
+
 impl ProvedLedgerState {
-    /// État aux paramètres consensus (profondeur 32).
+    /// État aux paramètres consensus (profondeur 32), amorcé sur la genèse VIDE.
+    ///
+    /// Raccourci de `depuis_genese(&Bloc::genese())` : une chaîne sans aucune monnaie
+    /// préexistante. Une chaîne réelle s'amorce sur une genèse paramétrée.
     pub fn new() -> Self {
         Self::with_tree(MerkleFrontier::consensus())
     }
 
-    /// État en profondeur `depth` — tests/dev uniquement.
+    /// État en profondeur `depth` sur la genèse VIDE — tests/dev uniquement.
     pub fn with_depth(depth: usize) -> Self {
         Self::with_tree(MerkleFrontier::new(depth))
+    }
+
+    /// **Amorce** l'état sur un bloc de genèse (profondeur consensus).
+    ///
+    /// # La genèse ne s'APPLIQUE pas, elle AMORCE
+    ///
+    /// Il n'y a rien à défaire ici : l'état est neuf. C'est pourquoi l'amorçage est un
+    /// constructeur et non un cas particulier d'`appliquer_bloc` — l'atomicité
+    /// durement acquise de cette dernière (instantané de la frontier, défaisage des
+    /// nullifiers) n'a pas à être compliquée pour un cas où l'échec se traduit
+    /// simplement par « pas d'état ».
+    ///
+    /// La tête devient l'identifiant de CETTE genèse. Deux nœuds amorcés sur des
+    /// genèses différentes sont donc à la même hauteur (0) mais avec des têtes
+    /// DIFFÉRENTES : leurs blocs ne s'enchaînent pas et le désaccord est visible
+    /// immédiatement, au lieu d'apparaître bien plus tard sous forme d'« ancre
+    /// inconnue ».
+    ///
+    /// Les commitments d'émission sont insérés DANS L'ORDRE du bloc : l'émission
+    /// d'indice `i` occupe la feuille `i`. Un wallet qui rejoue la genèse dans cet
+    /// ordre obtient les mêmes index — et sans cela, ses chemins de Merkle seraient
+    /// faux sans qu'aucune erreur ne le dise.
+    pub fn depuis_genese(genese: &Bloc) -> Result<Self, GeneseRefus> {
+        Self::amorcer(MerkleFrontier::consensus(), genese, false)
+    }
+
+    /// Amorçage en profondeur `depth` — tests/dev uniquement.
+    pub fn depuis_genese_depth(genese: &Bloc, depth: usize) -> Result<Self, GeneseRefus> {
+        Self::amorcer(MerkleFrontier::new(depth), genese, false)
+    }
+
+    /// Amorce l'état en ARCHIVANT l'historique des sorties (rôle d'archiviste).
+    ///
+    /// L'archivage se décide à l'amorçage et nulle part ailleurs : l'activer plus tard
+    /// donnerait un historique amputé de son préfixe, que rien ne pourrait reconstruire
+    /// depuis la frontier — et ce trou serait invisible, puisque tous les index servis
+    /// seraient simplement décalés. Voir `crate::historique` pour le coût.
+    pub fn depuis_genese_archivant(genese: &Bloc) -> Result<Self, GeneseRefus> {
+        Self::amorcer(MerkleFrontier::consensus(), genese, true)
+    }
+
+    /// Amorçage archivant en profondeur `depth` — tests/dev uniquement.
+    pub fn depuis_genese_depth_archivant(
+        genese: &Bloc,
+        depth: usize,
+    ) -> Result<Self, GeneseRefus> {
+        Self::amorcer(MerkleFrontier::new(depth), genese, true)
+    }
+
+    fn amorcer(
+        tree: MerkleFrontier,
+        genese: &Bloc,
+        archiver: bool,
+    ) -> Result<Self, GeneseRefus> {
+        if genese.parent != PAS_DE_PARENT {
+            return Err(GeneseRefus::ParentPresent);
+        }
+        if genese.hauteur != 0 {
+            return Err(GeneseRefus::HauteurNonNulle {
+                recue: genese.hauteur,
+            });
+        }
+        if !genese.transactions.is_empty() {
+            return Err(GeneseRefus::TransactionsPresentes {
+                recues: genese.transactions.len(),
+            });
+        }
+        // Borne re-vérifiée ici : `genese_avec` la garantit pour un bloc construit
+        // localement, `from_bytes` pour un bloc décodé — mais `Bloc` a des champs
+        // publics, et l'amorçage est le dernier endroit où l'on peut refuser.
+        if genese.emissions.len() > MAX_EMISSIONS_PAR_BLOC {
+            return Err(GeneseRefus::TropDEmissions {
+                borne: MAX_EMISSIONS_PAR_BLOC,
+                recues: genese.emissions.len(),
+            });
+        }
+
+        let mut etat = Self::with_tree(tree);
+        for (index, emission) in genese.emissions.iter().enumerate() {
+            // BORNES DES ENVELOPPES, re-vérifiées ici pour la même raison que le
+            // compteur ci-dessus : `Bloc` a des champs publics, donc `genese_avec` et
+            // `from_bytes` ne couvrent pas tous les chemins. Ce n'est pas de la
+            // paranoïa décorative — une émission hors bornes archivée produirait un
+            // `historique.bin` que `HistoriqueSorties::from_bytes` REFUSERAIT au
+            // rechargement : un dump illisible par son propre auteur, découvert au
+            // redémarrage suivant et pas avant.
+            if !emission.enc_note.within_bounds() {
+                return Err(GeneseRefus::Emission {
+                    index,
+                    source: LedgerError::Encoding,
+                });
+            }
+            etat.mint(&emission.commitment)
+                .map_err(|source| GeneseRefus::Emission { index, source })?;
+        }
+        etat.tete = genese.id();
+        etat.hauteur = 0;
+        // L'historique n'est écrit qu'une fois l'amorçage RÉUSSI — un amorçage refusé
+        // ne laisse pas d'état du tout, donc rien à défaire. La genèse est la première
+        // tranche : ses émissions sont les feuilles 0..m, dans l'ordre du bloc.
+        if archiver {
+            let mut h = HistoriqueSorties::nouveau();
+            let sorties: Vec<Sortie> = genese.emissions.iter().map(Sortie::from).collect();
+            h.ajouter_bloc(0, sorties, etat.tree.root());
+            etat.historique = Some(h);
+        }
+        Ok(etat)
     }
 
     fn with_tree(tree: MerkleFrontier) -> Self {
@@ -149,6 +311,7 @@ impl ProvedLedgerState {
             roots_order: VecDeque::new(),
             tete: Bloc::genese().id(),
             hauteur: 0,
+            historique: None,
         };
         let root = s.tree.root();
         s.remember_root(root);
@@ -167,9 +330,17 @@ impl ProvedLedgerState {
         }
     }
 
-    /// Émission (faucet du prototype) : insère un commitment prouvé, retourne son
-    /// index. `TreeFull` si l'arbre est saturé (2^profondeur feuilles).
-    pub fn mint(&mut self, cm: &Digest) -> Result<u64, LedgerError> {
+    /// Insère un commitment ÉMIS et retourne son index. `TreeFull` si l'arbre est
+    /// saturé (2^profondeur feuilles).
+    ///
+    /// ⚠️ **PRIVÉE, et ce n'est pas négociable.** Son unique appelant légitime est
+    /// `amorcer`, c'est-à-dire la genèse. Publique, elle était une porte de création de
+    /// monnaie hors de tout bloc : la seule chose qui empêchait l'inflation était que
+    /// le fraudeur divergeait (racine que personne d'autre n'a, monnaie inutilisable
+    /// parce qu'invisible). C'est un accident heureux, pas une règle — et un futur
+    /// appel depuis un chemin de consensus l'aurait transformé en inflation
+    /// DIFFUSÉE et ACCEPTÉE par tous, sans qu'aucune erreur ne soit levée.
+    fn mint(&mut self, cm: &Digest) -> Result<u64, LedgerError> {
         let idx = self.tree.append(cm).map_err(|_| LedgerError::TreeFull)?;
         let root = self.tree.root();
         self.remember_root(root);
@@ -252,6 +423,71 @@ impl ProvedLedgerState {
         self.hauteur
     }
 
+    /// Historique des sorties, si ce nœud tient le rôle d'archiviste.
+    ///
+    /// `None` est le cas NORMAL : l'archivage est optionnel, et un nœud qui rend `None`
+    /// ici est parfaitement valide — il ne peut simplement pas amorcer de wallet.
+    /// Aucune référence MUTABLE n'est exposée : l'historique ne doit grandir que par
+    /// `appliquer_bloc`, sans quoi il pourrait présenter un ordre que l'arbre n'a
+    /// jamais eu.
+    pub fn historique(&self) -> Option<&HistoriqueSorties> {
+        self.historique.as_ref()
+    }
+
+    /// Adopte un historique RECHARGÉ depuis le disque, après l'avoir confronté à l'état.
+    ///
+    /// # Ce que ce contrôle attrape
+    ///
+    /// L'état et l'historique sont deux fichiers, donc deux écritures : un crash entre
+    /// les deux les laisse désaccordés. Un historique plus court que l'arbre servirait
+    /// des index incomplets ; un historique plus LONG que l'arbre est une divergence
+    /// franche (il porte des feuilles que notre chaîne n'a pas). Dans les deux cas le
+    /// symptôme, sans ce contrôle, serait muet : le wallet obtiendrait des chemins de
+    /// Merkle faux et ses transactions seraient refusées pour « ancre inconnue », sans
+    /// que rien ne désigne l'archive.
+    ///
+    /// Les trois contrôles sont ceux que l'état PEUT faire : la dernière hauteur, le
+    /// nombre de feuilles, et la racine de fin de bloc. Le troisième est le seul qui
+    /// lie le CONTENU : deux historiques de même longueur mais d'ordre différent ont
+    /// des racines différentes.
+    ///
+    /// ⚠️ **Aucune réparation.** L'échec ne tronque rien et n'efface rien : le bloc en
+    /// trop a peut-être été relayé à tout le réseau, et les sorties d'un bloc ne se
+    /// reconstruisent depuis aucun état. L'appelant journalise et tourne en mode
+    /// dégradé (sans archive).
+    pub fn adopter_historique(
+        &mut self,
+        historique: HistoriqueSorties,
+    ) -> Result<(), HistoriqueDesaccord> {
+        if historique.debut() != 0 {
+            return Err(HistoriqueDesaccord::DebutNonNul {
+                debut: historique.debut(),
+            });
+        }
+        let derniere = historique
+            .derniere_tranche()
+            .ok_or(HistoriqueDesaccord::Vide)?;
+        if derniere.hauteur != self.hauteur {
+            return Err(HistoriqueDesaccord::Hauteur {
+                etat: self.hauteur,
+                historique: derniere.hauteur,
+            });
+        }
+        if derniere.fin != self.tree.len() {
+            return Err(HistoriqueDesaccord::Longueur {
+                etat: self.tree.len(),
+                historique: derniere.fin,
+            });
+        }
+        if derniere.racine_apres != self.tree.root() {
+            return Err(HistoriqueDesaccord::Racine {
+                hauteur: derniere.hauteur,
+            });
+        }
+        self.historique = Some(historique);
+        Ok(())
+    }
+
     /// Applique un bloc — **atomiquement** : tout ou rien.
     ///
     /// # L'atomicité n'est pas un raffinement
@@ -271,7 +507,27 @@ impl ProvedLedgerState {
     /// Une transaction peut dépenser une sortie d'une transaction plus tôt dans le
     /// même bloc : elle s'ancre alors sur une racine née à l'intérieur du bloc. Les
     /// valider toutes d'abord, puis les appliquer, rejetterait ce cas légitime.
+    ///
+    /// # L'ÉMISSION est refusée en premier, et c'est délibéré
+    ///
+    /// `hauteur > 0 ⇒ emissions.is_empty()`. Ce contrôle O(1) précède TOUT : le
+    /// chaînage, l'instantané, la boucle de vérification. Placé après, un bloc de 512
+    /// transactions parfaitement valides accompagnées d'une émission illégitime nous
+    /// coûterait ≈2 s de vérification STARK avant le refus — un déni de service à prix
+    /// d'un octet.
+    ///
+    /// Il précède aussi le contrôle de chaînage parce que ces deux refus ne sont pas
+    /// de même nature : « ce bloc ne prolonge pas MA chaîne » est relatif à nous et
+    /// n'accuse personne, tandis qu'« il crée de la monnaie hors genèse » est invalide
+    /// pour TOUT LE MONDE. Répondre le second quand les deux sont vrais permet à
+    /// `node::orchestration` de sanctionner l'un sans sanctionner l'autre.
     pub fn appliquer_bloc(&mut self, bloc: &Bloc) -> Result<Vec<u64>, BlocRefus> {
+        if bloc.hauteur > 0 && !bloc.emissions.is_empty() {
+            return Err(BlocRefus::EmissionHorsGenese {
+                hauteur: bloc.hauteur,
+                recues: bloc.emissions.len(),
+            });
+        }
         if bloc.parent != self.tete {
             return Err(BlocRefus::ParentInattendu);
         }
@@ -299,6 +555,14 @@ impl ProvedLedgerState {
         let ordre_avant = self.roots_order.clone();
         let mut nullifiers_ajoutes: Vec<[u8; 32]> = Vec::new();
 
+        // Les sorties du bloc sont accumulées LOCALEMENT et ne rejoignent l'historique
+        // qu'à la toute fin. L'atomicité de l'historique est donc STRUCTURELLE : il n'y
+        // a rien à défaire, parce que rien n'est écrit avant le succès. Un historique
+        // plus long que l'arbre serait une divergence silencieuse — le wallet servirait
+        // des index décalés et ses chemins de Merkle seraient faux sans qu'aucune
+        // erreur ne le dise.
+        let mut sorties_du_bloc: Vec<Sortie> = Vec::new();
+
         let mut indices = Vec::new();
         for (index, tx) in bloc.transactions.iter().enumerate() {
             let avant = self.nullifiers.len();
@@ -306,6 +570,17 @@ impl ProvedLedgerState {
                 Ok(mut i) => {
                     debug_assert_eq!(self.nullifiers.len(), avant + tx.nullifiers.len());
                     nullifiers_ajoutes.extend(tx.nullifiers.iter().map(|n| n.to_bytes()));
+                    if self.historique.is_some() {
+                        // MÊME ORDRE que les insertions d'`apply_proved_tx`
+                        // (`output_commitments` dans l'ordre) et même appariement que
+                        // `tx_digest` v3 (`enc_notes[j]` ↔ `output_commitments[j]`).
+                        for (oc, enc) in tx.output_commitments.iter().zip(tx.enc_notes.iter()) {
+                            sorties_du_bloc.push(Sortie {
+                                commitment: *oc,
+                                enc_note: enc.clone(),
+                            });
+                        }
+                    }
                     indices.append(&mut i);
                 }
                 Err(source) => {
@@ -323,6 +598,12 @@ impl ProvedLedgerState {
 
         self.tete = bloc.id();
         self.hauteur = bloc.hauteur;
+        // Seul endroit, avec `amorcer`, où l'historique est écrit — et il l'est APRÈS
+        // que l'arbre a fini de bouger, donc `racine_apres` est bien la racine de fin
+        // de bloc sur laquelle un wallet à jour doit s'ancrer.
+        if let Some(h) = self.historique.as_mut() {
+            h.ajouter_bloc(bloc.hauteur, sorties_du_bloc, self.tree.root());
+        }
         Ok(indices)
     }
 
@@ -331,6 +612,11 @@ impl ProvedLedgerState {
     /// (32 o)`. Les nullifiers sont triés (le `HashSet` n'a pas d'ordre stable) →
     /// même état ⇒ mêmes octets. `roots_order` garde son ordre FIFO (la fenêtre
     /// glissante en dépend) ; `recent_roots` est reconstruit au chargement.
+    ///
+    /// ⚠️ L'historique des sorties n'est **pas** ici : il a son propre dump
+    /// (`HistoriqueSorties::save`) et se rattache par `adopter_historique`. Deux
+    /// fichiers, donc deux écritures, donc un désaccord possible après un crash — c'est
+    /// exactement ce que `adopter_historique` refuse de réparer en silence.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut b = vec![VERSION_ETAT];
         // Position dans la chaîne : sans elle, un nœud redémarré aurait l'état d'une
@@ -411,6 +697,11 @@ impl ProvedLedgerState {
             roots_order,
             tete,
             hauteur,
+            // L'historique vit dans un fichier SÉPARÉ et se rattache par
+            // `adopter_historique`, qui le confronte à cet état. L'embarquer ici
+            // aurait forcé TOUS les nœuds à porter un dump de plusieurs Gio pour un
+            // rôle qui est optionnel, et aurait changé `VERSION_ETAT`.
+            historique: None,
         })
     }
 
@@ -452,9 +743,37 @@ mod tests {
 
     const DEPTH: usize = 4; // petit pour la vitesse (membership@32 validé ailleurs)
 
+    /// État amorcé sur une genèse portant `cms` en émissions FACTICES (personne ne
+    /// peut les déchiffrer — voir `proved_wallet::emission_factice`).
+    ///
+    /// Les tests qui ont besoin de notes DÉPENSABLES fournissent des commitments
+    /// dont ils connaissent le témoin par ailleurs : le chiffré de l'émission ne sert
+    /// alors qu'à occuper la place, ce que le consensus ne regarde pas.
+    fn genese_de(cms: &[Digest], depth: usize) -> ProvedLedgerState {
+        genese_de_archivant(cms, depth, false)
+    }
+
+    fn genese_de_archivant(cms: &[Digest], depth: usize, archiver: bool) -> ProvedLedgerState {
+        let emissions = cms
+            .iter()
+            .map(crate::proved_wallet::emission_factice)
+            .collect();
+        let genese = crate::bloc::Bloc::genese_avec(emissions).expect("genèse bornée");
+        if archiver {
+            ProvedLedgerState::depuis_genese_depth_archivant(&genese, depth).expect("amorçage")
+        } else {
+            ProvedLedgerState::depuis_genese_depth(&genese, depth).expect("amorçage")
+        }
+    }
+
     /// Prépare un état avec 2 notes d'entrée émises et construit une tx équilibrée.
     /// Retourne (état, tx, indices d'entrée).
     fn setup() -> (ProvedLedgerState, circuit::ProvedTx) {
+        setup_avec(false)
+    }
+
+    /// Idem, en choisissant si l'état tient le rôle d'archiviste.
+    fn setup_avec(archiver: bool) -> (ProvedLedgerState, circuit::ProvedTx) {
         let secret = proved_hash::digest::ShieldedSecret::from_felts(core::array::from_fn(|i| {
             Felt::from_canonical_u64(700 + i as u64).unwrap()
         }));
@@ -465,16 +784,17 @@ mod tests {
         let cm0 = rescue::note_commitment(n0.value, &n0.owner, &n0.rho, &n0.r);
         let cm1 = rescue::note_commitment(n1.value, &n1.owner, &n1.rho, &n1.r);
 
-        let mut state = ProvedLedgerState::with_depth(DEPTH);
+        // La monnaie n'existe QUE par la genèse : deux émissions, insérées dans
+        // l'ordre du bloc (donc index 0 et 1).
+        let state = genese_de_archivant(&[cm0, cm1], DEPTH, archiver);
         // Arbre wallet parallèle : produit les chemins (le nœud n'a que la frontier,
         // qui n'expose pas `path`). Mêmes commitments, même ordre → même racine
         // (garanti par `merkle::frontier_differentiel_full_tree`), donc témoin valide.
         let mut wallet_tree = proved_hash::merkle::ProvedMerkleTree::new(DEPTH);
-        let i0 = state.mint(&cm0).unwrap();
-        let i1 = state.mint(&cm1).unwrap();
         wallet_tree.append(&cm0);
         wallet_tree.append(&cm1);
         debug_assert_eq!(state.tree.root(), wallet_tree.root());
+        let (i0, i1) = (0u64, 1u64);
         let path0 = wallet_tree.path(i0).unwrap();
         let path1 = wallet_tree.path(i1).unwrap();
 
@@ -528,12 +848,12 @@ mod tests {
         let cm0 = rescue::note_commitment(n0.value, &n0.owner, &n0.rho, &n0.r);
         let cm1 = rescue::note_commitment(n1.value, &n1.owner, &n1.rho, &n1.r);
 
-        let mut state = ProvedLedgerState::with_depth(DEPTH);
+        let mut state = genese_de(&[cm0, cm1], DEPTH);
         // Arbre wallet parallèle pour les chemins (cf. `setup`).
         let mut wallet_tree = proved_hash::merkle::ProvedMerkleTree::new(DEPTH);
-        let (i0, i1) = (state.mint(&cm0).unwrap(), state.mint(&cm1).unwrap());
         wallet_tree.append(&cm0);
         wallet_tree.append(&cm1);
+        let (i0, i1) = (0u64, 1u64);
         let (path0, path1) = (wallet_tree.path(i0).unwrap(), wallet_tree.path(i1).unwrap());
 
         // Deux destinataires avec leurs clés KEM et owners prouvés.
@@ -663,15 +983,146 @@ mod tests {
         ));
     }
 
-    /// Saturation via `mint` : un arbre de faible profondeur refuse le mint qui
-    /// dépasse `2^profondeur` — `Result` (`TreeFull`), jamais de panique. Aucune
-    /// preuve STARK ⇒ tourne en build nu (pas de `--release`).
+    /// Saturation à l'AMORÇAGE : une genèse qui émet plus de feuilles que l'arbre n'en
+    /// contient est refusée par un `Result` (`TreeFull`) qui DÉSIGNE l'émission
+    /// fautive, jamais par une panique. Le décodage borne le NOMBRE d'émissions, pas
+    /// leur compatibilité avec la profondeur : c'est ici que ça se joue. Aucune preuve
+    /// STARK ⇒ tourne en build nu (pas de `--release`).
     #[test]
-    fn mint_sur_arbre_plein_rend_treefull() {
-        let mut state = ProvedLedgerState::with_depth(1); // 2^1 = 2 feuilles
-        assert!(state.mint(&digest(1)).is_ok());
-        assert!(state.mint(&digest(2)).is_ok());
-        assert!(matches!(state.mint(&digest(3)), Err(LedgerError::TreeFull)));
+    fn genese_trop_grande_pour_larbre_rend_treefull() {
+        let genese = crate::bloc::Bloc::genese_avec(
+            [1u64, 2, 3]
+                .iter()
+                .map(|s| crate::proved_wallet::emission_factice(&digest(*s)))
+                .collect(),
+        )
+        .expect("genèse bornée");
+        // 2^1 = 2 feuilles pour 3 émissions.
+        assert!(matches!(
+            ProvedLedgerState::depuis_genese_depth(&genese, 1),
+            Err(GeneseRefus::Emission {
+                index: 2,
+                source: LedgerError::TreeFull
+            })
+        ));
+    }
+
+    /// UNE ÉMISSION HORS GENÈSE EST REFUSÉE, ET LE REFUS TOMBE AVANT LES PREUVES.
+    ///
+    /// C'est LA règle qui remplace la protection accidentelle d'avant : jusqu'ici rien
+    /// n'interdisait de créer de la monnaie, c'est la DIVERGENCE qui punissait (racine
+    /// que personne n'a). Un champ `emissions` applicable à toute hauteur aurait rendu
+    /// l'inflation diffusée et ACCEPTÉE — la règle doit donc exister vraiment.
+    ///
+    /// Le bloc contient ici une transaction SABOTÉE en plus de l'émission : si le
+    /// contrôle était placé après la boucle de vérification, on obtiendrait
+    /// `Transaction { .. }` après ≈4 ms de STARK brûlées par transaction. À 512
+    /// transactions valides suivies d'une émission, c'est ≈2 s offertes à l'attaquant
+    /// pour un octet — le test échoue sur l'autre variante et le dit.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "sous-preuves gatées : --release")]
+    fn emission_hors_genese_refusee_avant_toute_verification() {
+        let (mut etat, mut sabotee) = setup();
+        sabotee.output_commitments[0] = digest(1_234_567); // preuve invalidée
+        let avant_racine = etat.tree.root();
+
+        let mut bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, vec![sabotee]);
+        // Champs publics : on force l'émission comme le ferait un pair hostile.
+        bloc.emissions = vec![crate::proved_wallet::emission_factice(&digest(5_000))];
+
+        assert!(
+            matches!(
+                etat.appliquer_bloc(&bloc),
+                Err(BlocRefus::EmissionHorsGenese {
+                    hauteur: 1,
+                    recues: 1
+                })
+            ),
+            "le refus doit désigner l'ÉMISSION, pas la transaction : sinon le contrôle \
+             O(1) est placé après la vérification STARK"
+        );
+        assert_eq!(etat.tree.root(), avant_racine, "aucune feuille créée");
+        assert_eq!(etat.hauteur(), 0);
+    }
+
+    /// Même bloc, mais chaîné AILLEURS : le refus reste `EmissionHorsGenese`.
+    ///
+    /// Les deux refus ne sont pas de même nature — « ne prolonge pas ma chaîne » est
+    /// relatif à nous et n'accuse personne (deux scellements simultanés), « crée de la
+    /// monnaie » est invalide pour tout le monde. C'est cette priorité qui permet à
+    /// `node::orchestration` de sanctionner l'un sans sanctionner l'autre ; l'inverser
+    /// laisserait un émetteur frauduleux impuni en chaînant mal exprès.
+    #[test]
+    fn emission_prime_sur_le_refus_de_chainage() {
+        let mut etat = ProvedLedgerState::with_depth(6);
+        let mut bloc = crate::bloc::Bloc::sceller(&[9u8; TAILLE_ID], 1, Vec::new());
+        bloc.emissions = vec![crate::proved_wallet::emission_factice(&digest(1))];
+        assert!(matches!(
+            etat.appliquer_bloc(&bloc),
+            Err(BlocRefus::EmissionHorsGenese { .. })
+        ));
+    }
+
+    /// DEUX NŒUDS, MÊME GENÈSE : même racine ET même tête. Genèses différentes : même
+    /// hauteur (0) mais têtes DIFFÉRENTES.
+    ///
+    /// C'est ce qui rend l'erreur d'amorçage DÉTECTABLE. Sans la tête liée à la
+    /// genèse, deux opérateurs partis de paramètres différents auraient deux nœuds
+    /// « à la hauteur 0 » d'apparence saine, qui se refuseraient tous les blocs sans
+    /// que rien ne désigne la cause.
+    #[test]
+    fn genese_identique_meme_tete_genese_differente_tetes_distinctes() {
+        let cm = digest(1);
+        let g1 = crate::bloc::Bloc::genese_avec(vec![crate::proved_wallet::emission_factice(&cm)])
+            .unwrap();
+        let a = ProvedLedgerState::depuis_genese_depth(&g1, 6).unwrap();
+        let b = ProvedLedgerState::depuis_genese_depth(&g1, 6).unwrap();
+        assert_eq!(a.tree.root(), b.tree.root(), "même genèse ⇒ même racine");
+        assert_eq!(a.tete(), b.tete(), "même genèse ⇒ même tête");
+
+        // Une AUTRE genèse : même commitment, mais une enveloppe factice fraîche.
+        let g2 = crate::bloc::Bloc::genese_avec(vec![crate::proved_wallet::emission_factice(&cm)])
+            .unwrap();
+        let c = ProvedLedgerState::depuis_genese_depth(&g2, 6).unwrap();
+        assert_eq!(c.hauteur(), a.hauteur(), "les deux sont à la hauteur 0");
+        assert_ne!(
+            c.tete(),
+            a.tete(),
+            "des genèses différentes doivent donner des TÊTES différentes : c'est le \
+             seul signal qui distingue un nœud mal amorcé d'un nœud neuf en bonne santé"
+        );
+    }
+
+    /// Une genèse à hauteur non nulle, chaînée, ou porteuse de transactions est
+    /// refusée. Un bloc ordinaire passé pour une genèse amorcerait sinon un état
+    /// silencieusement faux.
+    #[test]
+    fn genese_malformee_refusee() {
+        let ordinaire = crate::bloc::Bloc::sceller(&[7u8; TAILLE_ID], 3, Vec::new());
+        assert!(matches!(
+            ProvedLedgerState::depuis_genese_depth(&ordinaire, 6),
+            Err(GeneseRefus::ParentPresent)
+        ));
+
+        let mut haute = crate::bloc::Bloc::genese();
+        haute.hauteur = 3;
+        assert!(matches!(
+            ProvedLedgerState::depuis_genese_depth(&haute, 6),
+            Err(GeneseRefus::HauteurNonNulle { recue: 3 })
+        ));
+    }
+
+    /// `new`/`with_depth` sont bien le raccourci de la genèse VIDE, pas un troisième
+    /// point de départ. S'ils divergeaient, un nœud lancé sans `--genese` ne pourrait
+    /// pas échanger de blocs avec un nœud amorcé sur `Bloc::genese()`.
+    #[test]
+    fn etat_neuf_egale_genese_vide() {
+        let neuf = ProvedLedgerState::with_depth(6);
+        let amorce =
+            ProvedLedgerState::depuis_genese_depth(&crate::bloc::Bloc::genese(), 6).unwrap();
+        assert_eq!(neuf.tete(), amorce.tete());
+        assert_eq!(neuf.tree.root(), amorce.tree.root());
+        assert_eq!(neuf.to_bytes(), amorce.to_bytes());
     }
 
     /// LA PROPRIÉTÉ QUI JUSTIFIE LE BLOC : deux nœuds qui appliquent la MÊME chaîne
@@ -885,10 +1336,19 @@ mod tests {
     fn dump_dautre_version_refuse() {
         let etat = ProvedLedgerState::with_depth(4);
         let mut octets = etat.to_bytes();
-        octets[0] = 0x02;
+        octets[0] = 0x03;
         assert!(matches!(
             ProvedLedgerState::from_bytes(&octets),
-            Err(StateDecodeError::BadVersion(0x02))
+            Err(StateDecodeError::BadVersion(0x03))
+        ));
+        // Et un dump de la version PRÉCÉDENTE (0x01) : refusé aussi. Son champ `tete`
+        // porte l'identifiant d'une genèse calculée sur l'ancien encodage de bloc ;
+        // relu tel quel, le nœud attendrait un bloc que personne ne produira jamais et
+        // se figerait sans rien dire.
+        octets[0] = 0x01;
+        assert!(matches!(
+            ProvedLedgerState::from_bytes(&octets),
+            Err(StateDecodeError::BadVersion(0x01))
         ));
     }
 
@@ -964,6 +1424,349 @@ mod tests {
         assert!(matches!(
             ProvedLedgerState::load(&path),
             Err(StateLoadError::Io(_))
+        ));
+    }
+
+    // ================================================================================
+    // HISTORIQUE DES SORTIES (synchronisation wallet)
+    // ================================================================================
+
+    /// L'ORDRE DE L'HISTORIQUE EST EXACTEMENT CELUI DE L'ARBRE.
+    ///
+    /// C'est la seule garantie réellement vérifiable, et elle est vérifiable parce que
+    /// la racine de Merkle dépend de l'ORDRE : rejouer les sorties servies dans l'ordre
+    /// servi doit reproduire, tranche par tranche, les racines que le nœud a réellement
+    /// eues. Deux sorties interverties dans l'historique — la faute la plus facile à
+    /// commettre en refactorant `appliquer_bloc` — donneraient une racine différente
+    /// dès la tranche fautive.
+    ///
+    /// Sans cette propriété, un wallet obtiendrait des index décalés, donc des chemins
+    /// de Merkle faux, donc des transactions refusées pour « ancre inconnue » sans que
+    /// rien ne désigne l'archive comme coupable.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "sous-preuves gatées : --release")]
+    fn historique_rejoue_reproduit_larbre_et_ses_racines() {
+        let (mut etat, tx) = setup_avec(true);
+        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, vec![tx]);
+        etat.appliquer_bloc(&bloc).expect("bloc valide");
+
+        let h = etat.historique().expect("état archiviste");
+        // Un wallet part d'un arbre VIDE et n'insère que ce qu'on lui sert.
+        let mut rejeu = proved_hash::merkle::ProvedMerkleTree::new(DEPTH);
+        let mut vues = 0u64;
+        for hauteur in 0..=etat.hauteur() {
+            let tranche = h.tranche(hauteur).expect("tranche présente");
+            for sortie in h.sorties_du_bloc(hauteur).expect("sorties présentes") {
+                rejeu.append(&sortie.commitment);
+                vues += 1;
+            }
+            assert_eq!(
+                rejeu.root(),
+                tranche.racine_apres,
+                "la racine de fin de bloc {hauteur} doit être celle que le nœud a eue : \
+                 c'est l'ancre que tous les wallets à jour publieront"
+            );
+            assert_eq!(vues, tranche.fin, "la plage annoncée doit être la plage servie");
+        }
+        assert_eq!(
+            rejeu.root(),
+            etat.tree.root(),
+            "arbre rejoué ≠ arbre du nœud : l'historique n'est pas dans l'ordre de l'arbre"
+        );
+        assert_eq!(h.len() as u64, etat.tree.len(), "autant d'entrées que de feuilles");
+    }
+
+    /// L'HISTORIQUE D'UNE HAUTEUR EST EXACTEMENT CE QUE LE BLOC ENGAGE DÉJÀ.
+    ///
+    /// C'est l'argument, rendu mécanique, de la décision consignée dans
+    /// `crate::historique` : `racine_apres` et `fin` n'ont pas à entrer dans
+    /// `Bloc::to_bytes` (donc dans `Bloc::id`), parce que l'encodage du bloc contient
+    /// déjà ses transactions entières — donc leurs `output_commitments` et `enc_notes`,
+    /// dans l'ordre. Ce test compare les deux entrée par entrée : si un jour l'historique
+    /// servait autre chose que ce que le bloc engage, la décision deviendrait fausse et
+    /// ce test tomberait.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "sous-preuves gatées : --release")]
+    fn historique_est_exactement_ce_que_le_bloc_engage() {
+        let (mut etat, tx) = setup_avec(true);
+        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, vec![tx]);
+        etat.appliquer_bloc(&bloc).expect("bloc valide");
+
+        let servies = etat
+            .historique()
+            .expect("archiviste")
+            .sorties_du_bloc(1)
+            .expect("hauteur servie");
+        let engagees: Vec<_> = bloc
+            .transactions
+            .iter()
+            .flat_map(|t| t.output_commitments.iter().zip(t.enc_notes.iter()))
+            .collect();
+
+        assert_eq!(servies.len(), engagees.len());
+        for (servie, (oc, enc)) in servies.iter().zip(engagees) {
+            assert_eq!(servie.commitment.to_bytes(), oc.to_bytes());
+            assert_eq!(servie.enc_note.kem_ct, enc.kem_ct);
+            assert_eq!(servie.enc_note.enc_note, enc.enc_note);
+        }
+    }
+
+    /// Même propriété pour la GENÈSE : ses émissions sont la première tranche, dans
+    /// l'ordre du bloc. Sans preuve STARK, donc en build nu.
+    #[test]
+    fn historique_de_genese_est_exactement_les_emissions() {
+        let genese = crate::bloc::Bloc::genese_avec(
+            (1..=3)
+                .map(|i| crate::proved_wallet::emission_factice(&digest(i * 10)))
+                .collect(),
+        )
+        .unwrap();
+        let etat = ProvedLedgerState::depuis_genese_depth_archivant(&genese, 6).unwrap();
+        let servies = etat
+            .historique()
+            .expect("archiviste")
+            .sorties_du_bloc(0)
+            .expect("la genèse est la hauteur 0");
+        assert_eq!(servies.len(), 3);
+        for (servie, emise) in servies.iter().zip(genese.emissions.iter()) {
+            assert_eq!(servie.commitment.to_bytes(), emise.commitment.to_bytes());
+            assert_eq!(servie.enc_note.kem_ct, emise.enc_note.kem_ct);
+            assert_eq!(servie.enc_note.enc_note, emise.enc_note.enc_note);
+        }
+    }
+
+    /// ATOMICITÉ DE L'HISTORIQUE : un bloc refusé n'y laisse rien.
+    ///
+    /// Un historique plus long que l'arbre est une divergence SILENCIEUSE : toutes les
+    /// feuilles suivantes seraient décalées d'un cran, le wallet produirait des chemins
+    /// faux, et le seul symptôme serait un « ancre inconnue » inexplicable. Le bloc
+    /// contient ici une transaction valide suivie d'une transaction sabotée — le cas
+    /// où un défaisage partiel serait possible.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "sous-preuves gatées : --release")]
+    fn bloc_refuse_ne_laisse_rien_dans_lhistorique() {
+        let (mut etat, tx) = setup_avec(true);
+        let (_autre, mut sabotee) = setup_avec(false);
+        sabotee.output_commitments[0] = digest(1_234_567);
+
+        let avant_entrees = etat.historique().unwrap().len();
+        let avant_tranches = etat.historique().unwrap().nombre_de_tranches();
+
+        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, vec![tx, sabotee]);
+        assert!(matches!(
+            etat.appliquer_bloc(&bloc),
+            Err(BlocRefus::Transaction { index: 1, .. })
+        ));
+
+        let h = etat.historique().unwrap();
+        assert_eq!(h.len(), avant_entrees, "aucune sortie ne doit rester");
+        assert_eq!(h.nombre_de_tranches(), avant_tranches, "aucune tranche en trop");
+        assert_eq!(
+            h.derniere_tranche().unwrap().fin,
+            etat.tree.len(),
+            "historique et arbre doivent porter le MÊME nombre de feuilles"
+        );
+    }
+
+    /// L'ARCHIVAGE NE CHANGE AUCUN OCTET DE L'ÉTAT DE CONSENSUS.
+    ///
+    /// C'est la contrainte de `docs/THREAT_MODEL.md` : le rôle d'archiviste est séparé
+    /// et optionnel, et un nœud qui n'archive pas est VALIDE. S'il en allait autrement,
+    /// deux nœuds appliquant la même chaîne divergeraient selon un choix d'opérateur —
+    /// et la confidentialité deviendrait un privilège de celui qui archive.
+    #[test]
+    fn un_noeud_qui_narchive_pas_reste_valide_et_identique() {
+        let genese = crate::bloc::Bloc::genese_avec(vec![
+            crate::proved_wallet::emission_factice(&digest(1)),
+            crate::proved_wallet::emission_factice(&digest(2)),
+        ])
+        .unwrap();
+
+        let mut sobre = ProvedLedgerState::depuis_genese_depth(&genese, 6).unwrap();
+        let mut archiviste = ProvedLedgerState::depuis_genese_depth_archivant(&genese, 6).unwrap();
+        assert!(sobre.historique().is_none(), "l'archivage est OFF par défaut");
+        assert!(archiviste.historique().is_some());
+
+        for hauteur in 1..=3u64 {
+            let b = crate::bloc::Bloc::sceller(&sobre.tete(), hauteur, Vec::new());
+            sobre.appliquer_bloc(&b).unwrap();
+            let b = crate::bloc::Bloc::sceller(&archiviste.tete(), hauteur, Vec::new());
+            archiviste.appliquer_bloc(&b).unwrap();
+        }
+        assert_eq!(
+            sobre.to_bytes(),
+            archiviste.to_bytes(),
+            "l'archivage doit être invisible au consensus, octet pour octet"
+        );
+        assert!(sobre.historique().is_none(), "et il ne s'active pas tout seul");
+        assert_eq!(archiviste.historique().unwrap().hauteur_max(), Some(3));
+    }
+
+    /// L'HISTORIQUE SURVIT AU REDÉMARRAGE, dans son PROPRE fichier.
+    ///
+    /// Le dump d'état ne le porte pas : l'embarquer aurait imposé plusieurs Gio à tous
+    /// les nœuds pour un rôle optionnel. Il se rattache par `adopter_historique`, qui
+    /// le confronte à l'état — c'est ce raccord qui est testé ici.
+    #[test]
+    fn historique_survit_au_redemarrage() {
+        let genese = crate::bloc::Bloc::genese_avec(vec![
+            crate::proved_wallet::emission_factice(&digest(1)),
+            crate::proved_wallet::emission_factice(&digest(2)),
+        ])
+        .unwrap();
+        let mut etat = ProvedLedgerState::depuis_genese_depth_archivant(&genese, 6).unwrap();
+        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new());
+        etat.appliquer_bloc(&bloc).unwrap();
+
+        let octets_etat = etat.to_bytes();
+        let octets_hist = etat.historique().unwrap().to_bytes();
+
+        let mut recharge = ProvedLedgerState::from_bytes(&octets_etat).expect("état relu");
+        assert!(
+            recharge.historique().is_none(),
+            "le dump d'état ne doit PAS porter l'historique"
+        );
+        let hist = HistoriqueSorties::from_bytes(&octets_hist).expect("historique relu");
+        recharge
+            .adopter_historique(hist)
+            .expect("historique concordant avec l'état");
+
+        let h = recharge.historique().unwrap();
+        assert_eq!(h.hauteur_max(), Some(1));
+        assert_eq!(h.len(), 2, "les deux émissions de genèse sont là");
+        assert_eq!(
+            h.sorties_du_bloc(0).unwrap()[0].commitment.to_bytes(),
+            digest(1).to_bytes(),
+            "et dans l'ORDRE de la genèse"
+        );
+        assert_eq!(h.sorties_du_bloc(1).unwrap().len(), 0, "bloc 1 sans sortie");
+    }
+
+    /// UN DÉSACCORD ÉTAT/HISTORIQUE EST NOMMÉ, JAMAIS RÉPARÉ EN SILENCE.
+    ///
+    /// Deux fichiers, donc deux écritures : un crash entre les deux les laisse
+    /// désaccordés. Tronquer pour « réparer » serait le pire choix — le bloc en trop a
+    /// peut-être été relayé à tout le réseau, et les sorties d'un bloc ne se
+    /// reconstruisent depuis aucun état (la frontier ne garde que le bord droit).
+    ///
+    /// Les trois écarts que l'état peut voir sont couverts : la HAUTEUR, le NOMBRE de
+    /// feuilles, et le CONTENU (via la racine — deux historiques de même longueur mais
+    /// d'ordre différent ont des racines différentes).
+    #[test]
+    fn historique_desaccorde_est_nomme_pas_repare() {
+        let genese = crate::bloc::Bloc::genese_avec(vec![
+            crate::proved_wallet::emission_factice(&digest(1)),
+            crate::proved_wallet::emission_factice(&digest(2)),
+        ])
+        .unwrap();
+
+        // Écart de HAUTEUR : l'historique a été écrit avant le dernier bloc.
+        let vieux = ProvedLedgerState::depuis_genese_depth_archivant(&genese, 6)
+            .unwrap()
+            .historique()
+            .unwrap()
+            .to_bytes();
+        let mut avance = ProvedLedgerState::depuis_genese_depth_archivant(&genese, 6).unwrap();
+        let b = crate::bloc::Bloc::sceller(&avance.tete(), 1, Vec::new());
+        avance.appliquer_bloc(&b).unwrap();
+        assert!(matches!(
+            avance.adopter_historique(HistoriqueSorties::from_bytes(&vieux).unwrap()),
+            Err(HistoriqueDesaccord::Hauteur {
+                etat: 1,
+                historique: 0
+            })
+        ));
+        assert!(
+            avance.historique().is_some(),
+            "l'échec d'adoption ne doit pas non plus détruire l'archive déjà en place"
+        );
+
+        // Écart de CONTENU : même hauteur, même nombre de feuilles, autres commitments.
+        let autre_genese = crate::bloc::Bloc::genese_avec(vec![
+            crate::proved_wallet::emission_factice(&digest(300)),
+            crate::proved_wallet::emission_factice(&digest(400)),
+        ])
+        .unwrap();
+        let etranger = ProvedLedgerState::depuis_genese_depth_archivant(&autre_genese, 6)
+            .unwrap()
+            .historique()
+            .unwrap()
+            .to_bytes();
+        let mut chez_nous = ProvedLedgerState::depuis_genese_depth_archivant(&genese, 6).unwrap();
+        assert!(matches!(
+            chez_nous.adopter_historique(HistoriqueSorties::from_bytes(&etranger).unwrap()),
+            Err(HistoriqueDesaccord::Racine { hauteur: 0 })
+        ));
+
+        // Écart de LONGUEUR : une émission de plus, à la même hauteur.
+        let plus_longue = crate::bloc::Bloc::genese_avec(vec![
+            crate::proved_wallet::emission_factice(&digest(1)),
+            crate::proved_wallet::emission_factice(&digest(2)),
+            crate::proved_wallet::emission_factice(&digest(3)),
+        ])
+        .unwrap();
+        let trop = ProvedLedgerState::depuis_genese_depth_archivant(&plus_longue, 6)
+            .unwrap()
+            .historique()
+            .unwrap()
+            .to_bytes();
+        assert!(matches!(
+            chez_nous.adopter_historique(HistoriqueSorties::from_bytes(&trop).unwrap()),
+            Err(HistoriqueDesaccord::Longueur {
+                etat: 2,
+                historique: 3
+            })
+        ));
+    }
+
+    /// UNE BORNE DU DÉCODAGE DOIT EXISTER AUSSI À L'AMORÇAGE.
+    ///
+    /// `Bloc` a des champs publics : une genèse peut être fabriquée en contournant
+    /// `genese_avec` et `from_bytes`, les deux endroits qui bornaient jusqu'ici les
+    /// enveloppes. Sans ce contrôle, un nœud archiviste amorcé sur une telle genèse
+    /// écrirait un `historique.bin` que `HistoriqueSorties::from_bytes` refuserait —
+    /// un dump illisible par son propre auteur, découvert au redémarrage suivant.
+    #[test]
+    fn emission_hors_bornes_refusee_a_lamorcage() {
+        let mut genese = crate::bloc::Bloc::genese();
+        let mut gonflee = crate::proved_wallet::emission_factice(&digest(1));
+        gonflee.enc_note.enc_note = vec![0u8; circuit::tx::MAX_ENC_NOTE_LEN + 1];
+        genese.emissions = vec![gonflee];
+
+        assert!(matches!(
+            ProvedLedgerState::depuis_genese_depth(&genese, 6),
+            Err(GeneseRefus::Emission {
+                index: 0,
+                source: LedgerError::Encoding
+            })
+        ));
+    }
+
+    /// UN HISTORIQUE ÉLAGUÉ EST REFUSÉ TANT QUE RIEN NE SAIT RECONSTRUIRE SON PRÉFIXE.
+    ///
+    /// Le champ `debut` existe dès maintenant pour que l'élagage soit un changement de
+    /// VALEUR et non de FORMAT. Mais l'accepter aujourd'hui donnerait à un wallet un
+    /// historique amputé de son début : ses index seraient tous décalés et rien ne le
+    /// lui dirait. On refuse donc explicitement, plutôt que de servir un décalage.
+    #[test]
+    fn historique_elague_refuse_faute_de_prefixe() {
+        // Historique fabriqué à la main : `debut = 5`, une tranche vide à la hauteur 5.
+        let mut b = vec![crate::historique::VERSION_HISTORIQUE];
+        b.extend_from_slice(&5u64.to_le_bytes()); // debut
+        b.extend_from_slice(&1u64.to_le_bytes()); // une tranche
+        b.extend_from_slice(&5u64.to_le_bytes()); // hauteur
+        b.extend_from_slice(&0u64.to_le_bytes()); // debut de plage
+        b.extend_from_slice(&0u64.to_le_bytes()); // fin de plage
+        b.extend_from_slice(&digest(1).to_bytes()); // racine
+        b.extend_from_slice(&0u64.to_le_bytes()); // aucune sortie
+
+        let elague = HistoriqueSorties::from_bytes(&b).expect("format valide");
+        assert_eq!(elague.debut(), 5, "le FORMAT accepte déjà l'élagage");
+
+        let mut etat = ProvedLedgerState::with_depth(6);
+        assert!(matches!(
+            etat.adopter_historique(elague),
+            Err(HistoriqueDesaccord::DebutNonNul { debut: 5 })
         ));
     }
 

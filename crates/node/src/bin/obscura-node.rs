@@ -35,7 +35,20 @@ fn usage() -> ! {
     eprintln!("  --ecoute  <adresse>  adresse d'écoute (ex. 127.0.0.1:9333)");
     eprintln!("  --pair    <adresse>  pair à contacter (répétable)");
     eprintln!("  --donnees <rep>      répertoire de données (défaut : ./donnees-obscura)");
+    eprintln!("  --genese  <fichier>  bloc de genèse (défaut : genèse VIDE, testnet local)");
     eprintln!("  --sceller <ms>       SCELLER des blocs toutes les <ms> (défaut : off)");
+    eprintln!("  --archiver           conserver l'HISTORIQUE des sorties (défaut : off)");
+    eprintln!();
+    eprintln!("⚠️  --archiver est un rôle d'OPÉRATEUR, pas une obligation de consensus.");
+    eprintln!("    Un nœud qui ne l'active pas est parfaitement valide — il ne peut");
+    eprintln!("    simplement pas amorcer de wallet. Le coût est réel : ≈1,4 Kio par");
+    eprintln!("    sortie, soit ≈1,4 Mio par bloc plein, et l'archive n'est jamais");
+    eprintln!("    élaguée. Elle doit être activée DÈS L'AMORÇAGE : rien ne sait");
+    eprintln!("    reconstruire un préfixe manquant.");
+    eprintln!();
+    eprintln!("⚠️  La genèse fixe la monnaie initiale ET la tête de départ. Deux nœuds");
+    eprintln!("    amorcés sur des genèses différentes se refusent tous leurs blocs.");
+    eprintln!("    L'identifiant imprimé au démarrage est fait pour être COMPARÉ.");
     eprintln!();
     eprintln!("⚠️  --sceller n'est protégé par AUCUNE élection de producteur : tout nœud");
     eprintln!("    qui l'active fabrique des blocs. L'ordre obtenu est CONVENU entre");
@@ -49,16 +62,29 @@ fn main() {
     let mut ecoute: Option<SocketAddr> = None;
     let mut pairs: Vec<SocketAddr> = Vec::new();
     let mut donnees = String::from("./donnees-obscura");
+    let mut genese_fichier: Option<String> = None;
     // Scellement DÉSACTIVÉ par défaut : produire des blocs est une décision
     // d'opérateur, pas un comportement qu'un nœud adopte de lui-même.
     let mut sceller_ms: Option<u64> = None;
+    // Archivage DÉSACTIVÉ par défaut, pour la même raison : conserver l'historique
+    // des sorties est un rôle d'opérateur, à un coût qui croît sans borne.
+    let mut archiver = false;
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--archiver" => {
+                archiver = true;
+                i += 1;
+            }
             "--donnees" => {
                 let Some(v) = args.get(i + 1) else { usage() };
                 donnees = v.clone();
+                i += 2;
+            }
+            "--genese" => {
+                let Some(v) = args.get(i + 1) else { usage() };
+                genese_fichier = Some(v.clone());
                 i += 2;
             }
             "--sceller" => {
@@ -88,6 +114,32 @@ fn main() {
     }
     let Some(adresse_ecoute) = ecoute else { usage() };
 
+    // GENÈSE d'abord, AVANT de toucher au répertoire de données : un démarrage qui
+    // échoue ici ne doit rien laisser derrière lui (une identité créée pour un nœud
+    // qui n'a jamais démarré).
+    //
+    // Elle fixe la monnaie initiale ET la tête de départ. Un nœud amorcé sur
+    // la mauvaise genèse est indiscernable d'un nœud neuf en bonne santé — il refuse
+    // tout bloc en silence et reste à la hauteur 0. D'où : échec FRANC si le fichier
+    // demandé manque, et affichage explicite quand on retombe sur le défaut.
+    let genese = match &genese_fichier {
+        Some(chemin) => match node::persistance::charger_genese(chemin) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("genèse illisible ({chemin}) : {e}");
+                eprintln!("aucun repli n'est tenté : un nœud amorcé sur la mauvaise");
+                eprintln!("genèse refuse tous les blocs sans que rien ne le dise.");
+                std::process::exit(1);
+            }
+        },
+        None => {
+            println!("⚠️  aucune --genese : GENÈSE VIDE par défaut (testnet local).");
+            println!("    Aucune monnaie n'existe sur cette chaîne.");
+            ledger::bloc::Bloc::genese()
+        }
+    };
+    let id_genese = genese.id();
+
     // Identité et état RECHARGÉS s'ils existent — c'est ce qui fait qu'un nœud reste
     // le même pair d'un lancement à l'autre.
     let stockage = match node::persistance::Donnees::ouvrir(&donnees) {
@@ -108,11 +160,42 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let etat = match stockage.charger_ou_creer_etat() {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("état illisible : {e}");
-            std::process::exit(1);
+    // Chargement de l'état. Avec `--archiver`, on tente d'ADOPTER l'archive et, si elle
+    // manque ou ne concorde pas, on tombe en mode DÉGRADÉ — bruyamment, et sans rien
+    // réparer. Servir un historique qu'on n'a pas pu corroborer serait pire que de ne
+    // rien servir : un wallet en tirerait des index faux sans qu'aucune erreur ne le
+    // dise, et sa monnaie deviendrait invisible.
+    let etat = if archiver {
+        match stockage.charger_ou_amorcer_archive(&genese) {
+            Ok(e) => {
+                println!(
+                    "archivage ACTIVÉ — {} sorties conservées (≈{} Kio)",
+                    e.historique().map(|h| h.len()).unwrap_or(0),
+                    e.historique().map(|h| h.octets() / 1024).unwrap_or(0)
+                );
+                e
+            }
+            Err(err) => {
+                eprintln!("⚠️  ARCHIVE INUTILISABLE : {err}");
+                eprintln!("    le nœud démarre en mode DÉGRADÉ, SANS archive : il reste");
+                eprintln!("    parfaitement valide mais ne peut plus amorcer de wallet.");
+                eprintln!("    Aucun fichier n'a été tronqué ni effacé.");
+                match stockage.charger_ou_amorcer_etat(&genese) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        eprintln!("état illisible ou genèse inapplicable : {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
+    } else {
+        match stockage.charger_ou_amorcer_etat(&genese) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("état illisible ou genèse inapplicable : {e}");
+                std::process::exit(1);
+            }
         }
     };
     println!(
@@ -120,6 +203,14 @@ fn main() {
         if neuve { "CRÉÉE" } else { "rechargée" },
         etat.hauteur(),
         etat.tree.len()
+    );
+    // Une LIGNE à comparer entre opérateurs. Elle vaut mieux qu'un diagnostic
+    // a posteriori sur « pourquoi mes blocs sont refusés ».
+    println!(
+        "genèse {} ({} émissions) — tête courante {}",
+        hex::encode(&id_genese[..8]),
+        genese.emissions.len(),
+        hex::encode(&etat.tete()[..8])
     );
     match sceller_ms {
         Some(ms) => {

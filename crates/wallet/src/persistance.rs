@@ -34,6 +34,15 @@
 //! Sur les plateformes sans permissions POSIX (Windows), même cette protection-là
 //! n'est pas posée par le code : le répertoire doit être protégé par l'utilisateur.
 //!
+//! # La POSITION DE SYNCHRONISATION est dans le fichier (0x02)
+//!
+//! Un wallet qui ne se souvient pas d'où il en est redemande l'historique depuis la
+//! hauteur 0 et le rejoue sur un arbre déjà rempli : chaque commitment inséré une
+//! seconde fois, tous les index décalés, et pas une seule erreur — juste des preuves
+//! refusées pour « ancre inconnue ». La position entre donc dans le fichier, et un
+//! fichier `0x01` (antérieur) est REFUSÉ par son nom, jamais réinterprété avec une
+//! position par défaut.
+//!
 //! # Ce qui n'est PAS dans le fichier
 //!
 //! La clé d'INTENTION n'y figure pas : elle est tirée neuve à chaque transaction
@@ -49,7 +58,14 @@ use std::path::Path;
 
 /// Version du format de fichier. Un fichier d'une autre version est REFUSÉ, jamais
 /// réinterprété : lire de travers les clés d'un wallet perdrait les fonds.
-pub const VERSION_FICHIER: u8 = 0x01;
+///
+/// `0x02` ajoute la POSITION DE SYNCHRONISATION (prochaine hauteur à demander, feuilles
+/// de la dernière frontière de bloc adoptée).
+pub const VERSION_FICHIER: u8 = 0x02;
+
+/// Format antérieur à la synchronisation. Il n'existe plus, et il est nommé
+/// séparément : voir [`WalletFichierError::VersionSansPosition`].
+pub const VERSION_SANS_POSITION: u8 = 0x01;
 
 const DOMAINE_EMPREINTE: &str = "obscura/wallet/fichier/v1";
 
@@ -71,6 +87,17 @@ pub enum WalletFichierError {
     OctetsResiduels,
     #[error("version de fichier inconnue : {0:#04x}")]
     VersionInconnue(u8),
+    #[error(
+        "fichier de wallet en version 0x01 : format antérieur à la synchronisation, sans \
+         position — le relire ferait rejouer l'historique depuis la hauteur 0 sur un arbre \
+         déjà rempli, et tous les index seraient décalés en silence"
+    )]
+    VersionSansPosition,
+    #[error(
+        "ancre à {ancre} feuilles pour un arbre de {feuilles} : le fichier a été écrit \
+         hors d'une frontière de bloc"
+    )]
+    AncreIncoherente { ancre: u64, feuilles: u64 },
     #[error("empreinte incorrecte — fichier de wallet corrompu")]
     EmpreinteIncorrecte,
     #[error("clé de réception illisible")]
@@ -91,6 +118,12 @@ impl Wallet {
     pub fn to_bytes_secret(&self) -> Vec<u8> {
         let mut b = vec![VERSION_FICHIER];
         b.extend_from_slice(&self.secret.to_bytes());
+        // POSITION DE SYNCHRONISATION (0x02). Sans elle, un wallet rechargé repartirait
+        // de la hauteur 0 et rejouerait tout l'historique sur un arbre déjà rempli :
+        // chaque commitment inséré une seconde fois, tous les index décalés, aucun
+        // message d'erreur — juste des preuves refusées pour « ancre inconnue ».
+        b.extend_from_slice(&self.prochaine_hauteur.to_le_bytes());
+        b.extend_from_slice(&self.feuilles_ancrees.to_le_bytes());
 
         let kem = self.reception.to_bytes_secret();
         b.extend_from_slice(&(kem.len() as u32).to_le_bytes());
@@ -151,6 +184,12 @@ impl Wallet {
         }
 
         let version = prendre(corps, &mut pos, 1)?[0];
+        // Le 0x01 est refusé PAR SON NOM, pas confondu avec un octet quelconque : c'est
+        // un format que ce binaire a réellement écrit, et son porteur doit lire
+        // pourquoi son fichier n'est plus lisible plutôt que « version inconnue ».
+        if version == VERSION_SANS_POSITION {
+            return Err(WalletFichierError::VersionSansPosition);
+        }
         if version != VERSION_FICHIER {
             return Err(WalletFichierError::VersionInconnue(version));
         }
@@ -160,6 +199,11 @@ impl Wallet {
             .map_err(|_| WalletFichierError::Tronque)?;
         let secret =
             ShieldedSecret::from_bytes(&s).map_err(|_| WalletFichierError::ChampInvalide)?;
+
+        let prochaine_hauteur =
+            u64::from_le_bytes(prendre(corps, &mut pos, 8)?.try_into().unwrap());
+        let feuilles_ancrees =
+            u64::from_le_bytes(prendre(corps, &mut pos, 8)?.try_into().unwrap());
 
         let n_kem =
             u32::from_le_bytes(prendre(corps, &mut pos, 4)?.try_into().unwrap()) as usize;
@@ -209,6 +253,16 @@ impl Wallet {
             }
         }
 
+        // COHÉRENCE DE L'ANCRE : elle ne peut pas désigner plus de feuilles que l'arbre
+        // n'en a. Une ancre en avance ferait passer `construire` alors que l'arbre est
+        // court — c'est-à-dire publier une racine qui n'est celle d'aucun nœud.
+        if feuilles_ancrees > arbre.len() as u64 {
+            return Err(WalletFichierError::AncreIncoherente {
+                ancre: feuilles_ancrees,
+                feuilles: arbre.len() as u64,
+            });
+        }
+
         let owner = proved_hash::rescue::hash(
             proved_hash::domain::Domain::Owner,
             secret.as_felts(),
@@ -219,6 +273,8 @@ impl Wallet {
             reception,
             notes,
             arbre,
+            prochaine_hauteur,
+            feuilles_ancrees,
         })
     }
 
@@ -270,27 +326,12 @@ mod tests {
     use proved_hash::felt::Felt;
     use proved_hash::rescue;
 
+    /// Wallet garni par la MÊME porte que le réseau : une genèse rejouée. Sa position
+    /// de synchronisation est donc réelle, pas fabriquée pour le test.
     fn wallet_garni() -> Wallet {
-        let secret = ShieldedSecret::from_felts(core::array::from_fn(|i| {
-            Felt::from_canonical_u64(700 + i as u64).unwrap()
-        }));
-        let mut w = Wallet::depuis_secret(secret, 6);
-        for valeur in [1_000u64, 500, 42] {
-            let note = SpendNote {
-                value: valeur,
-                owner: w.owner(),
-                rho: rescue::hash(
-                    proved_hash::domain::Domain::Owner,
-                    &[Felt::from_canonical_u64(valeur).unwrap(); 4],
-                ),
-                r: rescue::hash(
-                    proved_hash::domain::Domain::Nk,
-                    &[Felt::from_canonical_u64(valeur + 1).unwrap(); 4],
-                ),
-            };
-            let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
-            w.crediter_pour_demo(note, &cm);
-        }
+        let mut w = Wallet::depuis_secret(crate::tests_communs::secret(700), 6);
+        let (lot, _etat) = crate::tests_communs::lot_de_genese(&w, &[1_000, 500, 42], 6);
+        w.synchroniser(&[lot]).expect("genèse rejouée");
         w
     }
 
@@ -407,15 +448,81 @@ mod tests {
         assert!(Wallet::from_bytes_secret(&trop).is_err());
 
         // Version inconnue, empreinte RECALCULÉE : seul le format diffère, et cela
-        // doit suffire à refuser (une future migration FIPS 0x02 ne doit pas être
-        // lue comme du round-3).
+        // doit suffire à refuser (une future migration FIPS ne doit pas être lue
+        // comme du round-3).
         let mut autre = bon[..bon.len() - EMPREINTE].to_vec();
-        autre[0] = 0x02;
+        autre[0] = 0x03;
         let e = crypto::hash::dual_hash(DOMAINE_EMPREINTE, &autre);
         autre.extend_from_slice(&e);
         assert!(matches!(
             Wallet::from_bytes_secret(&autre),
-            Err(WalletFichierError::VersionInconnue(0x02))
+            Err(WalletFichierError::VersionInconnue(0x03))
+        ));
+    }
+
+    /// UN FICHIER 0x01 EST REFUSÉ PAR SON NOM.
+    ///
+    /// Le 0x01 ne portait aucune position de synchronisation. Le relire en supposant
+    /// « position 0 » ferait redemander l'historique depuis la genèse et le rejouer sur
+    /// un arbre déjà rempli : chaque commitment inséré deux fois, tous les index
+    /// suivants décalés, aucune erreur — le wallet se contenterait de ne plus jamais
+    /// pouvoir dépenser, sans dire pourquoi. Le refus est donc explicite, et distinct de
+    /// « version inconnue » pour que le message explique la vraie cause.
+    #[test]
+    fn fichier_version_01_refuse_avec_son_propre_message() {
+        let w = wallet_garni();
+        let bon = w.to_bytes_secret();
+        let mut ancien = bon[..bon.len() - EMPREINTE].to_vec();
+        ancien[0] = VERSION_SANS_POSITION;
+        let e = crypto::hash::dual_hash(DOMAINE_EMPREINTE, &ancien);
+        ancien.extend_from_slice(&e);
+
+        // `matches!` : `Wallet` n'est pas `Debug` (il porte l'autorité de dépense).
+        match Wallet::from_bytes_secret(&ancien) {
+            Err(e @ WalletFichierError::VersionSansPosition) => assert!(
+                e.to_string().contains("position"),
+                "le refus doit dire POURQUOI le fichier n'est plus lisible"
+            ),
+            _ => panic!("un fichier 0x01 doit être refusé par son propre message"),
+        }
+    }
+
+    /// LA POSITION DE SYNCHRONISATION SURVIT AU RECHARGEMENT.
+    ///
+    /// C'est ce qui empêche un wallet redémarré de rejouer l'historique depuis zéro
+    /// par-dessus son propre arbre. La perdre ne casserait rien de VISIBLE : le wallet
+    /// resynchroniserait, doublerait ses feuilles, et découvrirait le problème à sa
+    /// première dépense refusée.
+    #[test]
+    fn position_de_synchronisation_preservee() {
+        let w = wallet_garni();
+        assert_eq!(w.prochaine_hauteur(), 1, "la genèse a été rejouée");
+        assert_eq!(w.feuilles_ancrees(), 3);
+
+        let r = Wallet::from_bytes_secret(&w.to_bytes_secret()).expect("aller-retour");
+        assert_eq!(r.prochaine_hauteur(), w.prochaine_hauteur());
+        assert_eq!(r.feuilles_ancrees(), w.feuilles_ancrees());
+        assert_eq!(r.racine(), w.racine());
+    }
+
+    /// Une ancre annonçant plus de feuilles que l'arbre n'en a est refusée AU
+    /// CHARGEMENT : la laisser passer autoriserait `construire` à publier une racine
+    /// qui n'est celle d'aucun nœud.
+    #[test]
+    fn ancre_en_avance_refusee_au_chargement() {
+        let mut w = wallet_garni();
+        w.feuilles_ancrees = 99;
+        let mut corps = w.to_bytes_secret();
+        corps.truncate(corps.len() - EMPREINTE);
+        let e = crypto::hash::dual_hash(DOMAINE_EMPREINTE, &corps);
+        corps.extend_from_slice(&e);
+
+        assert!(matches!(
+            Wallet::from_bytes_secret(&corps),
+            Err(WalletFichierError::AncreIncoherente {
+                ancre: 99,
+                feuilles: 3
+            })
         ));
     }
 

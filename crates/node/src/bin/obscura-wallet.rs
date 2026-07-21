@@ -1,55 +1,68 @@
 //! `obscura-wallet` — wallet en ligne de commande.
 //!
 //! ```text
-//! obscura-wallet creer   --fichier mon.wallet
-//! obscura-wallet adresse --fichier mon.wallet
-//! obscura-wallet solde   --fichier mon.wallet
-//! obscura-wallet envoyer --fichier mon.wallet --a obs1… --montant 300 --frais 20 \
-//!                        --noeud 127.0.0.1:9333
+//! obscura-wallet creer        --fichier mon.wallet
+//! obscura-wallet adresse      --fichier mon.wallet
+//! obscura-wallet synchroniser --fichier mon.wallet --noeud 127.0.0.1:9333
+//! obscura-wallet solde        --fichier mon.wallet
+//! obscura-wallet envoyer      --fichier mon.wallet --a obs1… --montant 300 --frais 20 \
+//!                             --noeud 127.0.0.1:9333 [--noeud-synchro 127.0.0.1:9444]
 //! ```
 //!
-//! # Ce que ce wallet ne sait PAS encore faire : RECEVOIR
+//! # Ce wallet sait RECEVOIR
 //!
-//! Un wallet doit rejouer, dans l'ordre, tous les commitments insérés dans l'arbre
-//! du consensus : c'est ce qui lui donne les index et les chemins de Merkle qu'exigent
-//! ses preuves de dépense. Or aucun nœud ne sert aujourd'hui cet historique — il n'en
-//! conserve pas (`MerkleFrontier` = bord droit seulement), et rien ne l'applique :
-//! `ProvedLedgerState::apply_proved_tx` existe et est testé, mais AUCUN chemin du
-//! nœud ne l'appelle. Les transactions s'accumulent dans le mempool sans jamais être
-//! finalisées.
+//! `synchroniser` rejoue l'historique des sorties servi par un nœud : le wallet
+//! retrouve les INDEX de ses notes (sans lesquels ni chemin de Merkle ni dépense),
+//! découvre les paiements reçus, et récupère sa propre monnaie rendue — qui sort de sa
+//! vue à chaque dépense faute d'index et n'y revient que par le rejeu. La boucle demande
+//! `hauteur + 1` après chaque bloc vérifié, s'arrête au premier silence, et BORNE son
+//! travail par invocation (cf. [`node::client`]).
 //!
-//! Conséquences concrètes, à ne pas découvrir en route :
+//! ## ⚠️ Ce que le nœud servant apprend, et ce qu'il peut cacher
 //!
-//! - `solde` ne montre que ce que ce fichier a déjà observé, jamais un paiement reçu ;
-//! - `envoyer` soumet bien la transaction, mais la MONNAIE RENDUE disparaît de la vue
-//!   du wallet : sa note existe, son INDEX dans l'arbre n'existera qu'une fois la
-//!   transaction appliquée, et rien ne le rapporte.
-//!
-//! Ce n'est pas un défaut de ce binaire : il manque au protocole une notion de
-//! FINALITÉ (ordre convenu entre nœuds) et un moyen pour un wallet de rejouer
-//! l'historique. La commande `envoyer` le dit à l'utilisateur au lieu de le laisser
-//! le déduire d'un solde qui a fondu.
+//! Le nœud qui sert l'historique voit notre IP, la CADENCE de nos demandes et notre
+//! POSITION de chaîne. Il peut aussi MENTIR PAR OMISSION : taire une sortie donne une
+//! chaîne parfaitement close dont la racine est celle qu'il annonce, et le paiement omis
+//! reste invisible. S'en prémunir exige des identifiants de blocs venus d'AILLEURS
+//! (plusieurs nœuds, point de contrôle hors bande) — cf. docs/THREAT_MODEL.md.
 //!
 //! ⚠️ **Prototype non audité.** Le fichier de wallet contient l'AUTORITÉ DE DÉPENSE
 //! en clair (cf. `wallet::persistance`).
 
 use crypto::sig::SigKeypair;
 use net::connexion::Connexion;
+use node::client::{synchroniser_par_connexion, Arret, ResumeSynchro};
 use node::message::Message;
 use proved_hash::merkle::CONSENSUS_DEPTH;
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use wallet::Adresse;
 use wallet::Wallet;
+
+/// Échéance de lecture d'une connexion de synchronisation : elle DÉFINIT le silence sur
+/// lequel la boucle s'arrête (« le nœud n'a plus rien à cette hauteur »). Trop courte,
+/// on renoncerait à un nœud lent ; trop longue, le dernier tour ferait attendre pour
+/// rien à chaque invocation.
+const DELAI_SILENCE: Duration = Duration::from_secs(5);
+
+/// Échéance d'écriture : un pair qui n'absorbe plus nos octets ne doit pas nous figer.
+const DELAI_ECRITURE: Duration = Duration::from_secs(20);
+
+/// Cadence minimale entre deux demandes d'historique — le SEUL levier de débit côté
+/// client (aucun champ sur le fil ne le porte).
+const CADENCE_DEMANDES: Duration = Duration::from_millis(50);
 
 fn usage() -> ! {
     eprintln!("usage : obscura-wallet <commande> [options]");
     eprintln!();
-    eprintln!("  creer   --fichier <f>                     crée un wallet (refuse d'écraser)");
-    eprintln!("  adresse --fichier <f>                     affiche l'adresse à communiquer");
-    eprintln!("  solde   --fichier <f>                     affiche le solde observé");
-    eprintln!("  envoyer --fichier <f> --a <adresse> \\");
-    eprintln!("          --montant <n> [--frais <n>] --noeud <ip:port>");
+    eprintln!("  creer        --fichier <f>                   crée un wallet (refuse d'écraser)");
+    eprintln!("  adresse      --fichier <f>                   affiche l'adresse à communiquer");
+    eprintln!("  synchroniser --fichier <f> --noeud <ip:port> rejoue l'historique, se met à jour");
+    eprintln!("  solde        --fichier <f>                   affiche le solde connu");
+    eprintln!("  envoyer      --fichier <f> --a <adresse> \\");
+    eprintln!("               --montant <n> [--frais <n>] --noeud <ip:port> \\");
+    eprintln!("               [--noeud-synchro <ip:port>]");
     std::process::exit(2)
 }
 
@@ -66,6 +79,7 @@ struct Options {
     montant: Option<u64>,
     frais: u64,
     noeud: Option<SocketAddr>,
+    noeud_synchro: Option<SocketAddr>,
 }
 
 fn lire_options(args: &[String]) -> Options {
@@ -75,6 +89,7 @@ fn lire_options(args: &[String]) -> Options {
         montant: None,
         frais: 0,
         noeud: None,
+        noeud_synchro: None,
     };
     let mut i = 0;
     while i < args.len() {
@@ -100,6 +115,11 @@ fn lire_options(args: &[String]) -> Options {
                         .parse()
                         .unwrap_or_else(|_| abandon(&format!("adresse de nœud invalide : {valeur}"))),
                 )
+            }
+            "--noeud-synchro" => {
+                o.noeud_synchro = Some(valeur.parse().unwrap_or_else(|_| {
+                    abandon(&format!("adresse de nœud de synchro invalide : {valeur}"))
+                }))
             }
             autre => {
                 eprintln!("option inconnue : {autre}");
@@ -134,6 +154,7 @@ fn main() {
     match commande.as_str() {
         "creer" => creer(&fichier),
         "adresse" => println!("{}", charger(&fichier).adresse().encoder()),
+        "synchroniser" => synchroniser(&fichier, &o),
         "solde" => solde(&fichier),
         "envoyer" => envoyer(&fichier, &o),
         _ => usage(),
@@ -165,15 +186,101 @@ fn creer(fichier: &Path) {
     println!();
     println!("⚠️  Ce fichier contient l'autorité de dépense, EN CLAIR et non chiffrée.");
     println!("    Sauvegardez-le : il n'existe nulle part ailleurs.");
+    println!();
+    println!("Un wallet neuf ne connaît encore aucune note : lancez `synchroniser`");
+    println!("contre un nœud archiviste pour découvrir les paiements reçus.");
 }
 
 fn solde(fichier: &Path) {
     let w = charger(fichier);
-    println!("solde observé : {} unités ({} notes)", w.solde(), w.notes().len());
+    println!("solde connu : {} unités ({} notes)", w.solde(), w.notes().len());
+    println!("position de synchronisation : prochaine hauteur {}", w.prochaine_hauteur());
+    if w.prochaine_hauteur() == 0 {
+        println!(
+            "⚠️  Ce wallet n'a JAMAIS été synchronisé : il ne peut pas encore connaître\n\
+             \x20   les paiements reçus. Lancez `synchroniser --noeud <ip:port>`."
+        );
+    } else {
+        println!(
+            "⚠️  Ce solde est celui du dernier bloc rejoué. Un paiement plus récent\n\
+             \x20   n'apparaîtra qu'après une nouvelle `synchroniser`. Et le nœud servant\n\
+             \x20   l'historique peut MENTIR PAR OMISSION : un paiement tu reste invisible."
+        );
+    }
+}
+
+/// Ouvre une connexion de transport ÉPHÉMÈRE vers un nœud (identité neuve à chaque
+/// commande — une identité stable relierait entre elles toutes nos requêtes).
+fn connecter(noeud: SocketAddr, delai_lecture: Duration) -> Connexion<TcpStream> {
+    let identite = SigKeypair::generate();
+    let flux = TcpStream::connect(noeud)
+        .unwrap_or_else(|e| abandon(&format!("connexion à {noeud} impossible : {e}")));
+    flux.set_read_timeout(Some(delai_lecture))
+        .unwrap_or_else(|e| abandon(&format!("échéance de lecture impossible : {e}")));
+    flux.set_write_timeout(Some(DELAI_ECRITURE))
+        .unwrap_or_else(|e| abandon(&format!("échéance d'écriture impossible : {e}")));
+    Connexion::connecter(flux, &identite)
+        .unwrap_or_else(|e| abandon(&format!("handshake post-quantique échoué : {e:?}")))
+}
+
+/// Rejoue l'historique auprès d'un nœud jusqu'à être à jour, puis enregistre.
+///
+/// La boucle vit dans [`node::client`] ; ce qui suit n'est que le câblage : une
+/// connexion éphémère, l'enregistrement APRÈS chaque bloc (la position entre dans le
+/// fichier 0x02), et le compte rendu.
+fn synchroniser(fichier: &Path, o: &Options) {
+    let Some(noeud) = o.noeud else {
+        eprintln!("--noeud est obligatoire pour synchroniser");
+        usage()
+    };
+    let mut w = charger(fichier);
+    let depart = w.prochaine_hauteur();
+    println!("synchronisation depuis la hauteur {depart} auprès de {noeud}…");
+
+    let mut connexion = connecter(noeud, DELAI_SILENCE);
+    let resume = synchroniser_par_connexion(&mut connexion, &mut w, CADENCE_DEMANDES, |p, w| {
+        // Enregistrement APRÈS chaque bloc rejoué : la position est dans le fichier, et
+        // un crash entre deux blocs doit laisser le wallet exactement à son dernier bloc,
+        // jamais en avance sur le disque.
+        w.enregistrer(fichier).map_err(|e| e.to_string())?;
+        if p.entrees > 0 || p.notes_recues > 0 {
+            println!(
+                "  bloc {} : {} sorties, {} pour vous — solde {}",
+                p.hauteur, p.entrees, p.notes_recues, p.solde
+            );
+        }
+        Ok(())
+    });
+
+    rapporter_synchro(&w, &resume, depart);
+}
+
+fn rapporter_synchro(w: &Wallet, resume: &ResumeSynchro, depart: u64) {
+    println!();
     println!(
-        "⚠️  « observé » au sens strict : ce wallet ne peut pas encore apprendre les\n\
-         \x20   paiements reçus (aucun nœud ne sert l'historique des commitments)."
+        "{} blocs rejoués (hauteurs {}..{}), {} paiements reçus — solde {}",
+        resume.blocs_rejoues,
+        depart,
+        w.prochaine_hauteur(),
+        resume.notes_recues,
+        w.solde()
     );
+    match &resume.arret {
+        Arret::AJour => println!("à jour."),
+        Arret::LimiteAtteinte => println!(
+            "⚠️  limite de travail atteinte pour cette invocation : relancez\n\
+             \x20   `synchroniser` pour continuer."
+        ),
+        Arret::Incoherent(raison) => abandon(&format!(
+            "le nœud a servi une réponse incohérente : {raison}\n\
+             \x20        Les blocs déjà rejoués sont enregistrés. Réessayez, au besoin\n\
+             \x20        contre un autre nœud."
+        )),
+        Arret::Persistance(e) => abandon(&format!(
+            "enregistrement du wallet impossible : {e}\n\
+             \x20        La position en mémoire a avancé mais le fichier ne l'a pas suivie."
+        )),
+    }
 }
 
 fn envoyer(fichier: &Path, o: &Options) {
@@ -190,6 +297,57 @@ fn envoyer(fichier: &Path, o: &Options) {
     });
 
     let mut w = charger(fichier);
+
+    // Synchronisation optionnelle AVANT l'envoi, contre un nœud DISTINCT. C'est le seul
+    // câblage qui rend la séparation possible sans deux commandes séparées — et il
+    // avertit fort quand les deux nœuds coïncident.
+    if let Some(noeud_synchro) = o.noeud_synchro {
+        if noeud_synchro == noeud {
+            println!(
+                "⚠️  --noeud-synchro est ÉGAL à --noeud : le même nœud verra que vous avez\n\
+                 \x20   téléchargé l'historique PUIS soumis une transaction, à quelques\n\
+                 \x20   secondes d'intervalle. Cela vous DÉSIGNE comme l'émetteur — un relais\n\
+                 \x20   Dandelion++ ne vient jamais de se synchroniser. Utilisez deux nœuds\n\
+                 \x20   distincts."
+            );
+        }
+        println!("synchronisation préalable auprès de {noeud_synchro}…");
+        let mut connexion = connecter(noeud_synchro, DELAI_SILENCE);
+        let depart = w.prochaine_hauteur();
+        let resume =
+            synchroniser_par_connexion(&mut connexion, &mut w, CADENCE_DEMANDES, |_, w| {
+                w.enregistrer(fichier).map_err(|e| e.to_string())
+            });
+        rapporter_synchro(&w, &resume, depart);
+    }
+
+    // REFUS si le wallet n'a jamais été synchronisé. Enchaîner une synchro et un envoi
+    // depuis la MÊME IP relierait trivialement les deux : `soumettre` fait justement
+    // partir la transaction en TIGE Dandelion++ pour qu'un observateur ne distingue pas
+    // l'émetteur d'un relais — or un relais ne vient jamais de télécharger l'historique.
+    if w.prochaine_hauteur() == 0 {
+        abandon(
+            "wallet non synchronisé : il ne connaît aucun index de note et ne peut rien\n\
+             \x20        prouver. Lancez d'abord `synchroniser`, IDÉALEMENT contre un nœud\n\
+             \x20        DIFFÉRENT de celui d'envoi (voir --noeud-synchro) : synchroniser puis\n\
+             \x20        envoyer depuis la même IP relie les deux et vous désigne comme\n\
+             \x20        l'émetteur.",
+        );
+    }
+
+    // Avertissement INCONDITIONNEL — pas seulement quand --noeud-synchro == --noeud.
+    // Le flux le plus naturel est en DEUX commandes (`synchroniser` puis `envoyer`),
+    // et l'outil ne mémorise pas d'une invocation à l'autre quel nœud a servi
+    // l'historique : il ne PEUT pas détecter la corrélation, seulement la rappeler.
+    // Se taire sur ce chemin laisserait croire que la protection existe.
+    println!(
+        "⚠️  rappel : si ce nœud (ou son opérateur) a AUSSI servi votre synchronisation,\n\
+         \x20   il voit un téléchargement d'historique suivi d'une soumission depuis la\n\
+         \x20   même IP — ce qui vous désigne comme l'émetteur, un relais Dandelion++ ne\n\
+         \x20   venant jamais de se synchroniser. Synchronisez et envoyez via des nœuds\n\
+         \x20   distincts (--noeud-synchro), voire des réseaux distincts."
+    );
+
     println!("construction de la preuve (plusieurs secondes)…");
     let debut = std::time::Instant::now();
     let tx = w
@@ -201,14 +359,7 @@ fn envoyer(fichier: &Path, o: &Options) {
         tx.to_bytes().len() as f64 / 1024.0
     );
 
-    // Identité de transport ÉPHÉMÈRE : une identité stable permettrait au nœud de
-    // relier entre elles toutes les soumissions de ce wallet — la même raison qui
-    // fait tirer une clé d'intention neuve par transaction.
-    let identite = SigKeypair::generate();
-    let flux = TcpStream::connect(noeud)
-        .unwrap_or_else(|e| abandon(&format!("connexion à {noeud} impossible : {e}")));
-    let mut connexion = Connexion::connecter(flux, &identite)
-        .unwrap_or_else(|e| abandon(&format!("handshake post-quantique échoué : {e:?}")));
+    let mut connexion = connecter(noeud, DELAI_ECRITURE);
 
     // On ENVOIE avant d'oublier les notes. L'ordre inverse perdrait des notes jamais
     // dépensées si l'envoi échouait ; dans ce sens-ci, le pire cas est un renvoi que
@@ -233,14 +384,13 @@ fn envoyer(fichier: &Path, o: &Options) {
         ));
     }
 
-    println!("{consommees} notes retirées de la réserve — solde observé : {}", w.solde());
+    println!("{consommees} notes retirées de la réserve — solde connu : {}", w.solde());
     let monnaie = tx.output_commitments.len().saturating_sub(1);
     if monnaie > 0 {
         println!();
-        println!("⚠️  La MONNAIE RENDUE n'est pas re-créditée à ce solde.");
-        println!("    Elle existe dans la transaction, mais son index dans l'arbre du");
-        println!("    consensus n'existera qu'une fois la transaction appliquée — et rien");
-        println!("    ne le rapporte au wallet aujourd'hui. Tant que la synchronisation");
-        println!("    wallet ↔ nœud n'existe pas, dépenser fait perdre la monnaie de vue.");
+        println!("ℹ️  La MONNAIE RENDUE n'est pas re-créditée immédiatement : son index");
+        println!("    dans l'arbre du consensus n'existera qu'une fois la transaction");
+        println!("    scellée dans un bloc. Elle REVIENDRA au solde à la prochaine");
+        println!("    `synchroniser` — elle est chiffrée vers vous, donc reconnue au scan.");
     }
 }

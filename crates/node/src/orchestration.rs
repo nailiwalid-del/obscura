@@ -26,14 +26,19 @@
 //! pénaliser bannirait les pairs honnêtes, et d'autant plus vite qu'ils sont bien
 //! connectés.
 
+use crate::archive::ArchiveBlocs;
+use crate::etranglement::Etrangleur;
 use crate::message::Message;
+use crate::synchro::ReponseHistorique;
 use circuit::ProvedTx;
 use crypto::sig::SigKeypair;
 use ledger::bloc::Bloc;
 use ledger::mempool::Mempool;
 use ledger::proved_state::{BlocRefus, ProvedLedgerState};
 use net::dandelion::{Dandelion, Routage};
-use net::pairs::{PeerId, TablePairs};
+use net::pairs::{GroupeReseau, PeerId, TablePairs};
+use std::collections::HashMap;
+use std::net::SocketAddr;
 
 /// Pénalité pour un refus COÛTEUX (preuve invalide). Quelques-uns suffisent à
 /// franchir le seuil de bannissement : faire brûler 4 ms de CPU à répétition est
@@ -72,9 +77,49 @@ pub struct Noeud {
     /// simple retard). Mais se taire l'était moins : un nœud qui a manqué UN bloc
     /// refuse ensuite tous les suivants, en silence, et reste figé pour toujours —
     /// indiscernable d'un nœud au repos. Ce compteur est le seul signal qui les
-    /// distingue tant qu'aucun protocole de rattrapage n'existe.
+    /// distingue quand le rattrapage échoue (pair sans archive, fork réel).
     blocs_desaccordes: u64,
+    /// Les N derniers blocs appliqués, pour SERVIR un pair qui rattrape.
+    ///
+    /// Bornée deux fois (nombre et octets) et distincte de l'état de consensus :
+    /// voir [`crate::archive`].
+    archive: ArchiveBlocs,
+    /// Plus haute hauteur de bloc VUE sur le réseau, appliquée ou non.
+    ///
+    /// C'est le seul « je sais que je suis en retard » dont dispose le nœud, et il
+    /// sert à savoir quand ARRÊTER de rattraper : sans lui, soit on redemande la
+    /// hauteur suivante après chaque bloc appliqué (une demande inutile par bloc et
+    /// par pair, à jamais), soit le rattrapage s'arrête au premier bloc rendu et un
+    /// nœud en retard de trois blocs n'en récupère qu'un.
+    ///
+    /// ⚠️ Valeur NON vérifiée : un pair peut annoncer une hauteur mensongère. Le
+    /// dégât est borné à une demande supplémentaire par bloc reçu — jamais une
+    /// boucle, puisque seule l'arrivée d'un bloc peut déclencher une demande, et
+    /// qu'un pair sans le bloc répond par le silence.
+    hauteur_max_vue: u64,
+    /// Adresse observée de chaque pair CONNECTÉ, dans les deux sens.
+    ///
+    /// Distincte de [`TablePairs`] à dessein. `pairs` sert la sélection SORTANTE
+    /// anti-eclipse : y verser les pairs entrants les rendrait candidats à nos propres
+    /// emplacements sortants, ce qui offrirait à un attaquant un moyen d'y entrer en
+    /// nous appelant. Ici on ne veut qu'une chose : à quel GROUPE RÉSEAU imputer le
+    /// coût d'une requête.
+    ///
+    /// Fail-closed : un pair dont l'adresse est inconnue n'est pas servi. Sans groupe,
+    /// pas d'étranglement possible — et servir sans étrangler reviendrait à n'avoir
+    /// rien écrit.
+    adresses: HashMap<PeerId, SocketAddr>,
+    /// Seaux à jetons du service d'historique, indexés sur le GROUPE RÉSEAU.
+    etrangleur: Etrangleur,
 }
+
+/// Nombre maximal d'adresses de pairs mémorisées.
+///
+/// Le `PeerId` est gratuit : sans borne, une rotation d'identité par connexion ferait
+/// croître cette table indéfiniment. Elle est de toute façon purgée à la déconnexion
+/// ([`Noeud::oublier_adresse`]) ; la borne est là pour le cas où le nettoyage serait
+/// manqué. À saturation, un pair de plus n'est simplement pas servi.
+pub const MAX_ADRESSES_SUIVIES: usize = 4_096;
 
 impl Noeud {
     pub fn new(
@@ -82,6 +127,7 @@ impl Noeud {
         etat: ProvedLedgerState,
         secret_dandelion: [u8; 32],
     ) -> Self {
+        let hauteur_max_vue = etat.hauteur();
         Noeud {
             identite,
             etat,
@@ -89,13 +135,52 @@ impl Noeud {
             pairs: TablePairs::new(),
             dandelion: Dandelion::new(secret_dandelion),
             blocs_desaccordes: 0,
+            archive: ArchiveBlocs::new(),
+            hauteur_max_vue,
+            adresses: HashMap::new(),
+            etrangleur: Etrangleur::new(),
         }
+    }
+
+    /// Mémorise l'adresse OBSERVÉE d'un pair connecté (entrant comme sortant).
+    ///
+    /// Appelée par le runtime au moment où le handshake réussit. C'est la seule source
+    /// du groupe réseau auquel imputer le coût d'une demande d'historique : un pair
+    /// dont l'adresse n'est pas connue ne sera pas servi.
+    pub fn noter_adresse(&mut self, id: PeerId, adresse: SocketAddr) {
+        if !self.adresses.contains_key(&id) && self.adresses.len() >= MAX_ADRESSES_SUIVIES {
+            return;
+        }
+        self.adresses.insert(id, adresse);
+    }
+
+    /// Oublie l'adresse d'un pair déconnecté.
+    pub fn oublier_adresse(&mut self, id: &PeerId) {
+        self.adresses.remove(id);
+    }
+
+    /// Seaux du service d'historique (diagnostic et tests).
+    pub fn etrangleur(&self) -> &Etrangleur {
+        &self.etrangleur
     }
 
     /// Nombre de blocs refusés faute de s'enchaîner. Non nul et qui croît = ce nœud
     /// n'est PAS au repos, il est sur une autre chaîne ou il a manqué un bloc.
     pub fn blocs_desaccordes(&self) -> u64 {
         self.blocs_desaccordes
+    }
+
+    /// Archive des blocs récents — ce que ce nœud peut encore servir à un pair qui
+    /// rattrape. Vide ne signifie pas fautif : l'archive est un service, pas une
+    /// obligation de consensus.
+    pub fn archive(&self) -> &ArchiveBlocs {
+        &self.archive
+    }
+
+    /// Plus haute hauteur de bloc vue sur le réseau. Supérieure à
+    /// `etat.hauteur()` = ce nœud se sait en retard et rattrape.
+    pub fn hauteur_max_vue(&self) -> u64 {
+        self.hauteur_max_vue
     }
 
     /// Soumet une transaction ÉMISE PAR CE NŒUD (depuis le wallet).
@@ -129,6 +214,18 @@ impl Noeud {
             Message::Demande(digests) => self.sur_demande(de, digests),
             Message::Transaction(tx) => self.sur_transaction(de, *tx, maintenant_ms),
             Message::Bloc(bloc) => self.sur_bloc(de, *bloc),
+            Message::DemandeBloc { hauteur } => self.sur_demande_bloc(de, hauteur, maintenant_ms),
+            Message::DemandeHistorique { hauteur } => {
+                self.sur_demande_historique(de, hauteur, maintenant_ms)
+            }
+            // Une réponse d'historique arrivant chez un NŒUD : ignorée, sans sanction.
+            //
+            // Un nœud n'en demande jamais (c'est un message de wallet), mais en recevoir
+            // une n'a rien d'anormal en soi — c'est ce que produirait une réponse
+            // tardive après qu'un wallet a renoncé, ou un pair qui parle à la mauvaise
+            // adresse. Sanctionner ici ferait payer un décalage de calendrier. Le coût
+            // reste borné par le cadre réseau (1 Mio), déjà décodé à ce stade.
+            Message::Historique(_) => Vec::new(),
         }
     }
 
@@ -194,6 +291,10 @@ impl Noeud {
                 for d in &digests {
                     self.mempool.retirer(d);
                 }
+                // Un bloc que NOUS produisons n'est connu de personne : c'est celui
+                // que des pairs en retard demanderont le plus probablement.
+                self.archive.conserver(&bloc);
+                self.hauteur_max_vue = self.hauteur_max_vue.max(bloc.hauteur);
                 let octets = bloc.to_bytes();
                 let copie = Bloc::from_bytes(&octets).ok()?;
                 Some((bloc, vec![Action::Diffuser(Message::Bloc(Box::new(copie)))]))
@@ -217,7 +318,40 @@ impl Noeud {
     ///   Pénaliser ici bannirait les pairs les plus actifs ;
     /// - il s'enchaîne mais contient une transaction invalide → **sanction lourde** :
     ///   nous a fait vérifier tout un bloc pour rien.
+    ///
+    /// # Le chaînage impossible déclenche désormais un RATTRAPAGE
+    ///
+    /// Ne pas sanctionner restait juste ; se taire ne l'était pas. Un nœud ayant
+    /// manqué une hauteur refusait ensuite tous les blocs, pour toujours, en servant
+    /// un historique plus court mais parfaitement COHÉRENT — indiscernable d'un nœud
+    /// à jour pour quiconque s'y synchronise.
+    ///
+    /// Le déclencheur est `bloc.hauteur > notre_hauteur + 1` : « ce bloc est en
+    /// avance, il me manque au moins la hauteur suivante ». On demande alors la
+    /// PREMIÈRE hauteur manquante, jamais celle du bloc reçu — sans le trou
+    /// intermédiaire, ce bloc-là ne s'enchaînerait pas davantage.
+    ///
+    /// ## Pourquoi cela ne boucle pas entre deux nœuds désaccordés
+    ///
+    /// Trois propriétés le garantissent, et il faut les trois :
+    ///
+    /// 1. **Une demande ne naît que d'un bloc REÇU.** Recevoir une demande n'en
+    ///    produit jamais une autre ; le silence est une réponse terminale.
+    /// 2. **Le déclencheur est une inégalité STRICTE.** Deux nœuds à la même hauteur
+    ///    sur des chaînes divergentes se refusent mutuellement leurs blocs
+    ///    (`hauteur == notre_hauteur + 1`) sans jamais rien se demander.
+    /// 3. **Un rattrapage qui échoue s'arrête au premier pas.** Si le pair sert un
+    ///    bloc issu d'une AUTRE chaîne, ce bloc arrive exactement à la hauteur
+    ///    attendue : il est refusé, l'inégalité stricte est fausse, aucune nouvelle
+    ///    demande ne part.
+    ///
+    /// Le rattrapage progresse donc d'un bloc par échange, et s'éteint dès qu'un
+    /// échange ne fait plus avancer la hauteur.
     fn sur_bloc(&mut self, de: PeerId, bloc: Bloc) -> Vec<Action> {
+        // Enregistré AVANT toute décision : même un bloc refusé nous apprend qu'une
+        // chaîne plus longue existe, et c'est précisément le cas où on en a besoin.
+        self.hauteur_max_vue = self.hauteur_max_vue.max(bloc.hauteur);
+
         match self.etat.appliquer_bloc(&bloc) {
             Ok(_) => {
                 // Les transactions du bloc ne sont plus en attente ; celles qui sont
@@ -226,12 +360,29 @@ impl Noeud {
                     self.mempool.retirer(&tx.tx_digest);
                 }
                 self.mempool.purger(&self.etat);
+                self.archive.conserver(&bloc);
+
+                let mut actions = Vec::new();
                 match Bloc::from_bytes(&bloc.to_bytes()) {
-                    Ok(copie) => vec![Action::Diffuser(Message::Bloc(Box::new(copie)))],
-                    Err(_) => Vec::new(),
+                    Ok(copie) => actions.push(Action::Diffuser(Message::Bloc(Box::new(copie)))),
+                    Err(_) => return actions,
                 }
+                // Toujours en retard après ce bloc : on enchaîne sur la hauteur
+                // suivante, auprès du pair qui vient de nous prouver qu'il l'a. Sans
+                // cet enchaînement, un nœud en retard de trois blocs n'en
+                // récupérerait qu'un par bloc neuf diffusé sur le réseau.
+                if let Some(demande) = self.demander_suivant(de) {
+                    actions.push(demande);
+                }
+                actions
             }
-            Err(BlocRefus::Transaction { .. }) => {
+            // Deux fautes NON ÉQUIVOQUES, sanctionnées de la même façon :
+            //
+            // - une transaction invalide nous a fait vérifier tout un bloc pour rien ;
+            // - une ÉMISSION hors genèse est une tentative de créer de la monnaie.
+            //   Contrairement à un refus de chaînage, elle n'a aucune lecture innocente :
+            //   un bloc valide n'en contient jamais, à aucune hauteur, sur aucune chaîne.
+            Err(BlocRefus::Transaction { .. }) | Err(BlocRefus::EmissionHorsGenese { .. }) => {
                 self.pairs.ajuster_score(&de, PENALITE_BLOC_INVALIDE);
                 Vec::new()
             }
@@ -239,16 +390,156 @@ impl Noeud {
             // (deux scellements simultanés, ou un simple retard), et relayer un bloc
             // qu'on n'a pas appliqué propagerait une chaîne qu'on ne suit pas.
             //
-            // ⚠️ MAIS on le COMPTE. Un nœud qui a manqué un bloc refuse ensuite tous
-            // les suivants et reste figé indéfiniment ; sans ce compteur, rien ne le
-            // distingue d'un nœud au repos. Le rattrapage de bloc (redemander la
-            // hauteur manquante) reste à écrire — c'est un manque du protocole, pas
-            // de cette fonction.
-            Err(_) => {
+            // `HauteurInattendue` et `ParentInattendu` sont traités ensemble à
+            // dessein : `appliquer_bloc` teste le parent EN PREMIER, si bien qu'un
+            // bloc en avance rend `ParentInattendu` et non `HauteurInattendue`. Se
+            // fier au seul variant d'erreur laisserait le cas le plus courant du
+            // retard sans rattrapage. On tranche sur les hauteurs, qui sont la même
+            // information dans les deux cas.
+            Err(refus) => {
                 self.blocs_desaccordes += 1;
+                let recue = match refus {
+                    BlocRefus::HauteurInattendue { recue, .. } => recue,
+                    _ => bloc.hauteur,
+                };
+                if recue > self.etat.hauteur().saturating_add(1) {
+                    if let Some(demande) = self.demander_suivant(de) {
+                        return vec![demande];
+                    }
+                }
                 Vec::new()
             }
         }
+    }
+
+    /// Demande à `de` la PREMIÈRE hauteur qui nous manque, si nous nous savons en
+    /// retard. `None` sinon — ne rien demander est le cas normal.
+    fn demander_suivant(&self, de: PeerId) -> Option<Action> {
+        let suivante = self.etat.hauteur().saturating_add(1);
+        if self.hauteur_max_vue < suivante {
+            return None;
+        }
+        Some(Action::Envoyer(de, Message::DemandeBloc { hauteur: suivante }))
+    }
+
+    /// Un pair demande un bloc : on le sert si on l'a ARCHIVÉ, silence sinon.
+    ///
+    /// Le silence, pas une erreur : exactement comme une demande de transaction
+    /// purgée entre l'annonce et la demande (`sur_demande`). Une hauteur peut être
+    /// hors de notre archive bornée, ou n'exister sur aucune chaîne — dans les deux
+    /// cas, celui qui demande n'a commis aucune faute et ne doit pas être pénalisé.
+    /// Pénaliser rendrait le rattrapage plus dangereux que l'immobilité.
+    ///
+    /// L'archive ne contient que des blocs que NOUS avons appliqués : servir depuis
+    /// elle ne peut pas propager une chaîne que nous ne suivons pas.
+    ///
+    /// ⚠️ Servir un bloc de ~34 Kio à ~34 Mio pour une demande de 9 octets est une
+    /// asymétrie d'AMPLIFICATION. Elle est bornée par pair (le seul contrôle de
+    /// débit aujourd'hui est le score et l'échéance d'écriture) ; l'étranglement par
+    /// `GroupeReseau` exigé par docs/THREAT_MODEL.md pour le service d'historique
+    /// n'est PAS encore écrit ici. Limite consignée, pas fermée.
+    fn sur_demande_bloc(&mut self, de: PeerId, hauteur: u64, maintenant_ms: u64) -> Vec<Action> {
+        // MÊME étranglement que le service d'historique, même seau : une DemandeBloc
+        // de 9 octets fait renvoyer jusqu'à ~1 Mio — c'était la seule amplification
+        // non étranglée du chemin réseau. Fail-closed (sans adresse, pas de groupe,
+        // donc silence), et le silence d'un crédit épuisé reste indistinguable des
+        // autres silences — un refus distinct ferait du crédit une information.
+        let Some(adresse) = self.adresses.get(&de).copied() else {
+            return Vec::new();
+        };
+        if !self.etrangleur.autoriser(GroupeReseau::de(&adresse), maintenant_ms) {
+            return Vec::new();
+        }
+        match self.archive.octets_a(hauteur) {
+            // On re-décode plutôt que de garder un `Bloc` : les octets archivés sont
+            // la source de vérité, et un décodage qui échouerait signalerait une
+            // corruption chez nous — pas une faute du demandeur.
+            Some(octets) => match Bloc::from_bytes(octets) {
+                Ok(copie) => vec![Action::Envoyer(de, Message::Bloc(Box::new(copie)))],
+                Err(_) => Vec::new(),
+            },
+            None => Vec::new(),
+        }
+    }
+
+    /// Un wallet demande les sorties d'une hauteur : on les sert, ou on se TAIT.
+    ///
+    /// # Aucune sanction, jamais
+    ///
+    /// Demander son historique est un comportement NORMAL — c'est même la seule façon
+    /// pour un wallet de pouvoir recevoir de la monnaie. Pénaliser un demandeur
+    /// rendrait la synchronisation plus risquée que l'immobilité, et comme le score
+    /// gouverne la sélection sortante, cela reviendrait à dégrader notre propre
+    /// anti-eclipse à chaque wallet qui se connecte.
+    ///
+    /// Toutes les issues négatives sont donc le SILENCE, indistinguables entre elles :
+    /// pas d'archive, hauteur inconnue, hauteur absurde, crédit épuisé, adresse
+    /// inconnue. Un refus qui se distinguerait ferait du crédit — et de la présence
+    /// d'une hauteur — une information sondable.
+    ///
+    /// # L'étranglement s'indexe sur le GROUPE RÉSEAU
+    ///
+    /// Jamais sur le `PeerId` : il est gratuit, et le wallet en tire un neuf à chaque
+    /// commande. Un seau par pair ne défendrait rien et grossirait sans fin. Le coût
+    /// FIXE de la requête est débité AVANT de savoir s'il y a quelque chose à servir —
+    /// une réponse vide n'est pas gratuite (allocation, cascade AEAD, écriture, flush).
+    ///
+    /// # Une demande, plusieurs messages
+    ///
+    /// Un bloc plein pèse ≈1,4 Mio, au-delà du cadre réseau. Le découpage est décidé
+    /// ICI, par le serveur, et jamais demandé par le client (cf. [`crate::synchro`]).
+    ///
+    /// # ⚠️ Ce que servir l'historique révèle, et ne révèle pas
+    ///
+    /// Le nœud apprend l'IP du wallet, sa cadence et sa position de chaîne, et il peut
+    /// **mentir par omission** : taire une sortie rend le paiement invisible, laisse la
+    /// racine intacte, et rien ne l'attrape. Il ne peut en revanche ni fabriquer de
+    /// crédit (les commitments sont liés au bloc, donc à `Bloc::id()`) ni apprendre
+    /// quelles notes sont celles du demandeur — le balayage est LOCAL au wallet.
+    fn sur_demande_historique(
+        &mut self,
+        de: PeerId,
+        hauteur: u64,
+        maintenant_ms: u64,
+    ) -> Vec<Action> {
+        // Fail-closed : sans adresse, aucun groupe réseau, donc aucun étranglement
+        // possible. Servir quand même reviendrait à offrir un contournement à qui
+        // saurait se faire oublier de la table.
+        let Some(adresse) = self.adresses.get(&de).copied() else {
+            return Vec::new();
+        };
+        let groupe = GroupeReseau::de(&adresse);
+        if !self.etrangleur.autoriser(groupe, maintenant_ms) {
+            return Vec::new();
+        }
+
+        // La hauteur vient du RÉSEAU : `tranche` et `sorties_du_bloc` la ramènent dans
+        // le repère local par `checked_sub` + `usize::try_from` + `get(..)`, jamais par
+        // indexation. `u64::MAX` y vaut `None`, comme n'importe quelle hauteur absente.
+        let (morceaux, servies) = {
+            let Some(h) = self.etat.historique() else {
+                return Vec::new();
+            };
+            let (Some(tranche), Some(sorties)) = (h.tranche(hauteur), h.sorties_du_bloc(hauteur))
+            else {
+                return Vec::new();
+            };
+            // La tête ANNONCÉE est celle qu'on peut réellement servir, pas
+            // `etat.hauteur()` : promettre une hauteur qu'on n'archive pas ferait
+            // boucler le wallet sur une demande éternellement silencieuse.
+            let tete = h.hauteur_max().unwrap_or(tranche.hauteur);
+            match ReponseHistorique::decouper(tranche, sorties, tete) {
+                Some(m) => (m, sorties.len() as u64),
+                None => return Vec::new(),
+            }
+        };
+
+        // Coût VARIABLE, en plus du coût fixe déjà débité.
+        self.etrangleur.debiter(groupe, servies);
+        morceaux
+            .into_iter()
+            .map(|r| Action::Envoyer(de, Message::Historique(Box::new(r))))
+            .collect()
     }
 
     /// Un pair annonce des transactions : on ne demande QUE celles qu'on n'a pas.
@@ -399,12 +690,22 @@ mod tests {
         let cm0 = rescue::note_commitment(n0.value, &n0.owner, &n0.rho, &n0.r);
         let cm1 = rescue::note_commitment(n1.value, &n1.owner, &n1.rho, &n1.r);
 
-        let mut noeud = noeud_de_test();
+        // La monnaie n'existe QUE par la genèse — le nœud est amorcé dessus, il ne
+        // peut plus rien créer ensuite.
+        let genese = ledger::bloc::Bloc::genese_avec(vec![
+            ledger::proved_wallet::emission_factice(&cm0),
+            ledger::proved_wallet::emission_factice(&cm1),
+        ])
+        .expect("genèse bornée");
+        let noeud = Noeud::new(
+            SigKeypair::generate(),
+            ProvedLedgerState::depuis_genese_depth(&genese, 4).expect("amorçage"),
+            [7u8; 32],
+        );
         let mut arbre = merkle::ProvedMerkleTree::new(4);
-        let i0 = noeud.etat.mint(&cm0).unwrap();
-        let i1 = noeud.etat.mint(&cm1).unwrap();
         arbre.append(&cm0);
         arbre.append(&cm1);
+        let (i0, i1) = (0u64, 1u64);
 
         let o0 = SpendNote { value: 900, owner: d(60), rho: d(61), r: d(62) };
         let o1 = SpendNote { value: 580, owner: d(70), rho: d(71), r: d(72) };
@@ -564,6 +865,444 @@ mod tests {
         n.traiter(p, Message::Bloc(Box::new(bloc)), 0);
         assert_eq!(n.pairs.get(&p).unwrap().score, PENALITE_BLOC_INVALIDE);
         assert_eq!(n.etat.hauteur(), 0, "aucune trace du bloc refusé");
+    }
+
+    /// UN BLOC QUI ÉMET DE LA MONNAIE EST REFUSÉ **ET** SANCTIONNÉ.
+    ///
+    /// La distinction avec le bloc non chaîné est tout l'enjeu : être en retard ou
+    /// sceller en même temps qu'un autre n'est la faute de personne, alors qu'une
+    /// émission hors genèse n'a aucune lecture innocente — aucun bloc valide n'en
+    /// contient, à aucune hauteur. Ne pas sanctionner ici rendrait la tentative
+    /// d'inflation gratuite et répétable à l'infini.
+    #[test]
+    fn bloc_avec_emission_refuse_et_penalise() {
+        let mut n = noeud_de_test();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+
+        // Bien chaîné, bien numéroté — seule l'émission cloche.
+        let mut inflation = Bloc::sceller(&n.etat.tete(), 1, Vec::new());
+        inflation.emissions = vec![ledger::proved_wallet::emission_factice(
+            &proved_hash::digest::Digest(core::array::from_fn(|i| {
+                proved_hash::felt::Felt::from_canonical_u64(1_000 + i as u64).unwrap()
+            })),
+        )];
+
+        let actions = n.traiter(p, Message::Bloc(Box::new(inflation)), 0);
+        assert!(actions.is_empty(), "un bloc refusé n'est jamais relayé");
+        assert_eq!(n.etat.hauteur(), 0, "aucune monnaie créée");
+        assert_eq!(
+            n.pairs.get(&p).unwrap().score,
+            PENALITE_BLOC_INVALIDE,
+            "émettre hors genèse doit coûter au pair : sinon l'essai est gratuit"
+        );
+        assert_eq!(
+            n.blocs_desaccordes(),
+            0,
+            "ce n'est PAS un désaccord de chaîne : le compteur qui signale un nœud \
+             figé ne doit pas être pollué par des blocs frauduleux"
+        );
+    }
+
+    /// UN BLOC EN AVANCE DÉCLENCHE UNE DEMANDE DE RATTRAPAGE — et aucune sanction.
+    ///
+    /// C'est la réparation du défaut structurel : jusqu'ici un nœud ayant manqué une
+    /// hauteur refusait tous les blocs suivants pour toujours, en servant un
+    /// historique plus court mais parfaitement cohérent. La demande porte la PREMIÈRE
+    /// hauteur manquante et non celle du bloc reçu : demander la seconde ne servirait
+    /// à rien, elle ne s'enchaînerait pas davantage.
+    #[test]
+    fn bloc_en_avance_declenche_une_demande_de_rattrapage() {
+        let mut n = noeud_de_test();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+
+        // Nous sommes à la hauteur 0 ; un pair diffuse un bloc de hauteur 4.
+        let avance = Bloc::sceller(&[9u8; 64], 4, Vec::new());
+        let actions = n.traiter(p, Message::Bloc(Box::new(avance)), 0);
+        match actions.as_slice() {
+            [Action::Envoyer(vers, Message::DemandeBloc { hauteur })] => {
+                assert_eq!(*vers, p);
+                assert_eq!(*hauteur, 1, "la PREMIÈRE hauteur manquante, pas la reçue");
+            }
+            _ => panic!("attendu une demande de bloc"),
+        }
+        assert_eq!(
+            n.pairs.get(&p).unwrap().score,
+            0,
+            "être en retard n'est la faute de personne"
+        );
+        assert_eq!(n.blocs_desaccordes(), 1, "le désaccord reste visible");
+        assert_eq!(n.hauteur_max_vue(), 4, "on se sait en retard de 4");
+    }
+
+    /// PAS DE BOUCLE entre deux nœuds désaccordés à la MÊME hauteur.
+    ///
+    /// C'est le cas normal de deux scellements simultanés. Le déclencheur est une
+    /// inégalité STRICTE (`recue > attendue`) précisément pour cela : si un bloc
+    /// concurrent déclenchait une demande, les deux nœuds se demanderaient
+    /// mutuellement des blocs à chaque échange, sans que rien ne s'applique jamais —
+    /// un amplificateur de trafic construit par nos propres soins.
+    #[test]
+    fn bloc_concurrent_a_la_meme_hauteur_ne_demande_rien() {
+        let mut n = noeud_de_test();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+
+        // Hauteur 1 = exactement celle qu'on attend, mais chaîné ailleurs.
+        let concurrent = Bloc::sceller(&[9u8; 64], 1, Vec::new());
+        let actions = n.traiter(p, Message::Bloc(Box::new(concurrent)), 0);
+        assert!(
+            actions.is_empty(),
+            "un bloc concurrent ne doit RIEN déclencher : ni relais, ni demande"
+        );
+        assert_eq!(n.pairs.get(&p).unwrap().score, 0);
+    }
+
+    /// UN RATTRAPAGE QUI ÉCHOUE S'ARRÊTE AU PREMIER PAS.
+    ///
+    /// Le pire cas de boucle : nous demandons la hauteur manquante, le pair sert un
+    /// bloc issu d'une AUTRE chaîne. Ce bloc arrive à la hauteur attendue, l'inégalité
+    /// stricte est fausse, et aucune nouvelle demande ne part. Le nœud reste figé —
+    /// ce qui est honnête — mais il ne saigne pas de bande passante.
+    #[test]
+    fn un_rattrapage_infructueux_ne_relance_pas_de_demande() {
+        let mut n = noeud_de_test();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+
+        // 1er échange : bloc en avance → une demande part.
+        let avance = Bloc::sceller(&[9u8; 64], 5, Vec::new());
+        assert_eq!(n.traiter(p, Message::Bloc(Box::new(avance)), 0).len(), 1);
+
+        // 2e échange : le pair sert la hauteur 1… d'une chaîne qui n'est pas la
+        // nôtre. Elle est refusée, et surtout elle ne relance rien.
+        for _ in 0..5 {
+            let reponse = Bloc::sceller(&[9u8; 64], 1, Vec::new());
+            let actions = n.traiter(p, Message::Bloc(Box::new(reponse)), 0);
+            assert!(actions.is_empty(), "aucune demande ne doit repartir");
+        }
+        assert_eq!(n.etat.hauteur(), 0, "toujours figé, mais silencieux");
+        assert_eq!(n.pairs.get(&p).unwrap().score, 0);
+    }
+
+    /// Une demande pour une hauteur INCONNUE : ni réponse, ni sanction.
+    ///
+    /// Même règle que pour une transaction purgée. L'archive est bornée : une hauteur
+    /// trop ancienne, ou d'une chaîne qu'on ne suit pas, est un cas légitime. La
+    /// pénaliser rendrait le rattrapage plus risqué que l'immobilité, ce qui
+    /// détruirait l'intérêt même de l'avoir écrit.
+    #[test]
+    fn demande_de_bloc_inconnue_ni_reponse_ni_sanction() {
+        let mut n = noeud_de_test();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+        for h in [0u64, 1, 999, u64::MAX] {
+            let actions = n.traiter(p, Message::DemandeBloc { hauteur: h }, 0);
+            assert!(actions.is_empty(), "hauteur {h} : silence attendu");
+        }
+        assert_eq!(
+            n.pairs.get(&p).unwrap().score,
+            0,
+            "demander une hauteur qu'on n'a pas n'est PAS une faute"
+        );
+    }
+
+    /// Une demande N'ENGENDRE JAMAIS une demande — la propriété qui ferme la boucle.
+    ///
+    /// Le rattrapage n'a qu'une seule source : l'arrivée d'un BLOC. Si servir une
+    /// demande pouvait en produire une autre, deux nœuds se renverraient des demandes
+    /// indéfiniment. Ici on sert un vrai bloc archivé et on exige que la seule action
+    /// produite soit l'envoi de ce bloc.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
+    fn servir_une_demande_ne_produit_quun_bloc() {
+        let (mut n, tx) = noeud_avec_transaction();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+        // Le service de blocs est désormais étranglé comme celui d'historique :
+        // fail-closed, un pair sans adresse observée n'est pas servi.
+        n.noter_adresse(p, adr);
+        n.mempool.admettre(&n.etat, tx).expect("admission");
+        let (bloc, _) = n.sceller().expect("bloc");
+
+        let actions = n.traiter(p, Message::DemandeBloc { hauteur: 1 }, 0);
+        match actions.as_slice() {
+            [Action::Envoyer(vers, Message::Bloc(servi))] => {
+                assert_eq!(*vers, p);
+                assert_eq!(servi.id(), bloc.id(), "le bloc servi est bien le nôtre");
+            }
+            _ => panic!("attendu exactement l'envoi du bloc demandé"),
+        }
+    }
+
+    /// Un bloc SCELLÉ localement entre à l'archive : c'est celui que personne d'autre
+    /// n'a, donc le plus susceptible d'être redemandé. S'il n'y entrait pas, le nœud
+    /// qui produit les blocs serait précisément celui incapable de les re-servir.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
+    fn sceller_alimente_larchive() {
+        let (mut n, tx) = noeud_avec_transaction();
+        assert!(n.archive().is_empty());
+        n.mempool.admettre(&n.etat, tx).expect("admission");
+        let (bloc, _) = n.sceller().expect("bloc");
+        assert_eq!(n.archive().len(), 1);
+        let servi = Bloc::from_bytes(n.archive().octets_a(1).expect("hauteur 1")).unwrap();
+        assert_eq!(servi.id(), bloc.id());
+    }
+
+    // ================================================================================
+    // Service d'HISTORIQUE (synchronisation du wallet).
+    // ================================================================================
+
+    /// Nombre de sorties d'une genèse de test. Choisi assez grand pour que le coût
+    /// variable domine le coût fixe (l'étranglement doit se voir en quelques dizaines
+    /// de requêtes) et assez petit pour rester sous `MAX_SORTIES_PAR_REPONSE` : une
+    /// genèse est plafonnée à `MAX_EMISSIONS_PAR_BLOC` (512), donc elle ne peut PAS
+    /// produire un bloc à plusieurs morceaux. Le découpage est éprouvé à son niveau, sur
+    /// le format de fil (`crate::synchro::le_decoupage_couvre_exactement_le_bloc`) —
+    /// l'atteindre ici exigerait ≈370 preuves STARK.
+    const SORTIES_DE_GENESE: usize = 64;
+
+    /// Un nœud ARCHIVISTE, amorcé sur une genèse de [`SORTIES_DE_GENESE`] émissions.
+    fn noeud_archiviste() -> Noeud {
+        let cm = |n: u64| {
+            proved_hash::digest::Digest(core::array::from_fn(|i| {
+                proved_hash::felt::Felt::from_canonical_u64(1_000 + n * 64 + i as u64).unwrap()
+            }))
+        };
+        let emissions = (0..SORTIES_DE_GENESE as u64)
+            .map(|n| ledger::proved_wallet::emission_factice(&cm(n)))
+            .collect();
+        let genese = Bloc::genese_avec(emissions).expect("genèse bornée");
+        Noeud::new(
+            SigKeypair::generate(),
+            ProvedLedgerState::depuis_genese_depth_archivant(&genese, 10).expect("amorçage"),
+            [7u8; 32],
+        )
+    }
+
+    /// Un pair connecté, dont l'adresse est notée comme le ferait le runtime.
+    fn pair_connecte(n: &mut Noeud, a: u8, b: u8, c: u8, d: u8) -> PeerId {
+        let id = PeerId::depuis_identite(&SigKeypair::generate().public);
+        let adresse = SocketAddr::from((Ipv4Addr::new(a, b, c, d), 8333));
+        n.pairs.ajouter(id, adresse);
+        n.noter_adresse(id, adresse);
+        id
+    }
+
+    /// ALLER-RETOUR COMPLET DU SERVICE : la réponse porte les feuilles du bloc, leur
+    /// plage absolue, la racine de fin de bloc et la tête du serveur.
+    ///
+    /// Sans la plage absolue, le wallet ne saurait pas à quel INDEX ranger chaque
+    /// feuille — et un index faux produit un chemin de Merkle faux, que rien ne signale :
+    /// sa transaction est simplement refusée pour « ancre inconnue ». Sans
+    /// `racine_apres`, il n'aurait aucune ancre de frontière de bloc à publier, et son
+    /// `ProvedTx::anchor` — public — deviendrait sa position exacte de synchronisation,
+    /// c'est-à-dire un pseudonyme.
+    #[test]
+    fn historique_servi_avec_plage_racine_et_tete() {
+        let mut n = noeud_archiviste();
+        let p = pair_connecte(&mut n, 203, 0, 113, 1);
+
+        let actions = n.traiter(p, Message::DemandeHistorique { hauteur: 0 }, 0);
+        match actions.as_slice() {
+            [Action::Envoyer(vers, Message::Historique(r))] => {
+                assert_eq!(*vers, p);
+                assert_eq!(r.hauteur, 0);
+                assert_eq!((r.debut, r.fin), (0, SORTIES_DE_GENESE as u64));
+                assert_eq!(r.decalage, 0);
+                assert_eq!((r.morceau, r.morceaux), (0, 1));
+                assert_eq!(r.sorties.len(), SORTIES_DE_GENESE);
+                assert_eq!(r.hauteur_tete, 0, "la tête réellement SERVABLE");
+                // La racine annoncée est bien celle de l'état, pas une valeur inventée.
+                let attendue = n
+                    .etat
+                    .historique()
+                    .and_then(|h| h.tranche(0))
+                    .map(|t| t.racine_apres)
+                    .expect("tranche");
+                assert_eq!(r.racine_apres.to_bytes(), attendue.to_bytes());
+                // Et la réponse survit au fil, tag applicatif compris.
+                let octets = Message::Historique(Box::new(
+                    crate::synchro::ReponseHistorique::from_bytes(&r.to_bytes()).expect("relecture"),
+                ))
+                .to_bytes();
+                assert!(Message::from_bytes(&octets).is_ok());
+            }
+            _ => panic!("attendu exactement une réponse d'historique"),
+        }
+    }
+
+    /// UN NŒUD QUI N'ARCHIVE PAS RÉPOND LE SILENCE — et reste valide.
+    ///
+    /// L'archivage est un rôle d'opérateur, séparé et optionnel : faire dépendre le
+    /// service du consensus (ou l'inverse) ferait de la confidentialité un privilège
+    /// d'opérateur. Le demandeur n'a rien fait de mal, il doit simplement s'adresser
+    /// ailleurs.
+    #[test]
+    fn noeud_sans_archive_repond_le_silence_sans_sanction() {
+        let mut n = noeud_de_test(); // pas d'historique
+        let p = pair_connecte(&mut n, 203, 0, 113, 1);
+        assert!(n.etat.historique().is_none());
+        let actions = n.traiter(p, Message::DemandeHistorique { hauteur: 0 }, 0);
+        assert!(actions.is_empty());
+        assert_eq!(n.pairs.get(&p).unwrap().score, 0);
+    }
+
+    /// FAIL-CLOSED : un pair dont l'adresse est inconnue n'est pas servi.
+    ///
+    /// Sans adresse il n'y a pas de groupe réseau, donc pas d'étranglement possible.
+    /// Servir quand même offrirait un contournement complet à qui saurait se faire
+    /// oublier de la table — et l'étranglement ne protégerait plus que les honnêtes.
+    #[test]
+    fn pair_sans_adresse_connue_nest_pas_servi() {
+        let mut n = noeud_archiviste();
+        let inconnu = PeerId::depuis_identite(&SigKeypair::generate().public);
+        assert!(n
+            .traiter(inconnu, Message::DemandeHistorique { hauteur: 0 }, 0)
+            .is_empty());
+        // Et la même demande, une fois l'adresse notée, est bien servie : c'est
+        // l'adresse qui manquait, pas autre chose.
+        n.noter_adresse(inconnu, SocketAddr::from((Ipv4Addr::new(198, 51, 100, 4), 8333)));
+        assert_eq!(
+            n.traiter(inconnu, Message::DemandeHistorique { hauteur: 0 }, 0)
+                .len(),
+            1
+        );
+    }
+
+    /// HAUTEURS HOSTILES : `u64::MAX`, la hauteur suivante, une hauteur absurde.
+    ///
+    /// Elles viennent du réseau et traversent `tranche` / `sorties_du_bloc`, qui les
+    /// ramènent dans le repère local par `checked_sub` + `usize::try_from` + `get(..)`.
+    /// Une indexation directe donnerait ici une panique — ou pire, la tranche d'une
+    /// AUTRE hauteur, donc des index faux servis en silence à un wallet qui les croirait.
+    #[test]
+    fn hauteurs_hostiles_rendent_le_silence_sans_paniquer() {
+        let mut n = noeud_archiviste();
+        let p = pair_connecte(&mut n, 203, 0, 113, 1);
+        // hauteur == tête (servie), tête+1, tête+2, et les extrêmes du domaine.
+        for h in [1u64, 2, 1_000_000, u64::MAX, u64::MAX - 1] {
+            let actions = n.traiter(p, Message::DemandeHistorique { hauteur: h }, 0);
+            assert!(actions.is_empty(), "hauteur {h} : silence attendu");
+        }
+        assert_eq!(
+            n.pairs.get(&p).unwrap().score,
+            0,
+            "demander une hauteur qu'on n'a pas n'est PAS une faute"
+        );
+        // La hauteur valide reste servie : le silence n'était pas un blocage global.
+        assert_eq!(
+            n.traiter(p, Message::DemandeHistorique { hauteur: 0 }, 0).len(),
+            1
+        );
+    }
+
+    /// L'ÉTRANGLEMENT RÉSISTE À LA ROTATION D'IDENTITÉ.
+    ///
+    /// C'est LA propriété de la brique. Un `PeerId` est un hachage de clé publique :
+    /// gratuit, et le wallet en tire délibérément un neuf à chaque commande. Indexer le
+    /// crédit dessus donnerait un service étranglé sur le papier et illimité en
+    /// pratique — il suffirait de régénérer une clé entre deux requêtes.
+    ///
+    /// Ici 200 identités DISTINCTES depuis un seul `/16` se partagent un seul seau : le
+    /// nombre de réponses reste celui d'un groupe. Et un pair d'un AUTRE groupe est
+    /// toujours servi, sinon étrangler un attaquant reviendrait à couper le service pour
+    /// tout le monde.
+    #[test]
+    fn etranglement_indexe_sur_le_groupe_resiste_a_la_rotation_didentite() {
+        let mut n = noeud_archiviste();
+        let mut servies = 0usize;
+        for i in 0..200u16 {
+            // Identité neuve à CHAQUE requête, adresses variées… dans le même /16.
+            let p = pair_connecte(&mut n, 203, 0, (i % 256) as u8, (i / 256) as u8);
+            if !n.traiter(p, Message::DemandeHistorique { hauteur: 0 }, 0).is_empty() {
+                servies += 1;
+            }
+        }
+        // Coût d'une requête servie : COUT_REQUETE + SORTIES_DE_GENESE entrées.
+        let plafond = (crate::etranglement::CAPACITE_SEAU
+            / (crate::etranglement::COUT_REQUETE + SORTIES_DE_GENESE as u64))
+            as usize
+            + 1;
+        assert!(servies >= 1, "un wallet honnête doit être servi au moins une fois");
+        assert!(
+            servies <= plafond,
+            "200 identités d'un même /16 ont obtenu {servies} réponses (plafond {plafond}) : \
+             le crédit suit le PAIR et non le GROUPE"
+        );
+
+        // Un groupe réseau DIFFÉRENT est intact.
+        let autre = pair_connecte(&mut n, 198, 51, 100, 1);
+        assert_eq!(
+            n.traiter(autre, Message::DemandeHistorique { hauteur: 0 }, 0)
+                .len(),
+            1,
+            "étrangler un groupe ne doit pas couper le service pour les autres"
+        );
+    }
+
+    /// À CRÉDIT ÉPUISÉ : LE SILENCE, ET AUCUNE SANCTION.
+    ///
+    /// Deux exigences distinctes qui tiennent ensemble. Une réponse « courte » de refus
+    /// coûterait exactement ce qu'on cherche à éviter (allocation, cascade AEAD,
+    /// écriture, flush) et ferait du crédit une information sondable. Et sanctionner
+    /// serait pire encore : le score gouverne la sélection sortante, donc pénaliser les
+    /// wallets qui se synchronisent dégraderait notre propre anti-eclipse — sur le
+    /// comportement le plus normal qui soit.
+    #[test]
+    fn credit_epuise_donne_le_silence_et_aucune_sanction() {
+        let mut n = noeud_archiviste();
+        let p = pair_connecte(&mut n, 203, 0, 113, 1);
+        let mut vues = 0usize;
+        for _ in 0..500 {
+            if n.traiter(p, Message::DemandeHistorique { hauteur: 0 }, 0).is_empty() {
+                vues += 1;
+            }
+        }
+        assert!(vues > 0, "le crédit doit finir par s'épuiser");
+        assert_eq!(
+            n.pairs.get(&p).unwrap().score,
+            0,
+            "demander son historique n'est JAMAIS une faute, même à crédit épuisé"
+        );
+        assert!(!n.pairs.get(&p).unwrap().banni());
+
+        // Et le crédit REMONTE avec le temps : l'étranglement freine, il ne bannit pas.
+        assert!(
+            !n.traiter(p, Message::DemandeHistorique { hauteur: 0 }, 60_000)
+                .is_empty(),
+            "une minute plus tard, le service doit être de nouveau rendu"
+        );
+    }
+
+    /// UNE RÉPONSE D'HISTORIQUE REÇUE PAR UN NŒUD EST IGNORÉE, SANS SANCTION.
+    ///
+    /// Un nœud n'en demande jamais — c'est un message de wallet. En recevoir une n'a
+    /// pourtant rien d'anormal : réponse tardive après renoncement, pair qui parle à la
+    /// mauvaise adresse. Sanctionner ferait payer un décalage de calendrier, et la
+    /// pénalité retomberait sur la diversité de pairs.
+    #[test]
+    fn reponse_dhistorique_non_sollicitee_ignoree_sans_sanction() {
+        let mut n = noeud_archiviste();
+        let p = pair_connecte(&mut n, 203, 0, 113, 1);
+        let tranche = ledger::historique::TrancheBloc {
+            hauteur: 0,
+            debut: 0,
+            fin: 0,
+            racine_apres: proved_hash::digest::Digest(core::array::from_fn(|i| {
+                proved_hash::felt::Felt::from_canonical_u64(9 + i as u64).unwrap()
+            })),
+        };
+        let r = crate::synchro::ReponseHistorique::decouper(&tranche, &[], 0).expect("découpage");
+        let actions = n.traiter(
+            p,
+            Message::Historique(Box::new(r.into_iter().next().unwrap())),
+            0,
+        );
+        assert!(actions.is_empty());
+        assert_eq!(n.pairs.get(&p).unwrap().score, 0);
     }
 
     /// Un message indécodable pénalise — le pair ne parle pas le protocole.
