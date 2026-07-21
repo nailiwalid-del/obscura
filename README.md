@@ -42,17 +42,20 @@ consensus : `dev-transparent` (ledger transparent, non-privé) et `dev-circuits`
 1. ✅ Primitives crypto hybrides (avec versioning d'algorithmes)
 2. ✅ Ledger **transparent de dev** (explicitement non-privé, fonctions `_transparent`)
 3. ✅ **Circuit STARK = définition du consensus** (P1–P7 monolithe, Rescue-Prime des
-   commitments/Merkle, spend_pk/path retirés, witness-hiding) — reste 3z-c (M-in/N-out)
+   commitments/Merkle, spend_pk/path retirés, witness-hiding, **forme variable
+   M-in/N-out ≤ 4 — 3z-c2**)
 4. ✅ Réseau P2P chiffré PQ + Dandelion++ + test de key privacy
 5. ✅ Nœud, wallet CLI, testnet local multi-nœuds
 6. 🟡 **Finalité** : bloc + application atomique + convergence entre nœuds ✅ ;
    synchronisation wallet ↔ nœud ✅ (le wallet REÇOIT) ; élection du producteur ⬜
 
-> Phase 3 : intégrité prouvée (P1–P7, monolithe 2-in/2-out) ; depuis 3z-b1 la preuve
-> de consensus est **witness-hiding (HVZK dans le modèle de l'oracle aléatoire)** —
-> caveat : honnête-vérifieur, prototype non audité (docs/STARK_STATEMENT.md,
-> « Argument HVZK »). `ProvedTx` v3 porte les `enc_notes` (scan wallet, liés au digest).
-> Reste dans 3z : la généralisation M-in/N-out (3z-c).
+> Phase 3 : intégrité prouvée (P1–P7, monolithe **m-in/n-out**, `1..=4` — 3z-c2) ;
+> depuis 3z-b1 la preuve de consensus est **witness-hiding (HVZK dans le modèle de
+> l'oracle aléatoire)** — caveat : honnête-vérifieur, prototype non audité
+> (docs/STARK_STATEMENT.md, « Argument HVZK »). `ProvedTx` **v4** porte les `enc_notes`
+> (scan wallet, liés au digest, comptes m/n préfixés). Un wallet à note UNIQUE peut
+> payer, `consolider` regroupe les notes ; la forme est publique (2/2 par défaut, cf.
+> docs/THREAT_MODEL). Reste : suppression de l'oracle côte-à-côte (cleanup).
 
 > Phases 4–5 : transport PQ 3 passes (forward secrecy, identités masquées), pairs
 > anti-eclipse, mempool ordonné par coût, Dandelion++, nœud réel et testnet local.

@@ -88,19 +88,31 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   honnêtes). `Refus::couteux()` distingue les refus gratuits de celui qui a brûlé
   du CPU, pour pénaliser le pair en conséquence.
 - `crates/circuit` : circuit STARK **monolithe** (`monolith/`) — P1–P7 d'une tx
-  2-in/2-out en UNE SEULE trace/preuve, publics minimaux (root, nullifiers,
-  output_commitments, fee), `ProvedTx` **v3** — **witness-hiding (HVZK en ROM)**
-  depuis 3z-b1 (lignes de blinding, gating global `blind_off`, aléa OsRng frais
-  par preuve) — testé et benché. ⚠️ **Deux dispositions coexistent** : le
-  **SEGMENTÉ** (`seg_*`, 92 col × 2048 lignes) est celui que `tx.rs` utilise
-  depuis la bascule 3z-c1 — ≈1783 ms génération, ≈4,1 ms vérification,
-  ≈67,9 Kio/preuve à profondeur 32 ; le **côte-à-côte** (201 col × 1024 lignes,
-  ≈1260 ms / 2,8 ms / 89,3 Kio) n'est plus sur le chemin de production et ne sert
-  plus qu'à l'oracle de parité.
+  en UNE SEULE trace/preuve, publics minimaux (root, nullifiers, output_commitments,
+  fee). Depuis **3z-c2** : FORME VARIABLE `m`-in/`n`-out (`1..=MAX = 4`). Une `Forme`
+  validée pilote schedule, colonnes (`seg_layout::Forme::{rho_c, vout_c, s_col,
+  width}`), trace (`SegWitness`), AIR (`seg_air`, sélecteurs + assertions + NOMBRE de
+  contraintes dérivés de la forme). ⚠️ **La forme est portée par les LONGUEURS des
+  publics et PRÉFIXÉE dans Fiat-Shamir** (`MonolithPublicInputs::to_elements`) : sans
+  ça, deux découpages des mêmes digests donneraient la même graine (preuve 1/3
+  rejouable en 2/2). Robustesse : l'AIR dérive sa forme de la LARGEUR de trace
+  commise (bijective, `forme_depuis_largeur`), pas des publics — une forme mentie est
+  rejetée, jamais un accès hors cadre. `ProvedTx` **v4** (Vec bornés, comptes au wire
+  + `tx_digest`, bornés avant allocation). **witness-hiding (HVZK en ROM)** depuis
+  3z-b1, re-vérifié sur 1/1 et 4/4 (le gating `blind_off` couvre toute porteuse
+  nouvelle sans liste). Soundness variable (C2-T4) : 3 forges D7 (forme liée, fin
+  d'équilibre variable, ordre publics↔segments), RED sur chacune. Re-bench prof. 32 :
+  1/1 = 55,7 Kio / 1,6 ms ; 2/2 = 67,7 Kio / 3,8 ms (non-régression) ; 4/4 =
+  80,3 Kio / 12,6 ms. ⚠️ Le **côte-à-côte** (201 col, oracle de parité 2/2) n'est
+  PAS encore supprimé — retrait = extraire ses helpers partagés (`MonolithPublicInputs`,
+  `push_preamble`), refactor transverse différé pour ne pas toucher le consensus à la
+  hâte ; il est `#[allow(dead_code)]`, hors chemin de prod. Forges à reconstruction
+  d'arbre encore en profondeur 2 (dette D8).
   Caveat : honnête-vérifieur, prototype non audité (voir docs/STARK_STATEMENT.md,
   « Argument HVZK »). Les gadgets autonomes du crate restent validity-only.
-  `ProvedTx` v3 porte les `enc_notes` (enveloppes chiffrées des sorties, scan wallet
-  via `ledger::proved_wallet`), liées dans `tx_digest` v3 (anti-substitution) ; P8
+  `ProvedTx` v4 porte les `enc_notes` (enveloppes chiffrées des sorties, une par
+  sortie, scan wallet via `ledger::proved_wallet`), liées dans `tx_digest` v4
+  (anti-substitution + comptes m/n) ; P8
   différé, IK-CCA = phase 4. Sérialisation wire **canonique**
   `ProvedTx::{to_bytes, from_bytes}` (+`TxDecodeError`) : `from_bytes` = point
   d'entrée réseau validant (curseur borné sans panique, digests canoniques,
@@ -288,7 +300,12 @@ dans un nœud réel, testnet local validé, binaires) — voir « État » ci-de
 pour le circuit, le journal de tête de docs/STARK_STATEMENT.md est LA référence.
 Cap actuel (décision utilisateur) : **complétude/cohérence protocole avant
 sophistication crypto**. Reste :
-1. **3z-c2 — variabilité M-in/N-out ≤ MAX** : la couture `SegKind`/schedule est
+1. **3z-c2 — variabilité M-in/N-out ≤ MAX — LIVRÉE (C2-T1..T7)** : circuit,
+   trace, AIR, soundness, masquage, ProvedTx v4, wallet (note unique paie,
+   `consolider`, défaut 2/2). Reste C2-T8 partiel : la SUPPRESSION du côte-à-côte
+   (refactor transverse d'extraction de helpers, différé) et les forges à
+   reconstruction d'arbre en profondeur 32 (dette D8). — Ancien texte de suivi :
+   la couture `SegKind`/schedule était
    en place depuis 3z-c1 ; la bascule supprimera le côte-à-côte (aujourd'hui
    conservé comme oracle de parité — mêmes publics, même témoin). Restent aussi
    2 forges non portées (`PaddingMerkle`, `VaccInitial` fine) et les forges à

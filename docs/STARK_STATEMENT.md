@@ -301,10 +301,40 @@
 > NOUVELLE — voir « Liaison de racine » ci-dessous. Masquage des porteuses re-testé
 > (RED vérifié : sans blinding, une ouverture FRI vaut `OWNER_C` en clair).
 >
-> **Reste hors Phase-3-validity** : **3z-c2** (variabilité M-in/N-out ≤ MAX,
-> publics variables). La couture est en place (`SegKind` + schedule) : 3z-c2 fait
-> varier la LISTE de segments sans refondre la géométrie. Deux forges du
-> côte-à-côte ne sont pas portées (`PaddingMerkle`, forme fine de `VaccInitial`).
+>
+> **3z-c2 — VARIABILITÉ M-in/N-out LIVRÉE** : le circuit accepte `1..=MAX_IN`
+> entrées et `1..=MAX_OUT` sorties (`MAX = 4`). La forme (m, n) est une `Forme`
+> validée, la trace/AIR la dérivent, et le NOMBRE de contraintes varie avec elle
+> (prouveur et vérifieur la construisent des MÊMES publics, donc s'accordent). La
+> forme est **portée par les longueurs** des publics et **préfixée dans
+> Fiat-Shamir** (`to_elements`) : sans ce préfixe, deux découpages des mêmes
+> digests donneraient la même graine et une preuve (m=1, n=3) serait rejouable en
+> (m=2, n=2). Robustesse : l'AIR dérive sa forme de la LARGEUR de trace commise
+> (bijective avec (m, n)), jamais des publics — une forme mentie ne provoque pas
+> d'accès hors cadre, elle est rejetée par Fiat-Shamir.
+>
+> Soundness sous forme variable (C2-T4) — trois garanties que la variabilité aurait
+> pu supprimer, chacune avec forge RED : (D7.1) la forme est liée (re-présenter une
+> preuve 2/2 en 1/3 est rejeté) ; (D7.2) l'équilibre `S = fee` est scellé à
+> `used_rows(m, n)−1`, ligne dépendante de la forme ; (D7.3) chaque public est lié à
+> SON segment, position par position. Masquage re-vérifié sur 1/1 et 4/4 (le gating
+> `blind_off` couvre toute porteuse nouvelle sans liste manuelle). `ProvedTx` **v4**
+> porte des Vec bornés, comptes préfixés au wire ET dans `tx_digest`, bornés avant
+> allocation. Le wallet exploite la variabilité : une note UNIQUE paie (1-in/2-out),
+> `consolider` regroupe (M-in/1-out), et 2/2 reste le défaut de VIE PRIVÉE (la forme
+> est publique — cf. THREAT_MODEL).
+>
+> **Re-bench profondeur 32** (par forme) : 1/1 → 55,7 Kio / 1,6 ms ; 1/2 → 55,9 Kio ;
+> 2/2 → 67,7 Kio / 3,8 ms (inchangé, non-régression) ; 4/4 → 80,3 Kio / 12,6 ms. La
+> taille croît doucement avec la forme, la vérification reste sous 13 ms au pire cas.
+>
+> ⚠️ **Reste** : le côte-à-côte (oracle de parité 2/2) N'EST PAS encore supprimé —
+> son retrait exige d'extraire ses helpers partagés (`MonolithPublicInputs`,
+> `push_preamble`, les constructeurs de trace) que le segmenté réutilise, un refactor
+> mécanique mais transverse, décidé pour plus tard afin de ne pas toucher du code de
+> consensus à la hâte. Les forges à reconstruction d'arbre restent à profondeur 2
+> (`build_tree_from_leaves` câblé) — dette D8. Le côte-à-côte est `#[allow(dead_code)]`
+> et hors du chemin de production (`tx.rs` passe par le segmenté).
 
 **Ce statement EST la règle de consensus d'une dépense valide.** Tout le reste du
 protocole s'organise autour de lui. Le mode transparent actuel (`apply_transparent`)

@@ -784,6 +784,12 @@ pub(crate) mod tests {
     /// 4 feuilles) : toutes les entrées prouvent contre la même racine, comme
     /// l'exige le constructeur.
     pub(crate) fn witness_forme(m: usize, n: usize) -> SegWitness {
+        witness_forme_profondeur(m, n, 2)
+    }
+
+    /// Témoin (m, n) à une PROFONDEUR d'arbre donnée — le re-bench 3z-c2 en a besoin
+    /// à la profondeur consensus (32).
+    pub(crate) fn witness_forme_profondeur(m: usize, n: usize, profondeur: usize) -> SegWitness {
         use proved_hash::merkle::ProvedMerkleTree;
         let secret = ShieldedSecret::from_felts(core::array::from_fn(|i| {
             Felt::from_canonical_u64(4_000 + i as u64).unwrap()
@@ -803,7 +809,7 @@ pub(crate) mod tests {
                 r: d(200 + 10 * i as u64),
             })
             .collect();
-        let mut arbre = ProvedMerkleTree::new(2);
+        let mut arbre = ProvedMerkleTree::new(profondeur);
         let index: Vec<u64> = notes
             .iter()
             .map(|note| {

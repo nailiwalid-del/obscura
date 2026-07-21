@@ -1554,6 +1554,35 @@ mod tests {
         );
     }
 
+    /// RE-BENCH 3z-c2 : cout par FORME, profondeur consensus (32). Mesure ce
+    /// qui compte pour une monnaie -- la TAILLE de preuve (cout PERMANENT par
+    /// noeud) -- sur les formes que le wallet produit : 1/1 (debloque par
+    /// 3z-c2), 1/2 (note unique), 2/2 (defaut vie privee), 4/4 (consolidation).
+    ///
+    /// `cargo test -p circuit --release --lib mesure_formes -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "bench : lancer explicitement avec --ignored --nocapture"]
+    fn mesure_formes() {
+        use crate::monolith::seg_trace::tests::witness_forme_profondeur;
+        use std::time::Instant;
+        println!("\n=== profondeur 32 (consensus) -- cout par forme (3z-c2) ===");
+        for (m, n) in [(1usize, 1usize), (1, 2), (2, 2), (4, 4)] {
+            let w = witness_forme_profondeur(m, n, 32);
+            let t0 = Instant::now();
+            let (pi, proof) = prove_seg_forme(&w);
+            let gen = t0.elapsed();
+            let t1 = Instant::now();
+            assert!(verify_seg_monolith(&pi, 32, &proof), "forme {m}/{n} valide");
+            let ver = t1.elapsed();
+            println!(
+                "forme {m}/{n} : largeur {:3}, trace {:5} | gen {:7.1} ms | ver {:5.1} ms | {:6.1} Kio",
+                w.forme().width(), w.forme().trace_len(32),
+                gen.as_secs_f64() * 1e3, ver.as_secs_f64() * 1e3,
+                proof.0.to_bytes().len() as f64 / 1024.0
+            );
+        }
+    }
+
     /// Prouve une trace FORGÉE et rend le verdict du vérifieur. Les publics sont
     /// relus de la trace forgée (self-consistants) : le rejet ne peut donc venir
     /// que d'une contrainte ou d'une assertion, jamais d'un public incohérent.

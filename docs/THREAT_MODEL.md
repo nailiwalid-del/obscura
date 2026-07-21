@@ -77,6 +77,17 @@ avant la phase 3.
 
 ## Ce que le wallet ne protège PAS (état actuel)
 
+- **La FORME (m, n) d'une transaction est PUBLIQUE (3z-c2).** Le circuit accepte
+  `1..=4` entrées et sorties, et le nombre de chacune est lisible sur le fil (les
+  publics le portent). Un observateur range donc les transactions par forme, et les
+  formes rares partitionnent l'ensemble d'anonymat — au plus 16 seaux (4×4), à
+  comparer à un pseudonyme par wallet, donc une fuite BORNÉE. Atténuation, pas
+  suppression : `Wallet::construire` vise **2/2 par défaut** (le seau le plus
+  peuplé) et n'en sort que par nécessité (une seule note → 1-in ; deux notes qui ne
+  couvrent pas → plus d'entrées). La consolidation (`consolider`, forme M/1) est un
+  geste VOLONTAIRE, distinctif, dont l'alternative — ne pas pouvoir dépenser — est
+  pire. C'est le même arbitrage que Zcash Sapling, qui expose aussi son nombre de
+  spends/outputs. Uniformiser (bourrer tout à 4/4) coûterait ×2 de preuve à tous.
 - **Le fichier de wallet n'est pas chiffré au repos.** Il contient l'autorité de
   DÉPENSE en clair ; sa confidentialité repose entièrement sur les permissions du
   système de fichiers (`0600` sur Unix, posé avant écriture ; rien sur les plateformes
