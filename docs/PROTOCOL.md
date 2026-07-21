@@ -130,5 +130,5 @@ attendant le circuit. Fonctions suffixées `_transparent` dans le code.
 2. ✅ Ledger transparent de développement (explicitement non-privé)
 3. ⬜ **Circuit STARK = définition du consensus** (P1–P7) + migration Rescue-Prime
    des commitments/Merkle + retrait de spend_pk/path des transactions
-4. ⬜ Réseau P2P chiffré PQ + Dandelion++ + test de key privacy
+4. 🟡 Réseau P2P chiffré PQ + Dandelion++ + test de key privacy — **briques livrées** (crate `net` : transport, cadrage, pairs anti-eclipse, Dandelion++ ; `ledger::mempool`), **câblage dans un nœud = phase 5**
 5. ⬜ Nœud, wallet CLI, testnet local

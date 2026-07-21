@@ -46,6 +46,13 @@ impl PeerId {
     pub fn octets(&self) -> &[u8; 64] {
         &self.0
     }
+
+    /// Identifiant synthétique déterministe pour les tests, sans générer une paire
+    /// de clés hybride (coûteuse) par pair.
+    #[cfg(test)]
+    pub(crate) fn depuis_octets_de_test(n: u64) -> Self {
+        PeerId(dual_hash(D_PEER_ID, &n.to_le_bytes()))
+    }
 }
 
 /// Groupe réseau d'une adresse : l'unité de coût pour un attaquant Sybil.

@@ -40,6 +40,7 @@
 //! | [`session`] | canal chiffré anti-rejeu |
 //! | [`connexion`] | assemblage des trois, générique sur `Read + Write` |
 //! | [`pairs`] | table de pairs et sélection résistante à l'ECLIPSE |
+//! | [`dandelion`] | Dandelion++ : anonymisation de l'ORIGINE des transactions |
 //!
 //! Le cadrage est SYNCHRONE délibérément : il fixe le FORMAT DE FIL, qui est
 //! l'artefact durable, pas la stratégie d'E/S. Passer à un runtime asynchrone plus
@@ -54,12 +55,14 @@
 use crypto::hash::{derive_key, dual_hash};
 
 pub mod connexion;
+pub mod dandelion;
 pub mod frame;
 pub mod handshake;
 pub mod pairs;
 pub mod session;
 
 pub use connexion::Connexion;
+pub use dandelion::{Dandelion, Routage};
 pub use frame::{MAX_CADRE, ecrire_cadre, lire_cadre};
 pub use handshake::{Initiateur, Repondeur};
 pub use pairs::{GroupeReseau, Pair, PeerId, TablePairs};

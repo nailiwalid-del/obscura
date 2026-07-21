@@ -20,6 +20,13 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   (testée sur tuyau mémoire, prête pour TcpStream). Réutilise kem/sig/aead sans
   primitive nouvelle. Cadrage SYNCHRONE délibéré : il fixe le FORMAT DE FIL, pas la
   stratégie d'E/S — un runtime async plus tard ne changera pas un octet sur le fil.
+  **Pairs** (brique 2) : sélection sortante par groupes réseau DISTINCTS (IPv4 /16,
+  IPv6 /32) — anti-ECLIPSE, car un adversaire qui éclipse un nœud neutralise
+  entièrement Dandelion++. **Dandelion++** (brique 4) : successeur stable par
+  ÉPOQUE (la correction qui distingue ++ de v1 — un successeur par transaction
+  laissait apprendre la topologie), décision stem/fluff par HACHAGE de
+  (époque, tx, secret) pour résister au sondage, embargo contre le black-holing.
+  ⚠️ L'anonymat de Dandelion++ REPOSE sur la diversité des pairs (brique 2).
   ⚠️ L'identité du RÉPONDEUR reste révélée à un MitM actif (inhérent au rôle ;
   fermable par un motif Noise-IK pour les sorties) — cf. spec transport-pq.
 - `crates/ledger` : notes engagées, nullifiers, Merkle (BLAKE3, prof. 16), tx, validation — testés.
@@ -89,7 +96,10 @@ avant sophistication crypto**. Reste :
    ⚠️ Piège identifié à ne pas rejouer : mutualiser des colonnes peut SUPPRIMER
    une garantie que la redondance offrait gratuitement (cf. « Liaison de racine »
    dans STARK_STATEMENT.md) — auditer chaque fusion sous cet angle.
-Puis phase 4 (P2P PQ + Dandelion++ + test key privacy) et phase 5 (nœud/wallet/testnet).
+**Phase 4 : les 4 briques sont livrées** (key-privacy, transport PQ + cadrage,
+pairs anti-eclipse, mempool ordonné par coût, Dandelion++). Reste à les CÂBLER
+dans un nœud réel — c'est la phase 5 (nœud/wallet/testnet), qui suppose une boucle
+d'événements, des sockets et l'orchestration des quatre.
 
 ## Décisions v0.2 (revue intégrée — ne pas régresser)
 
