@@ -55,6 +55,12 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   `ProvedTx::{to_bytes, from_bytes}` (+`TxDecodeError`) : `from_bytes` = point
   d'entrée réseau validant (curseur borné sans panique, digests canoniques,
   bornes EncNote anti-DoS, rejet des octets résiduels), pas de serde
+- `crates/wallet` : détention de notes, scan, construction de transactions. Tient
+  son PROPRE `ProvedMerkleTree` — le nœud n'ayant qu'une frontier, il ne peut pas
+  produire les chemins d'appartenance qu'exigent les preuves (partage de rôles
+  décidé en brique frontier). ⚠️ `observer()` doit être appelé pour CHAQUE
+  commitment dans le MÊME ordre que le nœud, sinon les index divergent.
+  Monnaie rendue toujours produite ET chiffrée vers soi-même.
 - `docs/PROTOCOL.md`, `docs/THREAT_MODEL.md` et `docs/STARK_STATEMENT.md` : spécification de référence
 - `cargo test` : suite verte (crypto/ledger/circuit)
 

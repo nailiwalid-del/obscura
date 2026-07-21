@@ -1,0 +1,13 @@
+[package]
+name = "wallet"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+circuit = { path = "../circuit" }
+crypto = { path = "../crypto" }
+ledger = { path = "../ledger" }
+proved-hash = { path = "../proved-hash" }
+rand_core.workspace = true
+thiserror.workspace = true
