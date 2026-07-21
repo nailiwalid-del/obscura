@@ -131,4 +131,8 @@ attendant le circuit. Fonctions suffixées `_transparent` dans le code.
 3. ⬜ **Circuit STARK = définition du consensus** (P1–P7) + migration Rescue-Prime
    des commitments/Merkle + retrait de spend_pk/path des transactions
 4. 🟡 Réseau P2P chiffré PQ + Dandelion++ + test de key privacy — **briques livrées** (crate `net` : transport, cadrage, pairs anti-eclipse, Dandelion++ ; `ledger::mempool`), **câblage dans un nœud = phase 5**
-5. ⬜ Nœud, wallet CLI, testnet local
+5. 🟡 Nœud, wallet CLI, testnet local — **nœud fonctionnel** (`crates/node` :
+   protocole applicatif, orchestration en fonction pure, runtime sockets+threads).
+   Testnet local validé : une transaction PROUVÉE se propage entre nœuds réels sur
+   de vraies sockets, y compris à travers un intermédiaire. Restent le **wallet CLI**
+   et un binaire de nœud autonome.

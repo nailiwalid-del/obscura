@@ -107,7 +107,12 @@ avant sophistication crypto**. Reste :
   lecture par connexion, boucle d'événements). Lecture et écriture d'une connexion
   sont DÉCOUPLÉES (`Session::separer`, possible grâce aux clés directionnelles) :
   sinon un pair silencieux figerait aussi les envois vers lui.
-  ✅ Test d'intégration : deux nœuds réels sur une vraie socket TCP.
+  ✅ Testnet local validé : une transaction PROUVÉE se propage entre nœuds réels
+  sur de vraies sockets, y compris à travers un INTERMÉDIAIRE (A→B→C). Chemin
+  exercé : sérialisation → cadrage → chiffrement → socket → déchiffrement →
+  décodage → admission (5 filtres O(1) puis STARK) → mempool.
+  `Noeud::soumettre` = point d'entrée d'une transaction LOCALE (wallet) : part en
+  TIGE Dandelion++, pas en diffusion — c'est là que l'origine est protégée.
 
 **Phase 4 : les 4 briques sont livrées** (key-privacy, transport PQ + cadrage,
 pairs anti-eclipse, mempool ordonné par coût, Dandelion++). Reste à les CÂBLER

@@ -74,6 +74,30 @@ impl Noeud {
         }
     }
 
+    /// Soumet une transaction ÉMISE PAR CE NŒUD (depuis le wallet).
+    ///
+    /// Point d'entrée distinct de la réception : il n'y a pas de pair à pénaliser,
+    /// et c'est ici que Dandelion++ protège l'ORIGINE — la transaction part en tige
+    /// vers un unique successeur plutôt qu'en diffusion, ce qui empêche un
+    /// observateur de distinguer l'émetteur d'un relais.
+    ///
+    /// Retourne les actions à exécuter, ou le refus si notre propre transaction est
+    /// invalide (état périmé, double-dépense locale…).
+    pub fn soumettre(
+        &mut self,
+        tx: ProvedTx,
+        maintenant_ms: u64,
+    ) -> Result<Vec<Action>, ledger::mempool::Refus> {
+        let digest = tx.tx_digest;
+        // Emprunts disjoints de `self.mempool` et `self.etat` — possible ici parce
+        // qu'on est DANS la méthode : c'est ce qui rend ce point d'entrée nécessaire.
+        self.mempool.admettre(&self.etat, tx)?;
+        Ok(match self.dandelion.router(&digest, maintenant_ms) {
+            Routage::Stem(vers) => self.relayer_en_tige(vers, &digest),
+            Routage::Fluff => vec![Action::Diffuser(Message::Annonce(vec![digest]))],
+        })
+    }
+
     /// Traite un message reçu de `de` et retourne les actions à exécuter.
     pub fn traiter(&mut self, de: PeerId, message: Message, maintenant_ms: u64) -> Vec<Action> {
         match message {
