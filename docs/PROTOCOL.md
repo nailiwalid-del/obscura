@@ -128,14 +128,22 @@ attendant le circuit. Fonctions suffixées `_transparent` dans le code.
 
 1. ✅ Primitives crypto hybrides
 2. ✅ Ledger transparent de développement (explicitement non-privé)
-3. ⬜ **Circuit STARK = définition du consensus** (P1–P7) + migration Rescue-Prime
-   des commitments/Merkle + retrait de spend_pk/path des transactions
-4. 🟡 Réseau P2P chiffré PQ + Dandelion++ + test de key privacy — **briques livrées** (crate `net` : transport, cadrage, pairs anti-eclipse, Dandelion++ ; `ledger::mempool`), **câblage dans un nœud = phase 5**
+3. ✅ **Circuit STARK = définition du consensus** (P1–P7, monolithe segmenté
+   witness-hiding, `apply_proved_tx` = règle de consensus) + migration
+   Rescue-Prime des commitments/Merkle + retrait de spend_pk/path des
+   transactions (le mode transparent est gaté `dev-transparent`, hors consensus).
+   Reste dans ce chantier : **3z-c2**, la variabilité M-in/N-out (voir
+   STARK_STATEMENT.md)
+4. ✅ Réseau P2P chiffré PQ + Dandelion++ + test de key privacy — briques livrées
+   (crate `net` : transport, cadrage, pairs anti-eclipse, Dandelion++ ;
+   `ledger::mempool`) ET câblées dans le nœud (phase 5)
 5. 🟡 Nœud, wallet CLI, testnet local — **nœud fonctionnel** (`crates/node` :
    protocole applicatif, orchestration en fonction pure, runtime sockets+threads).
    Testnet local validé : une transaction PROUVÉE se propage entre nœuds réels sur
-   de vraies sockets, y compris à travers un intermédiaire. Restent le **wallet CLI**
-   et un binaire de nœud autonome. **Binaires livrés** : `obscura-node` (nœud
-   autonome : écoute, connexion aux pairs, boucle d'événements, rotation d'époque
-   Dandelion++) et `obscura-demo` (démonstration locale de bout en bout).
-   ⚠️ Aucune PERSISTANCE : identité, état et mempool sont neufs à chaque lancement.
+   de vraies sockets, y compris à travers un intermédiaire. **Binaires livrés** :
+   `obscura-node` (nœud autonome : écoute, connexion aux pairs, boucle
+   d'événements, rotation d'époque Dandelion++) et `obscura-demo` (démonstration
+   locale de bout en bout). Restent le **wallet CLI** (le crate `wallet` est une
+   bibliothèque, seul `obscura-demo` l'exerce) et la **PERSISTANCE** : identité,
+   état et mempool sont neufs à chaque lancement (`ProvedLedgerState::{save,
+   load}` existe côté ledger, pas encore câblé dans le nœud).

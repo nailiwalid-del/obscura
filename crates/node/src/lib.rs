@@ -9,6 +9,7 @@
 //! | [`message`] | protocole applicatif circulant DANS le canal chiffré |
 //! | [`orchestration`] | ce qu'un nœud FAIT d'un message — fonction PURE, sans E/S |
 //! | [`runtime`] | l'EXÉCUTION : sockets, threads de lecture, boucle d'événements |
+//! | [`persistance`] | identité et état d'un nœud entre deux lancements |
 //!
 //! Il dépend de `net` (transport) ET du consensus (`circuit`, `ledger`) : c'est
 //! précisément pour garder `net` PUR TRANSPORT — sans dépendance au consensus — que
@@ -16,8 +17,10 @@
 
 pub mod message;
 pub mod orchestration;
+pub mod persistance;
 pub mod runtime;
 
 pub use message::{Message, MessageError};
 pub use orchestration::{Action, Noeud};
+pub use persistance::Donnees;
 pub use runtime::Runtime;

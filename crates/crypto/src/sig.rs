@@ -9,7 +9,7 @@
 use crate::CryptoError;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use pqcrypto_dilithium::dilithium3;
-use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
+use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _, SecretKey as _};
 use rand_core::{OsRng, RngCore};
 
 pub const ED25519_SIG_LEN: usize = 64;
@@ -80,6 +80,52 @@ pub fn verify(pk: &SigPublicKey, domain: &str, msg: &[u8], sig: &HybridSignature
     let ed_ok = pk.ed25519.verify_strict(&m, &sig.ed25519).is_ok();
     let pq_ok = dilithium3::verify_detached_signature(&sig.dilithium, &m, &pk.dilithium).is_ok();
     ed_ok && pq_ok
+}
+
+impl SigKeypair {
+    /// Sérialise la paire COMPLÈTE, **clés secrètes comprises**.
+    ///
+    /// ⚠️ DANGER : le résultat est du MATÉRIEL DE CLÉ EN CLAIR. Quiconque l'obtient
+    /// peut signer à la place de ce nœud. À n'écrire que dans un fichier aux
+    /// permissions restreintes, jamais en journal, jamais sur le réseau.
+    ///
+    /// Existe pour qu'un nœud conserve son IDENTITÉ entre deux redémarrages : sans
+    /// cela ses pairs ne le reconnaissent pas, et toute réputation accumulée est
+    /// perdue à chaque lancement.
+    ///
+    /// Format : `version ‖ ed25519_sk (32 o) ‖ dilithium_pk ‖ dilithium_sk`.
+    /// La publique Ed25519 est DÉRIVÉE de la secrète ; celle de Dilithium ne l'est
+    /// pas avec cette crate, elle doit donc être stockée — asymétrie du format qui
+    /// tient à la bibliothèque, pas au protocole.
+    pub fn to_bytes_secret(&self) -> Vec<u8> {
+        let mut v = vec![SIG_ALGO_VERSION];
+        v.extend_from_slice(&self.ed25519.to_bytes());
+        v.extend_from_slice(self.public.dilithium.as_bytes());
+        v.extend_from_slice(self.dilithium.as_bytes());
+        v
+    }
+
+    /// Restaure une paire depuis `to_bytes_secret`.
+    pub fn from_bytes_secret(b: &[u8]) -> Result<Self, CryptoError> {
+        let n_pk = dilithium3::public_key_bytes();
+        let n_sk = dilithium3::secret_key_bytes();
+        if b.len() != 1 + 32 + n_pk + n_sk || b[0] != SIG_ALGO_VERSION {
+            return Err(CryptoError::InvalidEncoding("SigKeypair"));
+        }
+        let mut e = [0u8; 32];
+        e.copy_from_slice(&b[1..33]);
+        let esk = SigningKey::from_bytes(&e);
+        let epk = esk.verifying_key();
+        let mpk = dilithium3::PublicKey::from_bytes(&b[33..33 + n_pk])
+            .map_err(|_| CryptoError::InvalidEncoding("dilithium pk"))?;
+        let msk = dilithium3::SecretKey::from_bytes(&b[33 + n_pk..])
+            .map_err(|_| CryptoError::InvalidEncoding("dilithium sk"))?;
+        Ok(SigKeypair {
+            public: SigPublicKey { ed25519: epk, dilithium: mpk },
+            ed25519: esk,
+            dilithium: msk,
+        })
+    }
 }
 
 impl SigPublicKey {
@@ -165,6 +211,35 @@ mod tests {
             b"message",
             &hybride_invalide
         ));
+    }
+
+    /// Roundtrip de la paire COMPLÈTE : une identité restaurée doit produire des
+    /// signatures que l'ancienne clé publique vérifie — c'est ce qui permet à un
+    /// nœud de rester LE MÊME pair après redémarrage.
+    #[test]
+    fn roundtrip_paire_secrete() {
+        let kp = SigKeypair::generate();
+        let restauree = SigKeypair::from_bytes_secret(&kp.to_bytes_secret()).unwrap();
+        assert_eq!(
+            restauree.public.to_bytes(),
+            kp.public.to_bytes(),
+            "identité publique préservée"
+        );
+        // Une signature de la paire restaurée vérifie sous la clé publique d'origine.
+        let sig = restauree.sign("test/v1", b"apres redemarrage");
+        assert!(verify(&kp.public, "test/v1", b"apres redemarrage", &sig));
+    }
+
+    /// Des octets tronqués ou d'une autre version sont rejetés sans panique.
+    #[test]
+    fn paire_secrete_malformee_rejetee() {
+        let kp = SigKeypair::generate();
+        let b = kp.to_bytes_secret();
+        assert!(SigKeypair::from_bytes_secret(&b[..b.len() - 1]).is_err());
+        assert!(SigKeypair::from_bytes_secret(&[]).is_err());
+        let mut mauvaise_version = b.clone();
+        mauvaise_version[0] = 0x02;
+        assert!(SigKeypair::from_bytes_secret(&mauvaise_version).is_err());
     }
 
     #[test]

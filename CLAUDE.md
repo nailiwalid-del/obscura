@@ -1,6 +1,7 @@
 # Obscura — contexte projet pour Claude Code
 
-Monnaie numérique privée post-quantique. Prototype Rust, phases 1-2 terminées et testées.
+Monnaie numérique privée post-quantique. Prototype Rust — les phases 1 à 5 sont
+prototypées et testées : nœud fonctionnel, testnet local validé (sans persistance).
 
 ## Principe directeur (décision utilisateur, ne pas remettre en cause)
 
@@ -45,8 +46,7 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   depuis la bascule 3z-c1 — ≈1783 ms génération, ≈4,1 ms vérification,
   ≈67,9 Kio/preuve à profondeur 32 ; le **côte-à-côte** (201 col × 1024 lignes,
   ≈1260 ms / 2,8 ms / 89,3 Kio) n'est plus sur le chemin de production et ne sert
-  plus qu'à l'oracle de parité. (Sur master non fusionné : le côte-à-côte reste
-  actif — voir point 2 ci-dessous.)
+  plus qu'à l'oracle de parité.
   Caveat : honnête-vérifieur, prototype non audité (voir docs/STARK_STATEMENT.md,
   « Argument HVZK »). Les gadgets autonomes du crate restent validity-only.
   `ProvedTx` v3 porte les `enc_notes` (enveloppes chiffrées des sorties, scan wallet
@@ -61,47 +61,6 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   décidé en brique frontier). ⚠️ `observer()` doit être appelé pour CHAQUE
   commitment dans le MÊME ordre que le nœud, sinon les index divergent.
   Monnaie rendue toujours produite ET chiffrée vers soi-même.
-- `docs/PROTOCOL.md`, `docs/THREAT_MODEL.md` et `docs/STARK_STATEMENT.md` : spécification de référence
-- `cargo test` : suite verte (crypto/ledger/circuit)
-
-## Prochaine étape : durcissement pré-testnet (#7), puis généralisation 3z-c
-
-Phase 3 validity (statement P1–P7, monolithe, intégration ledger, bench) ET
-**3z-b witness-hiding sont terminés** — voir le journal de tête de
-docs/STARK_STATEMENT.md, c'est LA référence. **3z-b1 fait** : lignes de blinding
-au niveau AIR (voie du spike 3z-b0, ni fork winterfell ni migration) — trace
-1024, gating global `blind_off`, OsRng frais par preuve, argument HVZK-ROM écrit
-(STARK_STATEMENT.md, « Argument HVZK »), bench ≈2× (1477,7 ms / 3,0 ms /
-90,5 Kio). Cap actuel (décision utilisateur) : **complétude/cohérence protocole
-avant sophistication crypto**. Reste :
-1. **Durcissement pré-testnet (#7)** — **quasi terminé** : sérialisation canonique
-   de `ProvedTx` **faite** ; `zeroize` des secrets au drop **fait**
-   (`ShieldedSecret` volatile, `WalletKeys`, clés AEAD ; trou pqcrypto documenté) ;
-   audit `panic→Result` de la surface réseau **fait** (from_bytes/verify/scan/
-   apply sans panique) ; **Merkle frontier fait** (`proved_hash::MerkleFrontier`,
-   append-only O(depth), mémoire bornée, `TreeFull` en `Result` — plus de panique
-   « arbre plein » ; racine identique à `ProvedMerkleTree`, test différentiel) ;
-   **persistance disque faite** (`ProvedLedgerState::{to_bytes, from_bytes, save,
-   load}` — dump canonique frontier+nullifiers+racines, écriture atomique
-   tmp+rename) ; **test distingueur key-privacy fait** (`ledger::proved_wallet` :
-   invariance de longueur, aucun fragment de clé en clair, chiffrement randomisé,
-   et aucun octet ne sépare deux destinataires sur 24 échantillons — RED vérifié
-   en injectant une empreinte). ⚠️ Portée : non-fuite STRUCTURELLE, PAS une preuve
-   d'IK-CCA (qui repose sur X25519/ANO-CCA Kyber, cf. PROTOCOL.md). **#7 bouclé.**
-2. **3z-c — généralisation M-in/N-out**. La 1re tranche **3z-c1 (monolithe
-   segmenté) est LIVRÉE et fusionnée** : trace en segments séquentiels
-   `[KEY][IN][IN][OUT][OUT]` (`monolith/seg_{layout,trace,air}.rs`), largeur
-   **92 vs 201**, **209 slots de contraintes vs 263**, preuve **67,9 Kio vs 89,3
-   (−24 %)** à profondeur 32 pour ×1,41 en génération et ×1,46 en vérification
-   (4,1 ms). `tx.rs` a basculé ; l'API et tous les tests préexistants sont
-   inchangés. Le côte-à-côte est conservé pour l'**oracle de parité** (mêmes
-   publics, même témoin) et sera supprimé avec 3z-c2.
-   Reste : **3z-c2** (variabilité M/N ≤ MAX — la couture `SegKind`/schedule est en
-   place), plus 2 forges non portées (`PaddingMerkle`, `VaccInitial` fine) et les
-   forges à reconstruction d'arbre qui restent en profondeur 2.
-   ⚠️ Piège identifié à ne pas rejouer : mutualiser des colonnes peut SUPPRIMER
-   une garantie que la redondance offrait gratuitement (cf. « Liaison de racine »
-   dans STARK_STATEMENT.md) — auditer chaque fusion sous cet angle.
 - `crates/node` : **câblage** des briques réseau et consensus (phase 5). `message`
   = protocole applicatif (Annonce/Demande/Transaction) : on annonce des DIGESTS
   (~64 o), jamais les transactions (~68 Kio) — envoyer spontanément la tx à chaque
@@ -121,12 +80,37 @@ avant sophistication crypto**. Reste :
   TIGE Dandelion++, pas en diffusion — c'est là que l'origine est protégée.
   **Binaires** : `obscura-node` (nœud autonome) et `obscura-demo` (démonstration
   locale : wallet → preuve → handshake PQ → socket → mempool, chaque étape
-  annoncée). ⚠️ Aucune persistance entre lancements — à observer, pas à utiliser.
+  annoncée). **Persistance** (`node::persistance`) : identité + état survivent aux
+  redémarrages (`--donnees`) — sans quoi les pairs ne reconnaîtraient pas le nœud
+  et un nœud malveillant se blanchirait en redémarrant. Fichier d'identité en
+  `0600` sur Unix, écriture atomique, JAMAIS régénéré en silence si corrompu.
+  ⚠️ Mempool non persisté (sans gravité : réannoncé par les pairs) ; clé NON
+  chiffrée au repos (une phrase de passe supposerait une saisie interactive).
+- `docs/PROTOCOL.md`, `docs/THREAT_MODEL.md` et `docs/STARK_STATEMENT.md` : spécification de référence
+- `cargo test --all-features --release` : suite verte (crypto/net/ledger/circuit/wallet/node)
 
-**Phase 4 : les 4 briques sont livrées** (key-privacy, transport PQ + cadrage,
-pairs anti-eclipse, mempool ordonné par coût, Dandelion++). Reste à les CÂBLER
-dans un nœud réel — c'est la phase 5 (nœud/wallet/testnet), qui suppose une boucle
-d'événements, des sockets et l'orchestration des quatre.
+## Prochaine étape : 3z-c2, et industrialiser le nœud (persistance, wallet CLI)
+
+**Tout ce qui précède est TERMINÉ** : phase 3 (validity P1–P7 + witness-hiding
+3z-b1 + monolithe segmenté 3z-c1 fusionné), durcissement pré-testnet (#7 bouclé :
+sérialisation canonique, zeroize, panic→Result, Merkle frontier, persistance
+disque, test distingueur key-privacy), phases 4–5 (les 4 briques réseau câblées
+dans un nœud réel, testnet local validé, binaires) — voir « État » ci-dessus ;
+pour le circuit, le journal de tête de docs/STARK_STATEMENT.md est LA référence.
+Cap actuel (décision utilisateur) : **complétude/cohérence protocole avant
+sophistication crypto**. Reste :
+1. **3z-c2 — variabilité M-in/N-out ≤ MAX** : la couture `SegKind`/schedule est
+   en place depuis 3z-c1 ; la bascule supprimera le côte-à-côte (aujourd'hui
+   conservé comme oracle de parité — mêmes publics, même témoin). Restent aussi
+   2 forges non portées (`PaddingMerkle`, `VaccInitial` fine) et les forges à
+   reconstruction d'arbre qui restent en profondeur 2.
+   ⚠️ Piège identifié à ne pas rejouer : mutualiser des colonnes peut SUPPRIMER
+   une garantie que la redondance offrait gratuitement (cf. « Liaison de racine »
+   dans STARK_STATEMENT.md) — auditer chaque fusion sous cet angle.
+2. **Industrialiser le nœud** : PERSISTANCE entre lancements — identité du nœud
+   et état ledger (`ProvedLedgerState::{save, load}` existe côté ledger depuis
+   #7, PAS encore câblé dans `obscura-node`) — et **wallet CLI** (le crate
+   `wallet` est une bibliothèque ; seul `obscura-demo` l'exerce aujourd'hui).
 
 ## Décisions v0.2 (revue intégrée — ne pas régresser)
 

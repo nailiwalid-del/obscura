@@ -4,13 +4,16 @@
 //! obscura-node --ecoute 127.0.0.1:9333 [--pair 127.0.0.1:9334]...
 //! ```
 //!
-//! ⚠️ **Prototype non audité.** Ce binaire fait tourner la pile réelle (transport
-//! post-quantique, mempool, Dandelion++) mais NE PERSISTE RIEN entre deux
-//! lancements : identité, état et mempool sont neufs à chaque démarrage. Il sert à
-//! observer le protocole, pas à détenir de la valeur.
+//! L'identité et l'état SURVIVENT aux redémarrages (répertoire `--donnees`) : sans
+//! cela les pairs ne reconnaîtraient pas le nœud d'un lancement à l'autre, et un
+//! nœud malveillant se blanchirait en redémarrant.
+//!
+//! ⚠️ **Prototype non audité.** Le mempool, lui, n'est PAS persisté (les
+//! transactions en attente sont perdues au redémarrage — sans gravité : elles sont
+//! réannoncées par les pairs). Le fichier d'identité contient du matériel de clé
+//! EN CLAIR, protégé par les permissions du système de fichiers seulement.
 
 use crypto::sig::SigKeypair;
-use ledger::proved_state::ProvedLedgerState;
 use node::orchestration::Noeud;
 use node::runtime::Runtime;
 use std::net::{SocketAddr, TcpListener};
@@ -20,11 +23,15 @@ use std::time::{Duration, Instant};
 /// par être identifié ; trop volatil, il laisse apprendre la topologie.
 const EPOQUE_MS: u64 = 600_000; // 10 min
 
+/// Intervalle d'enregistrement de l'état sur disque (ms).
+const SAUVEGARDE_MS: u64 = 30_000;
+
 fn usage() -> ! {
-    eprintln!("usage : obscura-node --ecoute <adresse> [--pair <adresse>]...");
+    eprintln!("usage : obscura-node --ecoute <adresse> [--pair <adresse>]... [--donnees <rep>]");
     eprintln!();
-    eprintln!("  --ecoute <adresse>   adresse d'écoute (ex. 127.0.0.1:9333)");
-    eprintln!("  --pair   <adresse>   pair à contacter (répétable)");
+    eprintln!("  --ecoute  <adresse>  adresse d'écoute (ex. 127.0.0.1:9333)");
+    eprintln!("  --pair    <adresse>  pair à contacter (répétable)");
+    eprintln!("  --donnees <rep>      répertoire de données (défaut : ./donnees-obscura)");
     std::process::exit(2)
 }
 
@@ -32,10 +39,16 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut ecoute: Option<SocketAddr> = None;
     let mut pairs: Vec<SocketAddr> = Vec::new();
+    let mut donnees = String::from("./donnees-obscura");
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--donnees" => {
+                let Some(v) = args.get(i + 1) else { usage() };
+                donnees = v.clone();
+                i += 2;
+            }
             "--ecoute" | "--pair" => {
                 let Some(valeur) = args.get(i + 1) else { usage() };
                 let Ok(adresse) = valeur.parse::<SocketAddr>() else {
@@ -54,15 +67,43 @@ fn main() {
     }
     let Some(adresse_ecoute) = ecoute else { usage() };
 
-    let identite = SigKeypair::generate();
+    // Identité et état RECHARGÉS s'ils existent — c'est ce qui fait qu'un nœud reste
+    // le même pair d'un lancement à l'autre.
+    let stockage = match node::persistance::Donnees::ouvrir(&donnees) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("répertoire de données inutilisable ({donnees}) : {e}");
+            std::process::exit(1);
+        }
+    };
+    let (identite, neuve) = match stockage.charger_ou_creer_identite() {
+        Ok(v) => v,
+        Err(e) => {
+            // On NE régénère PAS en silence : perdre son identité doit être une
+            // décision de l'opérateur, pas un effet de bord d'un fichier corrompu.
+            eprintln!("identité illisible : {e}");
+            eprintln!("supprimez le fichier pour en générer une nouvelle (le nœud");
+            eprintln!("changera alors de pair aux yeux du réseau).");
+            std::process::exit(1);
+        }
+    };
+    let etat = match stockage.charger_ou_creer_etat() {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("état illisible : {e}");
+            std::process::exit(1);
+        }
+    };
+    println!(
+        "identité {} ({} notes en chaîne)",
+        if neuve { "CRÉÉE" } else { "rechargée" },
+        etat.tree.len()
+    );
+
     let mut secret_dandelion = [0u8; 32];
     rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut secret_dandelion);
 
-    let mut rt = Runtime::new(Noeud::new(
-        SigKeypair::generate(),
-        ProvedLedgerState::new(),
-        secret_dandelion,
-    ));
+    let mut rt = Runtime::new(Noeud::new(SigKeypair::generate(), etat, secret_dandelion));
 
     let listener = match TcpListener::bind(adresse_ecoute) {
         Ok(l) => l,
@@ -88,6 +129,7 @@ fn main() {
 
     let depart = Instant::now();
     let mut derniere_epoque = u64::MAX;
+    let mut derniere_sauvegarde = 0u64;
     loop {
         let maintenant = depart.elapsed().as_millis() as u64;
 
@@ -112,6 +154,15 @@ fn main() {
 
         rt.pomper(maintenant);
         rt.tick(maintenant);
+
+        // Sauvegarde périodique de l'état (écriture atomique : un arrêt brutal
+        // laisse la version précédente intacte, jamais un fichier à moitié écrit).
+        if maintenant.saturating_sub(derniere_sauvegarde) >= SAUVEGARDE_MS {
+            derniere_sauvegarde = maintenant;
+            if let Err(e) = stockage.enregistrer_etat(&rt.noeud().etat) {
+                eprintln!("sauvegarde de l'état impossible : {e}");
+            }
+        }
 
         // Le protocole est piloté par les événements ; sans cette pause la boucle
         // consommerait un cœur entier à ne rien faire.
