@@ -147,6 +147,24 @@ pub(crate) enum SegForge {
     /// HORS du schéma canonique (LEN annonce 13 mais 15 cellules de junk sont
     /// absorbées) — violation de « hash jamais tronqué ».
     PaddingCommitment(u64),
+
+    /// INFLATION par `VACC` initial libre — forge FINE (à ne pas confondre avec un
+    /// écrasement brutal de la cellule).
+    ///
+    /// Le segment KEY ne produit pas d'`endblk`, donc le `VACC` de la première ligne
+    /// du premier segment d'ENTRÉE n'est remis à zéro par aucune transition : c'est
+    /// un témoin LIBRE. Le prouveur y met `−k` et décompose `valeur₀ + k` en bits.
+    /// À la ligne d'ancrage, `VACC = −k + (valeur₀ + k) = valeur₀` — la liaison
+    /// VIN↔VACC reste donc HONNÊTE — mais `S` a encaissé `valeur₀ + k`.
+    ///
+    /// La sortie 0 est gonflée de `k` (commitment, porteuse VOUT et bits tous
+    /// cohérents à la nouvelle valeur) pour que `S_final = fee` tienne et que
+    /// l'assertion d'équilibre ne rejette pas AVANT l'ancrage.
+    ///
+    /// Résultat : TOUTE la trace est cohérente sauf `VACC[première ligne] ≠ 0`.
+    /// Seul l'ancrage `VACC = 0` ferme le trou — sans lui, `k` unités sont créées
+    /// ex nihilo.
+    VaccInitial(u64),
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -201,6 +219,17 @@ impl SegForge {
     /// signe, donc `S` est inchangé et l'assertion d'équilibre ne masque pas la
     /// forge.
     fn valeur_bits(self, est_entree: bool, n: usize, honnete: u64) -> u64 {
+        // VaccInitial : l'entrée 0 décompose `valeur₀ + k` (compensée par le VACC
+        // initial à −k, donc la liaison VIN reste honnête) et la sortie 0 est
+        // gonflée de `k` pour que `S_final = fee` tienne.
+        // ⚠️ Uniquement l'ENTRÉE 0. Le gonflement de la sortie 0 est déjà appliqué en
+        // amont par `valeur_sortie` (qui fixe commitment ET porteuse VOUT) et
+        // `honnete` le porte donc déjà : ré-ajouter `k` ici ferait décomposer
+        // `out₀ + 2k` face à une porteuse à `out₀ + k` — la liaison VOUT mordrait et
+        // masquerait l'ancrage VACC qu'on veut tester.
+        if let SegForge::VaccInitial(k) = self {
+            return if est_entree && n == 0 { honnete + k } else { honnete };
+        }
         let k = match (self, est_entree) {
             (SegForge::ValeurEntrees(k), true) => k,
             (SegForge::ValeurSorties(k), false) => k,
@@ -209,6 +238,24 @@ impl SegForge {
         match n {
             0 => honnete + k,
             _ => honnete - k,
+        }
+    }
+
+    /// `VACC` de DÉPART du segment (0 pour une trace honnête). Non nul uniquement
+    /// pour `VaccInitial`, et seulement sur le premier segment d'entrée.
+    fn vacc_initial(self, est_entree: bool, n: usize) -> BaseElement {
+        match self {
+            SegForge::VaccInitial(k) if est_entree && n == 0 => -BaseElement::new(k),
+            _ => BaseElement::ZERO,
+        }
+    }
+
+    /// Valeur réelle de la sortie `n` (commitment, porteuse VOUT et bits cohérents).
+    /// `VaccInitial` gonfle la sortie 0 de `k` pour compenser l'entrée.
+    fn valeur_sortie(self, n: usize, honnete: u64) -> u64 {
+        match self {
+            SegForge::VaccInitial(k) if n == 0 => honnete + k,
+            _ => honnete,
         }
     }
 }
@@ -460,25 +507,31 @@ fn build_seg_trace_interne(
                     forge.valeur_bits(true, n_in, note.value),
                     true,
                     s,
+                    forge.vacc_initial(true, n_in),
                 );
 
                 n_in += 1;
             }
             SegKind::Output => {
                 let out = &w.outputs[n_out];
-                let cm_payload = note_commit_payload(out.value, &out.owner, &out.rho, &out.r);
+                // `VaccInitial` gonfle la sortie 0 : commitment, porteuse VOUT et
+                // bits sont TOUS cohérents à la nouvelle valeur (aucune liaison de
+                // sortie ne doit mordre — seul l'ancrage VACC doit le faire).
+                let valeur_out = forge.valeur_sortie(n_out, out.value);
+                let cm_payload = note_commit_payload(valeur_out, &out.owner, &out.rho, &out.r);
                 let out_rows = sponge_rows_for(Domain::NoteCommitment, &cm_payload);
                 debug_assert_eq!(out_rows.len(), CM_ROWS_END - CM_ROWS_START);
                 seg_copy(&mut rows, &out_rows, start + CM_ROWS_START, SEG_SPONGE_OFF);
 
-                set_carrier_scalar(&mut rows, VOUT_C[n_out], out.value);
+                set_carrier_scalar(&mut rows, VOUT_C[n_out], valeur_out);
                 s = fill_segment_balance(
                     &mut rows,
                     start,
                     seg_rows,
-                    forge.valeur_bits(false, n_out, out.value),
+                    forge.valeur_bits(false, n_out, valeur_out),
                     false,
                     s,
+                    forge.vacc_initial(false, n_out),
                 );
 
                 n_out += 1;
@@ -548,6 +601,7 @@ fn fill_segment_balance(
     value: u64,
     est_entree: bool,
     s_initial: BaseElement,
+    vacc_initial: BaseElement,
 ) -> BaseElement {
     let sign = if est_entree {
         BaseElement::ONE
@@ -555,7 +609,10 @@ fn fill_segment_balance(
         -BaseElement::ONE
     };
     let mut s = s_initial;
-    let mut vacc = BaseElement::ZERO;
+    // `vacc_initial` est nul pour une trace honnête ; il n'est non nul que pour la
+    // forge `VaccInitial`, qui exploite le fait que cette cellule n'est remise à
+    // zéro par AUCUNE transition (le segment KEY ne produit pas d'`endblk`).
+    let mut vacc = vacc_initial;
     for r in 0..seg_rows {
         let row = &mut rows[start + r];
         let bit = if r < crate::range_check::RANGE_BITS {

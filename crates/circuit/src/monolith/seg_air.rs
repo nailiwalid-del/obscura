@@ -1161,12 +1161,13 @@ mod tests {
     /// qu'en côte-à-côte, mais l'ancrage a CHANGÉ D'ADRESSE avec la segmentation —
     /// d'où ce test dédié : il vérifie que la NOUVELLE adresse est bien contrainte.
     ///
-    /// ⚠️ Portée exacte : c'est une forge GROSSIÈRE (écrasement direct de la cellule),
-    /// donc elle mord à la fois par l'assertion d'ancrage ET par la contrainte de
-    /// transition `VACC`. Elle établit que la ligne d'ancrage est contrainte, PAS que
-    /// l'assertion seule suffirait. La forge fine — bits recomposés en cascade
-    /// cohérente pour n'exercer QUE l'ancrage, miroir de `Forge::VaccInitial` du
-    /// côte-à-côte — reste à porter avec le reste de la suite de forges.
+    /// ⚠️ Portée exacte : forge GROSSIÈRE (écrasement direct de la cellule), qui mord
+    /// à la fois par l'assertion d'ancrage ET par la contrainte de transition `VACC`.
+    /// Elle établit que la ligne d'ancrage est contrainte, pas que l'assertion seule
+    /// suffirait. La forme FINE — bits recomposés en cascade pour n'exercer QUE
+    /// l'ancrage — est désormais couverte par `SegForge::VaccInitial`
+    /// (`forges_montants_et_inertie_du_blinding`), avec RED vérifié. Ce test est
+    /// conservé comme garde bon marché sur l'ADRESSE de l'ancrage.
     #[test]
     #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
     fn vacc_initial_non_nul_rejete() {
@@ -1449,6 +1450,24 @@ mod tests {
             !verdict_forge(SegForge::PaddingCommitment(3)),
             "assertion PAD_ZERO du commitment doit mordre (hash jamais tronqué)"
         );
+        // INFLATION par VACC initial libre — forge FINE. Toute la trace est
+        // cohérente : les bits de l'entrée 0 décomposent `valeur₀ + k` mais le VACC
+        // part de `−k`, donc à la ligne d'ancrage VACC = valeur₀ et la liaison VIN
+        // reste HONNÊTE ; la sortie 0 est gonflée de k (commitment, VOUT et bits
+        // tous cohérents) pour que S_final = fee tienne. SEUL `VACC[1re ligne] = 0`
+        // distingue la forge — sans lui, k unités sont créées ex nihilo.
+        assert!(
+            !verdict_forge(SegForge::VaccInitial(13)),
+            "ancrage VACC = 0 doit mordre (sinon inflation ex nihilo)"
+        );
+        // CONTRÔLE : k = 0 → forge dégénérée, identique à l'honnête, donc acceptée.
+        // Confirme que le chemin de code de la forge n'introduit pas d'incohérence
+        // parasite, et donc que le rejet ci-dessus vient bien du VACC non nul.
+        assert!(
+            verdict_forge(SegForge::VaccInitial(0)),
+            "contrôle : VaccInitial(0) est la trace honnête, doit être acceptée"
+        );
+
         // CONTRÔLE : la MÊME forge avec la valeur HONNÊTE (0) doit être acceptée.
         // Elle emprunte exactement le même chemin de code (préambule rebâti, éponge
         // rejouée, arbre reconstruit) — donc si celui-ci introduisait une incohérence
