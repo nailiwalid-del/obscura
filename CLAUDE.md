@@ -12,6 +12,12 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
 ## État
 
 - `crates/crypto` : hash, kem, sig, aead — testés
+- `crates/net` : **transport chiffré PQ** (phase 4, brique 1/4) — handshake hybride
+  3 passes avec **forward secrecy** (éphémères jetés) et **masquage d'identité**
+  (identités chiffrées sur le fil), machine à états en typestate, canal anti-rejeu
+  par compteur de séquence en AAD. Réutilise kem/sig/aead sans primitive nouvelle.
+  ⚠️ L'identité du RÉPONDEUR reste révélée à un MitM actif (inhérent au rôle ;
+  fermable par un motif Noise-IK pour les sorties) — cf. spec transport-pq.
 - `crates/ledger` : notes engagées, nullifiers, Merkle (BLAKE3, prof. 16), tx, validation — testés
 - `crates/circuit` : circuit STARK **monolithe** (`monolith/`) — P1–P7 d'une tx
   2-in/2-out en UNE SEULE trace/preuve (201 col × 1024 lignes dont 40 lignes de

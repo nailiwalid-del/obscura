@@ -1,0 +1,9 @@
+[package]
+name = "net"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+crypto = { path = "../crypto" }
+thiserror.workspace = true
