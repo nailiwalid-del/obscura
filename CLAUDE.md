@@ -101,7 +101,13 @@ avant sophistication crypto**. Reste :
   (~64 o), jamais les transactions (~68 Kio) — envoyer spontanément la tx à chaque
   pair offrirait une amplification à l'attaquant. Décodage borné (MAX_DIGESTS)
   vérifié AVANT allocation. Il dépend de `net` ET du consensus, ce qui garde
-  justement `net` PUR TRANSPORT.
+  justement `net` PUR TRANSPORT. `orchestration` = ce qu'un nœud FAIT d'un message,
+  en fonction PURE (retourne des Actions, aucune E/S) — c'est ce qui rend toute la
+  politique testable sans réseau. `runtime` = l'EXÉCUTION (sockets, un thread de
+  lecture par connexion, boucle d'événements). Lecture et écriture d'une connexion
+  sont DÉCOUPLÉES (`Session::separer`, possible grâce aux clés directionnelles) :
+  sinon un pair silencieux figerait aussi les envois vers lui.
+  ✅ Test d'intégration : deux nœuds réels sur une vraie socket TCP.
 
 **Phase 4 : les 4 briques sont livrées** (key-privacy, transport PQ + cadrage,
 pairs anti-eclipse, mempool ordonné par coût, Dandelion++). Reste à les CÂBLER

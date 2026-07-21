@@ -60,6 +60,55 @@ impl Session {
     pub fn compteurs(&self) -> (u64, u64) {
         (self.seq_envoi, self.seq_reception)
     }
+
+    /// Scinde le canal en deux moitiés INDÉPENDANTES : émission et réception.
+    ///
+    /// Rendu possible par les clés directionnelles : les deux sens ne partagent
+    /// aucun état, donc rien ne les couple. C'est ce qui permet à un thread de
+    /// LIRE en continu pendant qu'un autre ÉCRIT, sans qu'un verrou de lecture
+    /// bloque les envois — le nœud pourrait sinon se figer en attendant un pair
+    /// silencieux.
+    pub fn separer(self) -> (Emetteur, Recepteur) {
+        (
+            Emetteur { cle: self.k_envoi, seq: self.seq_envoi },
+            Recepteur { cle: self.k_reception, seq: self.seq_reception },
+        )
+    }
+}
+
+/// Moitié ÉMISSION d'un canal scindé.
+pub struct Emetteur {
+    cle: [u8; 32],
+    seq: u64,
+}
+
+impl Emetteur {
+    pub fn chiffrer(&mut self, message: &[u8]) -> Result<Vec<u8>, NetError> {
+        if self.seq == u64::MAX {
+            return Err(NetError::SessionEpuisee);
+        }
+        let cadre = aead::encrypt(&self.cle, &self.seq.to_le_bytes(), message);
+        self.seq += 1;
+        Ok(cadre)
+    }
+}
+
+/// Moitié RÉCEPTION d'un canal scindé.
+pub struct Recepteur {
+    cle: [u8; 32],
+    seq: u64,
+}
+
+impl Recepteur {
+    pub fn dechiffrer(&mut self, cadre: &[u8]) -> Result<Vec<u8>, NetError> {
+        if self.seq == u64::MAX {
+            return Err(NetError::SessionEpuisee);
+        }
+        let clair = aead::decrypt(&self.cle, &self.seq.to_le_bytes(), cadre)
+            .map_err(|_| NetError::DechiffrementEchoue)?;
+        self.seq += 1;
+        Ok(clair)
+    }
 }
 
 #[cfg(test)]
@@ -137,6 +186,22 @@ mod tests {
         let dernier = c.len() - 1;
         c[dernier] ^= 1;
         assert_eq!(r.dechiffrer(&c), Err(NetError::DechiffrementEchoue));
+    }
+
+    /// Le canal scindé se comporte EXACTEMENT comme le canal entier : mêmes cadres,
+    /// mêmes compteurs, mêmes rejets. Sans cette équivalence, scinder introduirait
+    /// une seconde implémentation du protocole — donc une occasion de divergence.
+    #[test]
+    fn canal_scinde_equivaut_au_canal_entier() {
+        let (i, r) = paire();
+        let (mut em_i, _rc_i) = i.separer();
+        let (_em_r, mut rc_r) = r.separer();
+
+        let c = em_i.chiffrer(b"message").unwrap();
+        assert_eq!(rc_r.dechiffrer(&c).unwrap(), b"message");
+
+        // L'anti-rejeu tient aussi sur les moitiés.
+        assert_eq!(rc_r.dechiffrer(&c), Err(NetError::DechiffrementEchoue));
     }
 
     /// Cadre tronqué / vide : `Result`, jamais de panique.

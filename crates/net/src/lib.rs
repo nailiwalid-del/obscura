@@ -61,12 +61,12 @@ pub mod handshake;
 pub mod pairs;
 pub mod session;
 
-pub use connexion::Connexion;
+pub use connexion::{Connexion, Ecrivain, Lecteur};
 pub use dandelion::{Dandelion, Routage};
 pub use frame::{MAX_CADRE, ecrire_cadre, lire_cadre};
 pub use handshake::{Initiateur, Repondeur};
 pub use pairs::{GroupeReseau, Pair, PeerId, TablePairs};
-pub use session::Session;
+pub use session::{Emetteur, Recepteur, Session};
 
 /// Erreur du transport. Aucune variante n'implique de panique : le décodage ne fait
 /// jamais confiance à son entrée.

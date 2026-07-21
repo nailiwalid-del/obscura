@@ -68,6 +68,49 @@ impl<S: Read + Write> Connexion<S> {
         let cadre = lire_cadre(&mut self.flux)?;
         self.session.dechiffrer(&cadre)
     }
+
+    /// Scinde la connexion en une moitié LECTURE et une moitié ÉCRITURE, chacune
+    /// avec son propre flux (`cloner_flux`) et sa moitié de canal.
+    ///
+    /// Permet à un thread de lire en continu pendant qu'un autre écrit : sans cela,
+    /// un lecteur bloqué sur un pair silencieux figerait aussi les envois vers lui.
+    pub fn separer<F>(self, cloner_flux: F) -> Result<(Lecteur<S>, Ecrivain<S>), NetError>
+    where
+        F: FnOnce(&S) -> std::io::Result<S>,
+    {
+        let flux_lecture = cloner_flux(&self.flux).map_err(|e| NetError::Io(e.kind()))?;
+        let (emetteur, recepteur) = self.session.separer();
+        Ok((
+            Lecteur { flux: flux_lecture, recepteur },
+            Ecrivain { flux: self.flux, emetteur },
+        ))
+    }
+}
+
+/// Moitié LECTURE d'une connexion scindée.
+pub struct Lecteur<S: Read> {
+    flux: S,
+    recepteur: crate::session::Recepteur,
+}
+
+impl<S: Read> Lecteur<S> {
+    pub fn recevoir(&mut self) -> Result<Vec<u8>, NetError> {
+        let cadre = lire_cadre(&mut self.flux)?;
+        self.recepteur.dechiffrer(&cadre)
+    }
+}
+
+/// Moitié ÉCRITURE d'une connexion scindée.
+pub struct Ecrivain<S: Write> {
+    flux: S,
+    emetteur: crate::session::Emetteur,
+}
+
+impl<S: Write> Ecrivain<S> {
+    pub fn envoyer(&mut self, message: &[u8]) -> Result<(), NetError> {
+        let cadre = self.emetteur.chiffrer(message)?;
+        ecrire_cadre(&mut self.flux, &cadre)
+    }
 }
 
 #[cfg(test)]
