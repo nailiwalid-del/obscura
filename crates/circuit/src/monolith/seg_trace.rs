@@ -369,6 +369,7 @@ fn feuille_injectee(w: &SegWitness, i: usize, forge: SegForge) -> Digest {
 
 /// Construit la trace segmentée avec un aléa de blinding tiré d'`OsRng`
 /// (production). Voir `build_seg_trace_seeded` pour la couture de test.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn build_seg_trace(w: &MonolithWitness) -> TraceTable<BaseElement> {
     build_seg_trace_seeded(w, &mut rand::rngs::OsRng)
 }
@@ -407,6 +408,7 @@ pub(crate) fn build_seg_trace_forge(
 /// partagée `S_COL`) : il vaut 0 à la première ligne, encaisse `+value` sur chaque
 /// segment IN et `−value` sur chaque segment OUT, et vaut `fee` à la dernière ligne
 /// utile. C'est le remplacement de la région d'équilibre dédiée du côte-à-côte.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn build_seg_trace_seeded(
     w: &MonolithWitness,
     rng: &mut impl rand::Rng,
@@ -714,7 +716,7 @@ fn fill_segment_balance(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::spend::SpendNote;
     use crate::tx::ProvedInput;
@@ -770,7 +772,7 @@ mod tests {
     /// Témoin à forme (m, n) sur un VRAI arbre partagé (profondeur 2, jusqu'à
     /// 4 feuilles) : toutes les entrées prouvent contre la même racine, comme
     /// l'exige le constructeur.
-    fn witness_forme(m: usize, n: usize) -> SegWitness {
+    pub(crate) fn witness_forme(m: usize, n: usize) -> SegWitness {
         use proved_hash::merkle::ProvedMerkleTree;
         let secret = ShieldedSecret::from_felts(core::array::from_fn(|i| {
             Felt::from_canonical_u64(4_000 + i as u64).unwrap()

@@ -32,6 +32,7 @@
 
 use super::air::{push_preamble, MonolithPublicInputs};
 use super::seg_layout::*;
+#[cfg(test)]
 use super::seg_trace::build_seg_trace;
 use super::trace::MonolithWitness;
 use crate::merkle_path::enforce_merkle_transition;
@@ -432,39 +433,54 @@ pub(crate) fn build_periodic(
 // La mutualisation fait fondre les familles répétées (4 éponges → 1, 2 chemins → 1)
 // tandis que la porteuse `ROOT_C` et ses liaisons en ajoutent.
 
+// --- Familles FIXES (indépendantes de la forme) : gadgets mutualisés. ---
 const N_KEY: usize = 2 * STATE_WIDTH; // 24 : rondes owner + nk
 const N_SPONGE: usize = STATE_WIDTH; // 12 : UNE famille (était 4×12 = 48)
 const N_MERKLE: usize = 30; // UNE famille (était 2×30 = 60)
 const N_BAL: usize = 3; // bit booléen, S chaîné, VACC
-/// Porteuses = toutes les colonnes partagées SAUF `S_COL` (qui n'est pas constante :
-/// elle est chaînée). Bloc contigu `SHARED_OFF..S_COL`.
-const N_CARRIER: usize = S_COL - SHARED_OFF; // 40 (36 + ROOT_C)
-const N_BASE: usize = N_KEY + N_SPONGE + N_MERKLE + N_BAL + N_CARRIER; // 109
+const N_FIXE: usize = N_KEY + N_SPONGE + N_MERKLE + N_BAL; // 69
+const N_SECRET: usize = DIGEST_FELTS; // liaison secret owner↔nk : une seule
 
-const N_SECRET: usize = DIGEST_FELTS; // liaison secret owner↔nk
-const N_OWNER: usize = 3 * DIGEST_FELTS; // prod (clé) + 2 conso (commitments)
-const N_NK: usize = 3 * DIGEST_FELTS; // prod (clé) + 2 conso (nullifiers)
-const N_RHO: usize = 2 * (2 * DIGEST_FELTS); // par entrée : @7(4) + @40(1) + @47(3)
-const N_CM: usize = 2 * (3 * DIGEST_FELTS); // par entrée : @31 + @32 + @47
-const N_LEAF: usize = 2 * (2 * DIGEST_FELTS); // par entrée : prod @39 + conso @0 (chemin)
-/// NOUVEAU en segmenté : la racine repliée de CHAQUE entrée == porteuse `ROOT_C`.
-/// Le côte-à-côte assertait `root` publiquement sur chaque `M_i` ; ici elle est
-/// assertée une seule fois sur la porteuse, et sans cette liaison les deux entrées
-/// pourraient se replier vers des racines DIFFÉRENTES.
-const N_ROOT: usize = 2 * DIGEST_FELTS;
-const N_VIN: usize = 4; // 2 × (prod @0 + conso VACC)
-const N_VOUT: usize = 4; // 2 × (prod @0 + conso VACC)
-const N_LIAISON: usize =
-    N_SECRET + N_OWNER + N_NK + N_RHO + N_CM + N_LEAF + N_ROOT + N_VIN + N_VOUT; // 100
-const N_CONSTRAINTS: usize = N_BASE + N_LIAISON; // 209 (vs 263 côte-à-côte)
+// --- Familles PAR FORME : leur NOMBRE change avec (m, n), pas leur degré (3z-c2).
+//     Le nombre de contraintes est propre à CHAQUE preuve — prouveur et vérifieur
+//     construisent l'AIR à partir des MÊMES publics, donc s'accordent dessus. ---
 
-/// Nombre d'assertions publiques.
-///
-/// KEY(16) + 2·IN(43) + 2·chemin(12·depth) + root(4) + 2·OUT(27) + BAL(3).
-/// Écart avec le côte-à-côte (`167 + 24·depth`) : **−4**, parce que `root` est
-/// assertée UNE fois sur la porteuse au lieu d'une fois par chemin.
-fn num_assertions(depth: usize) -> usize {
-    16 + 2 * 43 + 2 * (12 * depth) + 4 + 2 * 27 + 3
+/// Porteuses constantes : tout le bloc partagé SAUF `S_COL` (chaînée). Sa largeur
+/// suit la forme (plus d'entrées = plus de porteuses rho/cm/leaf/vin).
+fn n_carrier(f: Forme) -> usize {
+    f.s_col() - SHARED_OFF
+}
+
+/// Liaisons dépendant de la forme (owner conso, nk conso, rho, cm, leaf, root, vin
+/// par ENTRÉE ; vout par SORTIE). Les productions owner/nk @clé sont fixes (une
+/// chacune) et comptées dans `N_LIAISON_FIXE`.
+fn n_liaison(f: Forme) -> usize {
+    let (m, n) = (f.m(), f.n());
+    let owner_conso = m * DIGEST_FELTS;
+    let nk_conso = m * DIGEST_FELTS;
+    let rho = m * (2 * DIGEST_FELTS);
+    let cm = m * (3 * DIGEST_FELTS);
+    let leaf = m * (2 * DIGEST_FELTS);
+    let root = m * DIGEST_FELTS; // racine repliée de chaque entrée == ROOT_C
+    let vin = m * 2;
+    let vout = n * 2;
+    owner_conso + nk_conso + rho + cm + leaf + root + vin + vout
+}
+
+/// Liaisons FIXES : secret owner↔nk (4) + production owner @clé (4) + production nk
+/// @clé (4).
+const N_LIAISON_FIXE: usize = N_SECRET + DIGEST_FELTS + DIGEST_FELTS;
+
+/// Nombre TOTAL de contraintes de transition pour cette forme.
+fn n_constraints(f: Forme) -> usize {
+    N_FIXE + n_carrier(f) + N_LIAISON_FIXE + n_liaison(f)
+}
+
+/// Nombre d'assertions publiques : `KEY(16) + m·IN(43) + m·chemin(12·depth) +
+/// root(4) + n·OUT(27) + BAL(3)`. Écart au côte-à-côte : `root` assertée UNE fois
+/// sur la porteuse au lieu d'une fois par chemin.
+fn num_assertions(f: Forme, depth: usize) -> usize {
+    16 + f.m() * 43 + f.m() * (12 * depth) + 4 + f.n() * 27 + 3
 }
 
 // ================================================================================================
@@ -507,7 +523,12 @@ impl winterfell::Air for SegMonolithAir {
         let forme = Forme::new(pi.m(), pi.n())
             .expect("forme hors bornes : verify_tx doit borner avant l'AIR");
         let (ix, _) = build_periodic(forme, depth, l);
-        let context = AirContext::new(trace_info, degrees(l), num_assertions(depth), options);
+        let context = AirContext::new(
+            trace_info,
+            degrees(forme, l),
+            num_assertions(forme, depth),
+            options,
+        );
         SegMonolithAir { context, pi, l, depth, forme, ix }
     }
 
@@ -521,6 +542,8 @@ impl winterfell::Air for SegMonolithAir {
         let next = frame.next();
         let one = E::ONE;
         let ix = &self.ix;
+        let f = self.forme;
+        let s_col = f.s_col();
 
         // --- Colonnes périodiques, lues par NOM (jamais par index en dur). ---
         let round_flag_s = pv[ix.round_flag_s];
@@ -598,8 +621,8 @@ impl winterfell::Air for SegMonolithAir {
         //     constant SANS gating supplémentaire. `pow` est relatif au segment. ---
         {
             let bit = cur[SEG_BALBIT_OFF + SEG_BAL_BIT];
-            let s = cur[S_COL];
-            let s_next = next[S_COL];
+            let s = cur[s_col];
+            let s_next = next[s_col];
             let vacc = cur[SEG_BALBIT_OFF + SEG_BAL_VACC];
             let vacc_next = next[SEG_BALBIT_OFF + SEG_BAL_VACC];
             result[idx] = sel_bal * bit * (bit - one);
@@ -610,11 +633,12 @@ impl winterfell::Air for SegMonolithAir {
 
         // --- PORTEUSES : constantes sur la région utile (bloc contigu, S_COL exclue).
         //     Le gating blind_off est appliqué par la boucle globale en fin. ---
-        for c in 0..N_CARRIER {
+        let nc = n_carrier(f);
+        for c in 0..nc {
             result[idx + c] = next[SHARED_OFF + c] - cur[SHARED_OFF + c];
         }
-        idx += N_CARRIER;
-        debug_assert_eq!(idx, N_BASE);
+        idx += nc;
+        debug_assert_eq!(idx, N_FIXE + nc);
 
         // ============================================================================
         // LIAISONS — motif `sel_ancre · (cur[porteuse] − cur[cellule])`.
@@ -644,7 +668,7 @@ impl winterfell::Air for SegMonolithAir {
                 result[idx + k] = s7k * (cur[OWNER_C + k] - cur[SEG_KEY_OFF + rate + k]);
             }
             idx += DIGEST_FELTS;
-            for n in 0..2 {
+            for n in 0..f.m() {
                 let s0 = pv[ix.anc_in[n][A_S0]];
                 for k in 0..DIGEST_FELTS {
                     result[idx + k] = s0 * (cur[OWNER_C + k] - cur[sp + 8 + k]);
@@ -661,7 +685,7 @@ impl winterfell::Air for SegMonolithAir {
                     s7k * (cur[NK_C + k] - cur[SEG_KEY_OFF + STATE_WIDTH + rate + k]);
             }
             idx += DIGEST_FELTS;
-            for n in 0..2 {
+            for n in 0..f.m() {
                 let s40 = pv[ix.anc_in[n][A_S40]];
                 for k in 0..DIGEST_FELTS {
                     result[idx + k] = s40 * (cur[NK_C + k] - cur[sp + 7 + k]);
@@ -671,51 +695,54 @@ impl winterfell::Air for SegMonolithAir {
         }
 
         // RHO : le rho du nullifier == celui du commitment (v0.2, nf lié au cm).
-        for n in 0..2 {
+        for n in 0..f.m() {
+            let rho_c = f.rho_c(n);
             let s7 = pv[ix.anc_in[n][A_S7]];
             let s40 = pv[ix.anc_in[n][A_S40]];
             let s47 = pv[ix.anc_in[n][A_S47]];
             for k in 0..DIGEST_FELTS {
-                result[idx + k] = s7 * (cur[RHO_C[n] + k] - cur[sp + 12 + k]);
+                result[idx + k] = s7 * (cur[rho_c + k] - cur[sp + 12 + k]);
             }
             idx += DIGEST_FELTS;
-            result[idx] = s40 * (cur[RHO_C[n]] - cur[sp + 11]);
+            result[idx] = s40 * (cur[rho_c] - cur[sp + 11]);
             idx += 1;
             for j in 0..DIGEST_FELTS - 1 {
-                result[idx + j] = s47 * (cur[RHO_C[n] + 1 + j] - cur[sp + 12 + j]);
+                result[idx + j] = s47 * (cur[rho_c + 1 + j] - cur[sp + 12 + j]);
             }
             idx += DIGEST_FELTS - 1;
         }
 
         // CM : le commitment produit gouverne la feuille ET le nullifier (P1).
-        for n in 0..2 {
+        for n in 0..f.m() {
+            let cm_c = f.cm_c(n);
             let s31 = pv[ix.anc_in[n][A_S31]];
             let s32 = pv[ix.anc_in[n][A_S32]];
             let s47 = pv[ix.anc_in[n][A_S47]];
             for k in 0..DIGEST_FELTS {
-                result[idx + k] = s31 * (cur[CM_C[n] + k] - cur[sp + rate + k]);
+                result[idx + k] = s31 * (cur[cm_c + k] - cur[sp + rate + k]);
             }
             idx += DIGEST_FELTS;
             for k in 0..DIGEST_FELTS {
-                result[idx + k] = s32 * (cur[CM_C[n] + k] - cur[sp + 7 + k]);
+                result[idx + k] = s32 * (cur[cm_c + k] - cur[sp + 7 + k]);
             }
             idx += DIGEST_FELTS;
             for k in 0..DIGEST_FELTS {
-                result[idx + k] = s47 * (cur[CM_C[n] + k] - cur[sp + 15 + k]);
+                result[idx + k] = s47 * (cur[cm_c + k] - cur[sp + 15 + k]);
             }
             idx += DIGEST_FELTS;
         }
 
         // FEUILLE↔CHEMIN : la feuille produite == celle injectée dans le chemin.
-        for n in 0..2 {
+        for n in 0..f.m() {
+            let leaf_c = f.leaf_c(n);
             let s39 = pv[ix.anc_in[n][A_S39]];
             let s0 = pv[ix.anc_in[n][A_S0]];
             for k in 0..DIGEST_FELTS {
-                result[idx + k] = s39 * (cur[LEAF_C[n] + k] - cur[sp + rate + k]);
+                result[idx + k] = s39 * (cur[leaf_c + k] - cur[sp + rate + k]);
             }
             idx += DIGEST_FELTS;
             for k in 0..DIGEST_FELTS {
-                result[idx + k] = s0 * (cur[LEAF_C[n] + k] - cur[SEG_MERKLE_OFF + 20 + k]);
+                result[idx + k] = s0 * (cur[leaf_c + k] - cur[SEG_MERKLE_OFF + 20 + k]);
             }
             idx += DIGEST_FELTS;
         }
@@ -723,7 +750,7 @@ impl winterfell::Air for SegMonolithAir {
         // RACINE (nouveau) : la racine repliée de chaque entrée == porteuse ROOT_C.
         // Sans elle, les deux entrées pourraient prouver contre des racines
         // DIFFÉRENTES (chacune valide isolément) — trou créé par la mutualisation.
-        for n in 0..2 {
+        for n in 0..f.m() {
             let sr = pv[ix.root_in[n]];
             for k in 0..DIGEST_FELTS {
                 result[idx + k] = sr * (cur[ROOT_C + k] - cur[SEG_MERKLE_OFF + rate + k]);
@@ -733,22 +760,24 @@ impl winterfell::Air for SegMonolithAir {
 
         // MONTANTS (P5) : la value de chaque commitment == le VACC de son segment.
         let vacc_col = SEG_BALBIT_OFF + SEG_BAL_VACC;
-        for n in 0..2 {
+        for n in 0..f.m() {
+            let vin_c = f.vin_c(n);
             let s0 = pv[ix.anc_in[n][A_S0]];
             let vg = pv[ix.vacc_in[n]];
-            result[idx] = s0 * (cur[VIN_C[n] ] - cur[sp + 7]);
-            result[idx + 1] = vg * (cur[VIN_C[n]] - cur[vacc_col]);
+            result[idx] = s0 * (cur[vin_c] - cur[sp + 7]);
+            result[idx + 1] = vg * (cur[vin_c] - cur[vacc_col]);
             idx += 2;
         }
-        for n in 0..2 {
+        for n in 0..f.n() {
+            let vout_c = f.vout_c(n);
             let s0 = pv[ix.s0_out[n]];
             let vg = pv[ix.vacc_out[n]];
-            result[idx] = s0 * (cur[VOUT_C[n]] - cur[sp + 7]);
-            result[idx + 1] = vg * (cur[VOUT_C[n]] - cur[vacc_col]);
+            result[idx] = s0 * (cur[vout_c] - cur[sp + 7]);
+            result[idx + 1] = vg * (cur[vout_c] - cur[vacc_col]);
             idx += 2;
         }
 
-        debug_assert_eq!(idx, N_CONSTRAINTS);
+        debug_assert_eq!(idx, n_constraints(f));
 
         // --- Gating global witness-hiding (motif 3z-b1b conservé). ---
         for r in result.iter_mut() {
@@ -758,24 +787,12 @@ impl winterfell::Air for SegMonolithAir {
 
     fn get_assertions(&self) -> Vec<Assertion<Self::BaseField>> {
         let d = self.depth;
-        let mut a = Vec::with_capacity(num_assertions(d));
+        let f = self.forme;
+        let mut a = Vec::with_capacity(num_assertions(f, d));
         let sp = SEG_SPONGE_OFF;
-        let schedule = schedule_2in2out();
-        let ins: Vec<usize> = schedule
-            .iter()
-            .enumerate()
-            .filter(|(_, k)| **k == SegKind::Input)
-            .map(|(i, _)| i)
-            .collect();
-        let outs: Vec<usize> = schedule
-            .iter()
-            .enumerate()
-            .filter(|(_, k)| **k == SegKind::Output)
-            .map(|(i, _)| i)
-            .collect();
 
         // Segment KEY : éponges owner et nk.
-        let ks = seg_start(0, d);
+        let ks = f.seg_start(0, d);
         push_preamble(&mut a, ks, SEG_KEY_OFF, 8, Domain::Owner.tag() as u64, DIGEST_FELTS);
         push_preamble(
             &mut a,
@@ -787,9 +804,10 @@ impl winterfell::Air for SegMonolithAir {
         );
 
         // Segments d'ENTRÉE : préambules de la pile + nullifier public + préambules
-        // de chaque merge du chemin. Toutes les lignes sont décalées de seg_start.
-        for (n, &i) in ins.iter().enumerate() {
-            let s = seg_start(i, d);
+        // de chaque merge du chemin. Le n-ième segment IN est le segment 1+n
+        // (ordre normatif [KEY][IN×m][OUT×n]).
+        for n in 0..f.m() {
+            let s = f.seg_start(1 + n, d);
             push_preamble(&mut a, s + CM_ROWS_START, sp, 32, Domain::NoteCommitment.tag() as u64, 13);
             push_preamble(&mut a, s + LEAF_ROWS_START, sp, 8, Domain::MerkleLeaf.tag() as u64, 4);
             push_preamble(&mut a, s + NF_ROWS_START, sp, 16, Domain::Nullifier.tag() as u64, 12);
@@ -820,8 +838,8 @@ impl winterfell::Air for SegMonolithAir {
         }
 
         // Segments de SORTIE : préambule de commitment + commitment public.
-        for (n, &j) in outs.iter().enumerate() {
-            let s = seg_start(j, d);
+        for n in 0..f.n() {
+            let s = f.seg_start(1 + f.m() + n, d);
             push_preamble(&mut a, s, sp, 32, Domain::NoteCommitment.tag() as u64, 13);
             for k in 0..DIGEST_FELTS {
                 a.push(Assertion::single(
@@ -832,19 +850,20 @@ impl winterfell::Air for SegMonolithAir {
             }
         }
 
-        // Équilibre : S part de 0, vaut fee à la dernière ligne utile.
-        a.push(Assertion::single(S_COL, 0, BaseElement::ZERO));
+        // Équilibre : S part de 0 (sa colonne suit la forme), vaut fee à la dernière
+        // ligne utile.
+        let s_col = f.s_col();
+        a.push(Assertion::single(s_col, 0, BaseElement::ZERO));
         a.push(Assertion::single(
-            S_COL,
-            used_rows(d) - 1,
+            s_col,
+            f.used_rows(d) - 1,
             BaseElement::new(self.pi.fee),
         ));
-        // VACC du PREMIER segment d'unité : sinon témoin libre (aucun `endblk` ne le
-        // précède — le segment KEY n'en produit pas). Même trou d'inflation qu'en
-        // côte-à-côte, mais l'ancrage se déplace en `seg_start(premier IN)`.
+        // VACC du PREMIER segment d'unité (segment 1 = premier IN) : sinon témoin
+        // libre (aucun `endblk` ne le précède — le segment KEY n'en produit pas).
         a.push(Assertion::single(
             SEG_BALBIT_OFF + SEG_BAL_VACC,
-            seg_start(ins[0], d),
+            f.seg_start(1, d),
             BaseElement::ZERO,
         ));
 
@@ -863,9 +882,9 @@ impl winterfell::Air for SegMonolithAir {
 /// Degrés (bornes SUPÉRIEURES) — même calibration qu'en côte-à-côte pour les
 /// familles conservées ; les familles mutualisées gardent leur degré, seul leur
 /// NOMBRE change.
-fn degrees(n: usize) -> Vec<TransitionConstraintDegree> {
+fn degrees(forme: Forme, n: usize) -> Vec<TransitionConstraintDegree> {
     let wc = TransitionConstraintDegree::with_cycles;
-    let mut d = Vec::with_capacity(N_CONSTRAINTS);
+    let mut d = Vec::with_capacity(n_constraints(forme));
 
     for _ in 0..N_KEY {
         d.push(wc(7, vec![n, n]));
@@ -886,14 +905,14 @@ fn degrees(n: usize) -> Vec<TransitionConstraintDegree> {
     d.push(wc(2, vec![n, n])); // bit booléen
     d.push(wc(2, vec![n, n, n])); // S chaîné
     d.push(wc(2, vec![n, n, n, n])); // VACC
-    for _ in 0..N_CARRIER {
+    for _ in 0..n_carrier(forme) {
         d.push(wc(1, vec![n]));
     }
-    for _ in 0..N_LIAISON {
+    for _ in 0..(N_LIAISON_FIXE + n_liaison(forme)) {
         d.push(wc(1, vec![n, n]));
     }
 
-    debug_assert_eq!(d.len(), N_CONSTRAINTS);
+    debug_assert_eq!(d.len(), n_constraints(forme));
     d
 }
 
@@ -969,33 +988,35 @@ fn read4(trace: &TraceTable<BaseElement>, col: usize, row: usize) -> [BaseElemen
 /// lignes littérales) : la racine sur la porteuse, les nullifiers et commitments à
 /// la fin de la pile de leur segment respectif.
 pub(crate) fn prove_seg_monolith(w: &MonolithWitness) -> (MonolithPublicInputs, ValidityProof) {
-    let depth = w.inputs[0].path.len();
-    let trace = build_seg_trace(w);
-    debug_assert_eq!(trace.width(), WIDTH);
+    prove_seg_forme(&super::seg_trace::SegWitness::depuis_2in2out(w))
+}
 
-    let schedule = schedule_2in2out();
-    let seg_de = |voulu: SegKind| -> Vec<usize> {
-        schedule
-            .iter()
-            .enumerate()
-            .filter(|(_, k)| **k == voulu)
-            .map(|(i, _)| i)
-            .collect()
-    };
-    let ins = seg_de(SegKind::Input);
-    let outs = seg_de(SegKind::Output);
+/// Prouve le monolithe segmenté à FORME VARIABLE (3z-c2). Extrait les publics de la
+/// trace aux positions du SCHEDULE de la forme (racine sur la porteuse, nullifiers et
+/// commitments à la fin de la pile de LEUR segment respectif — jamais à des lignes
+/// littérales). À générer en `--release`.
+pub(crate) fn prove_seg_forme(
+    w: &super::seg_trace::SegWitness,
+) -> (MonolithPublicInputs, ValidityProof) {
+    let f = w.forme();
+    let depth = w.inputs[0].path.len();
+    let trace = super::seg_trace::build_seg_trace_forme_seeded(w, &mut rand::rngs::OsRng);
+    debug_assert_eq!(trace.width(), f.width());
+
+    // Le n-ième segment IN est le segment 1+n, le n-ième OUT le segment 1+m+n
+    // (ordre normatif). Publics lus au MÊME endroit que l'AIR les asserte.
     let nf = |n: usize| {
         read4(
             &trace,
             SEG_SPONGE_OFF + RATE_START,
-            seg_start(ins[n], depth) + NF_ROWS_END - 1,
+            f.seg_start(1 + n, depth) + NF_ROWS_END - 1,
         )
     };
     let oc = |n: usize| {
         read4(
             &trace,
             SEG_SPONGE_OFF + RATE_START,
-            seg_start(outs[n], depth) + CM_ROWS_END - 1,
+            f.seg_start(1 + f.m() + n, depth) + CM_ROWS_END - 1,
         )
     };
 
@@ -1003,8 +1024,8 @@ pub(crate) fn prove_seg_monolith(w: &MonolithWitness) -> (MonolithPublicInputs, 
         // La racine est lue sur la PORTEUSE (constante) — les liaisons `root_in`
         // garantissent qu'elle égale la racine repliée de chaque entrée.
         root: read4(&trace, ROOT_C, 0),
-        nullifiers: vec![nf(0), nf(1)],
-        output_commitments: vec![oc(0), oc(1)],
+        nullifiers: (0..f.m()).map(nf).collect(),
+        output_commitments: (0..f.n()).map(oc).collect(),
         fee: w.fee,
         depth,
     };
@@ -1045,15 +1066,61 @@ mod tests {
     /// mutualisation fait fondre les familles répétées.
     #[test]
     fn decompte_des_contraintes() {
-        assert_eq!(N_BASE, N_KEY + N_SPONGE + N_MERKLE + N_BAL + N_CARRIER);
-        assert_eq!(N_CONSTRAINTS, N_BASE + N_LIAISON);
-        // Les porteuses forment le bloc contigu SHARED_OFF..S_COL (S_COL exclue :
-        // elle est chaînée, pas constante).
-        assert_eq!(N_CARRIER, S_COL - SHARED_OFF);
-        // `degrees` doit produire exactement N_CONSTRAINTS entrées.
-        assert_eq!(degrees(trace_len(2)).len(), N_CONSTRAINTS);
-        // Moins de slots que le côte-à-côte (263) : éponges 48→12, Merkle 60→30.
-        const { assert!(N_CONSTRAINTS < 263, "la mutualisation doit réduire les slots") };
+        // 2/2 : le décompte doit COÏNCIDER avec l'ancien monolithe segmenté (209).
+        // C'est la non-régression : la paramétrisation ne change pas la forme 2/2.
+        let f22 = Forme::F22;
+        assert_eq!(n_constraints(f22), 209, "2/2 inchangé (mutualisation : 48→12, 60→30)");
+        assert!(n_constraints(f22) < 263, "moins de slots que le côte-à-côte");
+        // Porteuses = bloc contigu SHARED_OFF..s_col (chaînée exclue).
+        assert_eq!(n_carrier(f22), Forme::F22.s_col() - SHARED_OFF);
+        // `degrees` produit exactement `n_constraints` entrées, POUR CHAQUE forme.
+        for m in 1..=MAX_IN {
+            for n in 1..=MAX_OUT {
+                let f = Forme::new(m, n).unwrap();
+                assert_eq!(degrees(f, trace_len(2)).len(), n_constraints(f), "forme {m}/{n}");
+            }
+        }
+        // Le compte CROÎT avec la forme : plus d'entrées = plus de liaisons.
+        assert!(n_constraints(Forme::new(4, 4).unwrap()) > n_constraints(f22));
+        assert!(n_constraints(Forme::new(1, 1).unwrap()) < n_constraints(f22));
+    }
+
+    /// PREUVE + VÉRIFICATION à FORME VARIABLE : le critère de sortie de C2-T3.
+    ///
+    /// Une trace 1/1 et une trace 4/4 doivent produire une preuve acceptée, et un
+    /// public falsifié (un nullifier, un commitment) doit être rejeté — sur des
+    /// formes qu'aucun chemin figé n'exerçait. C'est ce qui prouve que sélecteurs,
+    /// ancres, assertions et degrés dérivent RÉELLEMENT de la forme, pas d'un 2/2
+    /// déguisé.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
+    fn preuve_forme_variable_1_1_et_4_4() {
+        use crate::monolith::seg_trace::tests::witness_forme;
+        for (m, n) in [(1usize, 1usize), (4, 4)] {
+            let w = witness_forme(m, n);
+            let (pi, proof) = prove_seg_forme(&w);
+            assert_eq!(pi.m(), m, "forme {m}/{n} : m public");
+            assert_eq!(pi.n(), n, "forme {m}/{n} : n public");
+            assert!(
+                verify_seg_monolith(&pi, pi.depth, &proof),
+                "forme {m}/{n} : témoin honnête accepté"
+            );
+
+            // Un nullifier falsifié est rejeté.
+            let mut faux = pi.clone();
+            faux.nullifiers[0][0] += BaseElement::ONE;
+            assert!(
+                !verify_seg_monolith(&faux, faux.depth, &proof),
+                "forme {m}/{n} : nullifier falsifié rejeté"
+            );
+            // Un commitment de sortie falsifié est rejeté.
+            let mut faux = pi.clone();
+            faux.output_commitments[n - 1][0] += BaseElement::ONE;
+            assert!(
+                !verify_seg_monolith(&faux, faux.depth, &proof),
+                "forme {m}/{n} : commitment falsifié rejeté"
+            );
+        }
     }
 
     /// Roundtrip : une preuve segmentée d'un témoin honnête est acceptée, et chaque

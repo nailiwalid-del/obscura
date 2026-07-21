@@ -91,10 +91,18 @@ mod plan {
     const VOUT_C_0: usize = VIN_C_1 + 1;
     const VOUT_C_1: usize = VOUT_C_0 + 1;
 
+    // Porteuses 2/2 figées — depuis C2-T3, l'AIR indexe par `Forme::{rho_c,…}`. Ne
+    // restent LUES que par le test d'équivalence `forme_2_2_identique_aux_constantes`,
+    // qui verrouille que la forme reproduit ces valeurs. À retirer en C2-T8.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) const RHO_C: [usize; 2] = [RHO_C_0, RHO_C_1];
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) const CM_C: [usize; 2] = [CM_C_0, CM_C_1];
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) const LEAF_C: [usize; 2] = [LEAF_C_0, LEAF_C_1];
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) const VIN_C: [usize; 2] = [VIN_C_0, VIN_C_1];
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) const VOUT_C: [usize; 2] = [VOUT_C_0, VOUT_C_1];
 
     /// Accumulateur d'équilibre chaîné à travers TOUS les segments : démarre à 0
@@ -197,6 +205,7 @@ mod plan {
     /// Ligne de début du segment `i` du schedule : somme CUMULÉE des longueurs
     /// des segments précédents (frontières irrégulières — au consensus :
     /// 0, 8, 520, 1032, 1096). Pavage contigu, sans trou ni chevauchement.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn seg_start(i: usize, depth: usize) -> usize {
         schedule_2in2out()[..i]
             .iter()
