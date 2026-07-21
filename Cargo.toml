@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/crypto", "crates/ledger", "crates/proved-hash", "crates/circuit", "crates/zk-spike", "crates/net"]
+members = ["crates/crypto", "crates/ledger", "crates/proved-hash", "crates/circuit", "crates/zk-spike", "crates/net", "crates/node"]
 
 [workspace.package]
 version = "0.1.0"

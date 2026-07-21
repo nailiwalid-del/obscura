@@ -1,0 +1,227 @@
+//! Protocole applicatif : ce qui circule DANS le canal chiffré (phase 5).
+//!
+//! Le transport (`net`) achemine des octets ; le mempool (`ledger`) attend des
+//! `ProvedTx`. Ce module est le maillon manquant entre les deux.
+//!
+//! # Annoncer des digests, pas des transactions
+//!
+//! Une `ProvedTx` pèse ~68 Kio. Envoyer spontanément la transaction à chaque pair
+//! serait offrir une **amplification** à l'attaquant : une transaction injectée une
+//! fois se démultiplierait en autant d'envois qu'il y a de liens. Le protocole est
+//! donc en trois temps :
+//!
+//! ```text
+//!   Annonce(digests)  →   « j'ai ces transactions »        ~64 o par entrée
+//!   Demande(digests)  ←   « envoie-moi celles qui manquent »
+//!   Transaction(tx)   →   la transaction elle-même         ~68 Kio
+//! ```
+//!
+//! Un pair ne télécharge ainsi que ce qu'il n'a pas, et la bande passante suit le
+//! besoin réel plutôt que le nombre de liens.
+//!
+//! # Surface hostile
+//!
+//! Ces messages arrivent du réseau : décodage borné, longueurs vérifiées AVANT
+//! allocation, `Result` partout, aucune panique — même discipline que
+//! `circuit::ProvedTx::from_bytes` et `net::frame`.
+
+use circuit::ProvedTx;
+
+/// Nombre maximal de digests par message d'annonce ou de demande.
+///
+/// Borne l'allocation ET le travail induit : sans elle, une annonce de 10⁶ digests
+/// coûterait 64 Mo et autant de recherches dans le mempool.
+pub const MAX_DIGESTS: usize = 1_000;
+
+/// Longueur d'un digest de transaction (`tx_digest`, non tronqué).
+const TAILLE_DIGEST: usize = 64;
+
+const TAG_ANNONCE: u8 = 1;
+const TAG_DEMANDE: u8 = 2;
+const TAG_TRANSACTION: u8 = 3;
+
+/// Erreur de décodage d'un message applicatif.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum MessageError {
+    #[error("message tronqué")]
+    Tronque,
+    #[error("octets résiduels après la fin du message")]
+    OctetsResiduels,
+    #[error("type de message inconnu")]
+    TagInconnu,
+    #[error("trop de digests (borne : {MAX_DIGESTS})")]
+    TropDeDigests,
+    #[error("transaction indécodable")]
+    TransactionInvalide,
+}
+
+/// Message applicatif échangé entre nœuds.
+pub enum Message {
+    /// « J'ai ces transactions » — inventaire, digests seulement.
+    Annonce(Vec<[u8; TAILLE_DIGEST]>),
+    /// « Envoie-moi celles-ci » — demande ciblée.
+    Demande(Vec<[u8; TAILLE_DIGEST]>),
+    /// Livraison d'une transaction complète.
+    Transaction(Box<ProvedTx>),
+}
+
+impl Message {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut b = Vec::new();
+        match self {
+            Message::Annonce(d) => {
+                b.push(TAG_ANNONCE);
+                ecrire_digests(&mut b, d);
+            }
+            Message::Demande(d) => {
+                b.push(TAG_DEMANDE);
+                ecrire_digests(&mut b, d);
+            }
+            Message::Transaction(tx) => {
+                b.push(TAG_TRANSACTION);
+                b.extend_from_slice(&tx.to_bytes());
+            }
+        }
+        b
+    }
+
+    /// Décode un message reçu du réseau. Borné et validant : jamais de panique.
+    pub fn from_bytes(b: &[u8]) -> Result<Self, MessageError> {
+        let (tag, reste) = b.split_first().ok_or(MessageError::Tronque)?;
+        match *tag {
+            TAG_ANNONCE => Ok(Message::Annonce(lire_digests(reste)?)),
+            TAG_DEMANDE => Ok(Message::Demande(lire_digests(reste)?)),
+            TAG_TRANSACTION => {
+                let tx = ProvedTx::from_bytes(reste).map_err(|_| MessageError::TransactionInvalide)?;
+                Ok(Message::Transaction(Box::new(tx)))
+            }
+            _ => Err(MessageError::TagInconnu),
+        }
+    }
+}
+
+fn ecrire_digests(b: &mut Vec<u8>, digests: &[[u8; TAILLE_DIGEST]]) {
+    b.extend_from_slice(&(digests.len() as u32).to_le_bytes());
+    for d in digests {
+        b.extend_from_slice(d);
+    }
+}
+
+fn lire_digests(b: &[u8]) -> Result<Vec<[u8; TAILLE_DIGEST]>, MessageError> {
+    if b.len() < 4 {
+        return Err(MessageError::Tronque);
+    }
+    let n = u32::from_le_bytes(b[..4].try_into().unwrap()) as usize;
+    // Borne AVANT allocation : une annonce de 10⁶ digests ne doit pas nous coûter
+    // 64 Mo ni autant de recherches.
+    if n > MAX_DIGESTS {
+        return Err(MessageError::TropDeDigests);
+    }
+    let attendu = 4 + n * TAILLE_DIGEST;
+    if b.len() < attendu {
+        return Err(MessageError::Tronque);
+    }
+    if b.len() > attendu {
+        return Err(MessageError::OctetsResiduels);
+    }
+    let mut sortie = Vec::with_capacity(n);
+    for i in 0..n {
+        let debut = 4 + i * TAILLE_DIGEST;
+        sortie.push(b[debut..debut + TAILLE_DIGEST].try_into().unwrap());
+    }
+    Ok(sortie)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `matches!` plutôt que `assert_eq!` : `Message` ne peut être ni `Debug` ni
+    // `PartialEq`, car il porte une `ProvedTx` (preuve STARK, signature hybride).
+    fn dg(n: u8) -> [u8; TAILLE_DIGEST] {
+        [n; TAILLE_DIGEST]
+    }
+
+    #[test]
+    fn annonce_et_demande_roundtrip() {
+        for construire in [
+            Message::Annonce as fn(Vec<[u8; 64]>) -> Message,
+            Message::Demande,
+        ] {
+            let d = vec![dg(1), dg(2), dg(3)];
+            let octets = construire(d.clone()).to_bytes();
+            match Message::from_bytes(&octets).unwrap() {
+                Message::Annonce(r) | Message::Demande(r) => assert_eq!(r, d),
+                _ => panic!("mauvais type"),
+            }
+        }
+    }
+
+    /// Une liste VIDE est légitime (« je n'ai rien de nouveau ») et ne doit pas être
+    /// confondue avec un message malformé.
+    #[test]
+    fn liste_vide_legitime() {
+        let octets = Message::Annonce(Vec::new()).to_bytes();
+        match Message::from_bytes(&octets).unwrap() {
+            Message::Annonce(r) => assert!(r.is_empty()),
+            _ => panic!("mauvais type"),
+        }
+    }
+
+    /// ANTI-DoS : une annonce dépassant la borne est rejetée AVANT allocation. Le
+    /// test n'envoie que l'en-tête — si le code allouait d'abord, il réserverait
+    /// 64 Mo pour 4 octets reçus.
+    #[test]
+    fn annonce_hors_borne_rejetee_sans_allouer() {
+        let mut b = vec![TAG_ANNONCE];
+        b.extend_from_slice(&1_000_000u32.to_le_bytes());
+        assert!(matches!(Message::from_bytes(&b), Err(MessageError::TropDeDigests)));
+
+        // Juste au-dessus de la borne : rejeté aussi.
+        let mut b2 = vec![TAG_ANNONCE];
+        b2.extend_from_slice(&((MAX_DIGESTS + 1) as u32).to_le_bytes());
+        assert!(matches!(Message::from_bytes(&b2), Err(MessageError::TropDeDigests)));
+    }
+
+    /// Message vide, tag inconnu, troncature, octets résiduels : `Result`, jamais
+    /// de panique.
+    #[test]
+    fn messages_malformes_rejetes_sans_panique() {
+        assert!(matches!(Message::from_bytes(&[]), Err(MessageError::Tronque)));
+        assert!(matches!(Message::from_bytes(&[99]), Err(MessageError::TagInconnu)));
+        assert!(matches!(Message::from_bytes(&[TAG_ANNONCE]), Err(MessageError::Tronque)));
+
+        // Annonce annonçant 2 digests mais n'en fournissant qu'un.
+        let mut court = vec![TAG_ANNONCE];
+        court.extend_from_slice(&2u32.to_le_bytes());
+        court.extend_from_slice(&dg(1));
+        assert!(matches!(Message::from_bytes(&court), Err(MessageError::Tronque)));
+
+        // Octets résiduels.
+        let mut trop = Message::Annonce(vec![dg(1)]).to_bytes();
+        trop.push(0);
+        assert!(matches!(Message::from_bytes(&trop), Err(MessageError::OctetsResiduels)));
+    }
+
+    /// Une transaction indécodable est rejetée proprement (le message porte des
+    /// octets arbitraires venant du réseau).
+    #[test]
+    fn transaction_indecodable_rejetee() {
+        let mut b = vec![TAG_TRANSACTION];
+        b.extend_from_slice(&[0xAB; 200]);
+        assert!(matches!(Message::from_bytes(&b), Err(MessageError::TransactionInvalide)));
+    }
+
+    /// La borne d'annonce tient compte du cadrage : `MAX_DIGESTS` digests doivent
+    /// tenir dans un cadre `net::frame` (1 Mio), sinon le message serait
+    /// systématiquement rejeté par la couche inférieure.
+    #[test]
+    fn borne_annonce_compatible_avec_le_cadrage() {
+        let taille_max = 1 + 4 + MAX_DIGESTS * TAILLE_DIGEST;
+        assert!(
+            taille_max < net::MAX_CADRE,
+            "une annonce pleine ({taille_max} o) doit tenir dans un cadre ({} o)",
+            net::MAX_CADRE
+        );
+    }
+}

@@ -96,6 +96,13 @@ avant sophistication crypto**. Reste :
    ⚠️ Piège identifié à ne pas rejouer : mutualiser des colonnes peut SUPPRIMER
    une garantie que la redondance offrait gratuitement (cf. « Liaison de racine »
    dans STARK_STATEMENT.md) — auditer chaque fusion sous cet angle.
+- `crates/node` : **câblage** des briques réseau et consensus (phase 5). `message`
+  = protocole applicatif (Annonce/Demande/Transaction) : on annonce des DIGESTS
+  (~64 o), jamais les transactions (~68 Kio) — envoyer spontanément la tx à chaque
+  pair offrirait une amplification à l'attaquant. Décodage borné (MAX_DIGESTS)
+  vérifié AVANT allocation. Il dépend de `net` ET du consensus, ce qui garde
+  justement `net` PUR TRANSPORT.
+
 **Phase 4 : les 4 briques sont livrées** (key-privacy, transport PQ + cadrage,
 pairs anti-eclipse, mempool ordonné par coût, Dandelion++). Reste à les CÂBLER
 dans un nœud réel — c'est la phase 5 (nœud/wallet/testnet), qui suppose une boucle

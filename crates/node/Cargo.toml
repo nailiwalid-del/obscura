@@ -1,0 +1,13 @@
+[package]
+name = "node"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+circuit = { path = "../circuit" }
+crypto = { path = "../crypto" }
+ledger = { path = "../ledger" }
+net = { path = "../net" }
+proved-hash = { path = "../proved-hash" }
+thiserror.workspace = true
