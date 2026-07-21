@@ -376,6 +376,24 @@ mod plan {
         }
     }
 
+    /// Retrouve la forme à partir de la LARGEUR de trace. La correspondance
+    /// `largeur → (m, n)` est BIJECTIVE sur `1..=MAX × 1..=MAX` (chaque entrée pèse
+    /// 13 colonnes, chaque sortie 1 : `13·(m−2) + (n−2)` ne collisionne pas pour
+    /// `|Δn| < 13`), garde `bijection_largeur_forme`.
+    ///
+    /// C'est ce qui permet à l'AIR de structurer ses contraintes sur la largeur
+    /// RÉELLEMENT COMMISE (jamais un indice hors du cadre), la liaison de la FORME
+    /// aux publics restant assurée par Fiat-Shamir (`to_elements` préfixe m, n).
+    pub(crate) fn forme_depuis_largeur(largeur: usize) -> Option<Forme> {
+        (1..=MAX_IN)
+            .flat_map(|m| (1..=MAX_OUT).map(move |n| (m, n)))
+            .find_map(|(m, n)| {
+                Forme::new(m, n)
+                    .ok()
+                    .filter(|f| f.width() == largeur)
+            })
+    }
+
     // La forme MAXIMALE tient dans le budget winterfell — garde compile-time :
     // si un futur MAX la fait déborder, la compilation échoue, pas la production.
     const FORME_MAX: Forme = match Forme::new(MAX_IN, MAX_OUT) {
@@ -614,6 +632,31 @@ mod tests {
     /// Les BORNES vivent dans le constructeur : m/n nuls ou au-delà de MAX sont
     /// REFUSÉS. Une forme sans entrée n'a pas d'autorité de dépense ; sans sortie,
     /// pas de destinataire.
+    /// `forme_depuis_largeur` est l'inverse EXACT de `Forme::width` sur les 16
+    /// formes, et rend `None` pour une largeur qui n'est celle d'aucune forme. C'est
+    /// ce qui autorise l'AIR à structurer ses contraintes sur la largeur commise sans
+    /// jamais indexer hors du cadre.
+    #[test]
+    fn bijection_largeur_forme() {
+        let mut vues = std::collections::HashSet::new();
+        for m in 1..=MAX_IN {
+            for n in 1..=MAX_OUT {
+                let f = Forme::new(m, n).unwrap();
+                assert!(vues.insert(f.width()), "largeur {} en collision", f.width());
+                let retrouvee = forme_depuis_largeur(f.width()).expect("forme retrouvée");
+                assert_eq!((retrouvee.m(), retrouvee.n()), (m, n));
+            }
+        }
+        // Une largeur DANS UN TROU entre deux amas de formes. Chaque entrée pèse 13
+        // colonnes, chaque sortie 1 (|Δsorties| ≤ 3) : il existe donc des largeurs
+        // qu'aucune forme n'atteint — p.ex. `width(2,4) + 5` tombe avant le premier
+        // `width(3, ·)`. C'est ce trou qui garantit qu'une largeur commise
+        // correspond à AU PLUS une forme.
+        let entre_amas = Forme::new(2, MAX_OUT).unwrap().width() + 5;
+        assert!(forme_depuis_largeur(entre_amas).is_none(), "largeur {entre_amas}");
+        assert!(forme_depuis_largeur(0).is_none());
+    }
+
     #[test]
     fn formes_hors_bornes_refusees() {
         assert!(Forme::new(0, 1).is_err(), "m = 0 : aucune autorité");

@@ -383,6 +383,17 @@ pub(crate) fn build_seg_trace_forme_seeded(
     build_seg_trace_interne(w, rng, SegForge::Aucune)
 }
 
+/// Trace FORGÉE à forme variable (soundness C2-T4). Aléa de production, une liaison
+/// sabotée. ⚠️ Les forges à RECONSTRUCTION d'arbre restent 2/2 (assertion interne) :
+/// seules les forges SANS reconstruction s'appliquent à une forme quelconque.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn build_seg_trace_forme_forge(
+    w: &SegWitness,
+    forge: SegForge,
+) -> TraceTable<BaseElement> {
+    build_seg_trace_interne(w, &mut rand::rngs::OsRng, forge)
+}
+
 /// Trace segmentée FORGÉE (tests de soundness) : aléa de production, mais une
 /// liaison sabotée.
 #[cfg_attr(not(test), allow(dead_code))]

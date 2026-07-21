@@ -516,12 +516,15 @@ impl winterfell::Air for SegMonolithAir {
         );
         let l = trace_info.length();
         let depth = pi.depth;
-        // Forme depuis les publics. `expect` et non propagation : les publics
-        // arrivent ici par `verify_tx`, dont le décodage wire (`from_bytes`)
-        // borne déjà les comptes — une forme invalide ici est un bug interne,
-        // pas une entrée hostile.
-        let forme = Forme::new(pi.m(), pi.n())
-            .expect("forme hors bornes : verify_tx doit borner avant l'AIR");
+        // Forme dérivée de la LARGEUR de trace commise (bijective), et NON des
+        // publics : c'est ce qui structure les contraintes sur des colonnes qui
+        // existent RÉELLEMENT — un attaquant qui déclare une forme (m, n)
+        // différente de sa trace ne provoque pas d'accès hors cadre, il est rejeté
+        // par Fiat-Shamir (les comptes m, n sont préfixés dans `to_elements`). Une
+        // largeur qui ne correspond à AUCUNE forme valide retombe sur 2/2 : la
+        // vérification échouera de toute façon (graine de challenge incohérente).
+        let forme = forme_depuis_largeur(trace_info.main_trace_width())
+            .unwrap_or(Forme::F22);
         let (ix, _) = build_periodic(forme, depth, l);
         let context = AirContext::new(
             trace_info,
@@ -811,12 +814,12 @@ impl winterfell::Air for SegMonolithAir {
             push_preamble(&mut a, s + CM_ROWS_START, sp, 32, Domain::NoteCommitment.tag() as u64, 13);
             push_preamble(&mut a, s + LEAF_ROWS_START, sp, 8, Domain::MerkleLeaf.tag() as u64, 4);
             push_preamble(&mut a, s + NF_ROWS_START, sp, 16, Domain::Nullifier.tag() as u64, 12);
-            for k in 0..DIGEST_FELTS {
-                a.push(Assertion::single(
-                    sp + RATE_START + k,
-                    s + NF_ROWS_END - 1,
-                    self.pi.nullifiers[n][k],
-                ));
+            // Lecture DÉFENSIVE : si les publics déclarent moins d'entrées que la
+            // trace (forme mentie), l'absence vaut ZÉRO → assertion fausse contre le
+            // vrai nullifier → rejet propre, jamais de panique d'indexation.
+            let nf_n = self.pi.nullifiers.get(n).copied().unwrap_or([BaseElement::ZERO; DIGEST_FELTS]);
+            for (k, nf_k) in nf_n.iter().enumerate() {
+                a.push(Assertion::single(sp + RATE_START + k, s + NF_ROWS_END - 1, *nf_k));
             }
             for b in 0..d {
                 push_preamble(
@@ -841,12 +844,9 @@ impl winterfell::Air for SegMonolithAir {
         for n in 0..f.n() {
             let s = f.seg_start(1 + f.m() + n, d);
             push_preamble(&mut a, s, sp, 32, Domain::NoteCommitment.tag() as u64, 13);
-            for k in 0..DIGEST_FELTS {
-                a.push(Assertion::single(
-                    sp + RATE_START + k,
-                    s + CM_ROWS_END - 1,
-                    self.pi.output_commitments[n][k],
-                ));
+            let oc_n = self.pi.output_commitments.get(n).copied().unwrap_or([BaseElement::ZERO; DIGEST_FELTS]);
+            for (k, oc_k) in oc_n.iter().enumerate() {
+                a.push(Assertion::single(sp + RATE_START + k, s + CM_ROWS_END - 1, *oc_k));
             }
         }
 
@@ -1119,6 +1119,197 @@ mod tests {
             assert!(
                 !verify_seg_monolith(&faux, faux.depth, &proof),
                 "forme {m}/{n} : commitment falsifié rejeté"
+            );
+        }
+    }
+
+    /// Extrait les publics d'une trace de forme `f` (positions du SCHEDULE de la
+    /// forme, jamais des lignes littérales) — le pendant de `prove_seg_forme` pour
+    /// une trace FORGÉE, dont les publics sont relus tels quels (self-consistants).
+    fn publics_de_forme(
+        f: Forme,
+        trace: &TraceTable<BaseElement>,
+        fee: u64,
+        depth: usize,
+    ) -> MonolithPublicInputs {
+        let nf = |n: usize| {
+            read4(
+                trace,
+                SEG_SPONGE_OFF + RATE_START,
+                f.seg_start(1 + n, depth) + NF_ROWS_END - 1,
+            )
+        };
+        let oc = |n: usize| {
+            read4(
+                trace,
+                SEG_SPONGE_OFF + RATE_START,
+                f.seg_start(1 + f.m() + n, depth) + CM_ROWS_END - 1,
+            )
+        };
+        MonolithPublicInputs {
+            root: read4(trace, ROOT_C, 0),
+            nullifiers: (0..f.m()).map(nf).collect(),
+            output_commitments: (0..f.n()).map(oc).collect(),
+            fee,
+            depth,
+        }
+    }
+
+    /// Prouve une trace DÉJÀ construite (éventuellement forgée) avec les publics
+    /// donnés — le prouveur ne re-dérive rien, on éprouve la VÉRIFICATION.
+    fn prouver_trace(
+        trace: TraceTable<BaseElement>,
+        pi: &MonolithPublicInputs,
+    ) -> ValidityProof {
+        let prover = SegMonolithProver {
+            options: crate::proof_options_hi(),
+            pi: pi.clone(),
+        };
+        ValidityProof(prover.prove(trace).expect("génération"))
+    }
+
+    // ================================================================================
+    // C2-T4 — SOUNDNESS SOUS FORME VARIABLE. Les trois forges D7 de la spec : chacune
+    // vise une garantie que la VARIABILITÉ pourrait avoir supprimée, là où la forme
+    // 2/2 figée la rendait structurelle. RED vérifié sur chacune.
+    // ================================================================================
+
+    /// D7.1 — LA FORME EST LIÉE. Une preuve honnête d'une forme ne se vérifie contre
+    /// AUCUNE autre déclaration de (m, n).
+    ///
+    /// Sans le préfixage des comptes dans Fiat-Shamir (C2-T3), un prouveur pourrait
+    /// présenter une transaction 2-in/2-out et la faire accepter déclarée 1-in/3-out
+    /// (mêmes 4 digests, découpés autrement) : une dépense non déclarée, ou une
+    /// sortie fantôme. Ici on prend une preuve 2/2 honnête et on la re-présente sous
+    /// chaque autre forme de même nombre total de digests — toutes doivent être
+    /// REJETÉES.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
+    fn d7_1_forme_liee_aux_publics() {
+        use crate::monolith::seg_trace::tests::witness_forme;
+        let w = witness_forme(2, 2);
+        let (pi, proof) = prove_seg_forme(&w);
+        assert!(verify_seg_monolith(&pi, pi.depth, &proof), "2/2 honnête accepté");
+
+        // Re-découpage des MÊMES digests en 1/3 et 3/1 : la forme déclarée change,
+        // la graine de challenge change, la vérification échoue.
+        let tous_nf = pi.nullifiers.clone();
+        let tous_oc = pi.output_commitments.clone();
+        let digests: Vec<[BaseElement; DIGEST_FELTS]> =
+            tous_nf.iter().chain(tous_oc.iter()).copied().collect();
+
+        for (m, n) in [(1usize, 3usize), (3, 1)] {
+            let mut faux = pi.clone();
+            faux.nullifiers = digests[..m].to_vec();
+            faux.output_commitments = digests[m..m + n].to_vec();
+            assert_eq!(faux.m(), m);
+            assert_eq!(faux.n(), n);
+            assert!(
+                !verify_seg_monolith(&faux, faux.depth, &proof),
+                "forme 2/2 re-présentée en {m}/{n} doit être REJETÉE (forme liée)"
+            );
+        }
+    }
+
+    /// D7.3 — L'ORDRE PUBLICS↔SEGMENTS EST LIÉ. Permuter deux nullifiers (ou deux
+    /// commitments de sortie) entre eux fait échouer la vérification : chaque public
+    /// est asserté à la ligne de SON segment, pas d'« un » segment.
+    ///
+    /// La mutualisation des colonnes fait porter la distinction par le SÉLECTEUR de
+    /// segment ; si l'AIR liait `output_commitments[j]` à un segment OUT quelconque
+    /// au lieu du j-ième, un prouveur pourrait réordonner ses sorties sans invalider
+    /// la preuve — sans conséquence ici, mais le gabarit se propagerait.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
+    fn d7_3_ordre_publics_segments_lie() {
+        use crate::monolith::seg_trace::tests::witness_forme;
+        // 4/4 : quatre segments de chaque, donc de vraies permutations à tester.
+        let w = witness_forme(4, 4);
+        let (pi, proof) = prove_seg_forme(&w);
+        assert!(verify_seg_monolith(&pi, pi.depth, &proof), "4/4 honnête accepté");
+
+        // Permuter deux nullifiers.
+        let mut faux = pi.clone();
+        faux.nullifiers.swap(0, 2);
+        assert!(
+            !verify_seg_monolith(&faux, faux.depth, &proof),
+            "nullifiers permutés : chaque nf est lié à SON segment"
+        );
+
+        // Permuter deux commitments de sortie.
+        let mut faux = pi.clone();
+        faux.output_commitments.swap(1, 3);
+        assert!(
+            !verify_seg_monolith(&faux, faux.depth, &proof),
+            "commitments permutés : chaque oc est lié à SON segment"
+        );
+    }
+
+    /// D7.2 — L'ÉQUILIBRE EST SCELLÉ À LA FIN VARIABLE. `fee` n'entre dans l'AIR QUE
+    /// par l'assertion `S = fee`, ancrée à `used_rows(m, n) − 1` — une ligne qui
+    /// DÉPEND de la forme. Une preuve 4/4 honnête ne se vérifie donc pas contre un
+    /// `fee` public différent.
+    ///
+    /// C'est la garde que la fin de l'accumulateur ne « glisse » pas : à une adresse
+    /// FIGÉE (celle du 2/2), un bloc 4/4 aurait son équilibre asserté AU MILIEU de la
+    /// trace, laissant les derniers segments libres d'inflation. Le RED correspondant
+    /// (retirer l'assertion d'endpoint) fait passer un `fee` faux — `fee` n'étant lié
+    /// par AUCUNE autre contrainte.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
+    fn d7_2_equilibre_scelle_a_la_fin_variable() {
+        use crate::monolith::seg_trace::tests::witness_forme;
+        let w = witness_forme(4, 4);
+        let (pi, proof) = prove_seg_forme(&w);
+        assert!(verify_seg_monolith(&pi, pi.depth, &proof), "4/4 honnête accepté");
+
+        // `fee` falsifié : seule l'assertion d'endpoint (à used_rows(4,4)−1) le lie.
+        let mut faux = pi.clone();
+        faux.fee += 1;
+        assert!(
+            !verify_seg_monolith(&faux, faux.depth, &proof),
+            "fee public falsifié : l'endpoint S = fee mord à la fin de la forme 4/4"
+        );
+    }
+
+    /// RE-PORT DES FORGES EXISTANTES SOUS UNE FORME ≠ 2/2. Les liaisons éprouvées en
+    /// 2/2 (secret owner↔nk, cm↔nullifier, montants, VACC initial) doivent mordre
+    /// AUSSI sur une forme large — sur un segment (l'entrée 3) qui n'existe QUE à
+    /// m ≥ 4, donc qu'aucun test 2/2 n'atteignait.
+    ///
+    /// ⚠️ Périmètre : forges SANS reconstruction d'arbre (celles-là restent 2/2 tant
+    /// que `build_tree_from_leaves` est câblé profondeur 2 — dette D8, cf. spec).
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
+    fn forges_existantes_sous_forme_4_4() {
+        use crate::monolith::seg_trace::{build_seg_trace_forme_forge, tests::witness_forme, SegForge};
+        let w = witness_forme(4, 4);
+        let f = w.forme();
+        let depth = w.inputs[0].path.len();
+        use proved_hash::felt::Felt;
+        let d = |seed: u64| {
+            proved_hash::digest::Digest(core::array::from_fn(|i| {
+                Felt::from_canonical_u64(seed + i as u64).unwrap()
+            }))
+        };
+
+        // Chaque forge vise une liaison, sur un segment que 2/2 n'a pas : l'entrée 3.
+        let forges = [
+            ("SecretNk", SegForge::SecretNk(d(31_000))),
+            ("CmNullifier@3", SegForge::CmNullifier(3, d(32_000))),
+            ("NkConsomme@3", SegForge::NkConsomme(3, d(33_000))),
+            ("RhoNullifier@3", SegForge::RhoNullifier(3, d(34_000))),
+            ("ValeurEntrees", SegForge::ValeurEntrees(5)),
+            ("ValeurSorties", SegForge::ValeurSorties(5)),
+            ("VaccInitial", SegForge::VaccInitial(5)),
+        ];
+        for (nom, forge) in forges {
+            let trace = build_seg_trace_forme_forge(&w, forge);
+            let pi = publics_de_forme(f, &trace, w.fee, depth);
+            let proof = prouver_trace(trace, &pi);
+            assert!(
+                !verify_seg_monolith(&pi, depth, &proof),
+                "forge {nom} sous forme 4/4 doit être REJETÉE"
             );
         }
     }
