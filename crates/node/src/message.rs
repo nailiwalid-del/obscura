@@ -58,6 +58,33 @@ pub enum MessageError {
     BlocInvalide(ledger::bloc::BlocDecodeError),
 }
 
+impl MessageError {
+    /// Ce message vient-il d'une version du protocole que nous ne connaissons pas ?
+    ///
+    /// # Pourquoi la distinction n'est pas cosmétique
+    ///
+    /// « Je ne comprends pas cette version » et « ce pair ne parle pas le protocole »
+    /// méritent des réactions opposées. Confondus, une mise à jour de réseau devient
+    /// une PARTITION : un nœud d'ancienne version diffuse un bloc, le nœud à jour le
+    /// juge indécodable, pénalise −10, et le bannit au dixième bloc — soit 100
+    /// secondes à la cadence de scellement par défaut.
+    ///
+    /// La conséquence dépasse la perte d'un pair : les bannis quittent la sélection
+    /// sortante, la diversité de groupes réseau s'effondre, et c'est précisément la
+    /// propriété anti-ECLIPSE sur laquelle repose l'anonymat de Dandelion++. Un
+    /// testnet en cours de mise à jour se partitionnerait tout seul en dégradant sa
+    /// propre défense — sans qu'aucun message ne désigne la version comme cause.
+    ///
+    /// Un tag inconnu relève du même cas : c'est un message d'une version future.
+    pub fn version_inconnue(&self) -> bool {
+        matches!(
+            self,
+            MessageError::TagInconnu
+                | MessageError::BlocInvalide(ledger::bloc::BlocDecodeError::VersionInconnue(_))
+        )
+    }
+}
+
 /// Message applicatif échangé entre nœuds.
 pub enum Message {
     /// « J'ai ces transactions » — inventaire, digests seulement.
@@ -255,6 +282,41 @@ mod tests {
                 ledger::bloc::BlocDecodeError::TropDeTransactions
             ))
         ));
+    }
+
+    /// Une version INCONNUE se distingue d'une malformation.
+    ///
+    /// Sans cette distinction, une mise à jour de réseau bannit les nœuds restés en
+    /// arrière et effondre la diversité de pairs dont dépend l'anti-eclipse.
+    #[test]
+    fn version_inconnue_distinguee_dune_malformation() {
+        // Bloc d'une version future : PAS une faute.
+        let mut futur = vec![TAG_BLOC, 0x02];
+        futur.extend_from_slice(&[0u8; 64]);
+        // `Message` n'est ni `Debug` ni `PartialEq` (il porte une `ProvedTx`) : on
+        // extrait l'erreur par filtrage plutôt que par `unwrap_err`.
+        let erreur = |o: &[u8]| match Message::from_bytes(o) {
+            Err(e) => e,
+            Ok(_) => panic!("décodage inattendu"),
+        };
+        assert!(
+            erreur(&futur).version_inconnue(),
+            "un bloc 0x02 est un message du FUTUR"
+        );
+
+        // Tag applicatif inconnu : idem, message d'une version future.
+        assert!(erreur(&[99]).version_inconnue());
+
+        // Malformations DANS une version connue : ce sont bien des fautes.
+        for octets in [
+            vec![TAG_ANNONCE],
+            Message::Annonce(vec![dg(1)]).to_bytes()[..3].to_vec(),
+        ] {
+            assert!(
+                !erreur(&octets).version_inconnue(),
+                "une troncature n'est pas une question de version"
+            );
+        }
     }
 
     /// Une transaction indécodable est rejetée proprement (le message porte des

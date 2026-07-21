@@ -72,8 +72,29 @@ impl std::fmt::Display for StateLoadError {
 }
 impl std::error::Error for StateLoadError {}
 
-/// Fenêtre glissante de racines récentes acceptées (cf. `state::RECENT_ROOTS_WINDOW`).
-pub const RECENT_ROOTS_WINDOW: usize = 100;
+/// Fenêtre glissante de racines récentes acceptées.
+///
+/// # Pourquoi elle doit dépasser un bloc PLEIN
+///
+/// `remember_root` est appelé à CHAQUE insertion — donc une à deux fois par
+/// transaction. Une fenêtre de 100 racines était donc entièrement purgée par
+/// l'application d'un seul bloc de plus de 100 transactions.
+///
+/// La conséquence n'était pas théorique : un wallet s'ancre sur la racine courante,
+/// puis passe ≈1,8 s à générer sa preuve. Si un bloc chargé est appliqué pendant ce
+/// temps, son ancre a disparu de la fenêtre et sa transaction est refusée pour
+/// « ancre inconnue » — un message qui désigne l'ancre, jamais la vraie cause. Pire,
+/// n'importe qui pouvant sceller (aucune élection de producteur), un adversaire
+/// purgeait la fenêtre à volonté à partir du mempool HONNÊTE, sans fabriquer une
+/// seule preuve : une censure de paiements à coût de calcul nul.
+///
+/// Quatre blocs pleins de marge, soit ≈64 Kio de racines mémorisées.
+pub const RECENT_ROOTS_WINDOW: usize = 4 * crate::bloc::MAX_TX_PAR_BLOC;
+
+/// Une ancre doit survivre à l'application d'un bloc PLEIN, sinon les transactions en
+/// vol sont refusées dès que le réseau est chargé. Consigné à la compilation : tout
+/// ajustement de l'une des deux constantes qui romprait la marge casse le build.
+const _: () = assert!(RECENT_ROOTS_WINDOW > crate::bloc::MAX_TX_PAR_BLOC);
 
 /// Version du format de dump de l'état (`to_bytes`). L'ajout du chaînage (tête de
 /// chaîne + hauteur) change le format : un dump antérieur est REFUSÉ avec une version
@@ -99,6 +120,8 @@ pub enum BlocRefus {
     ParentInattendu,
     #[error("hauteur {recue} inattendue (attendue : {attendue})")]
     HauteurInattendue { attendue: u64, recue: u64 },
+    #[error("bloc de {recues} transactions (borne : {borne})")]
+    TropDeTransactions { borne: usize, recues: usize },
     #[error("transaction {index} refusée : {source}")]
     Transaction {
         index: usize,
@@ -170,7 +193,13 @@ impl ProvedLedgerState {
     /// non-rejeu (`verify_tx`) ; (3) aucun nullifier déjà dépensé, ni doublon interne ;
     /// puis application atomique (dépense des nullifiers, insertion des sorties).
     /// Retourne les index d'insertion des commitments de sortie.
-    pub fn apply_proved_tx(&mut self, tx: &ProvedTx) -> Result<Vec<u64>, LedgerError> {
+    ///
+    /// ⚠️ `pub(crate)` DÉLIBÉRÉMENT : son seul appelant légitime est `appliquer_bloc`.
+    /// Exposée, elle serait une SECONDE porte d'insertion dans l'arbre, hors de tout
+    /// bloc — un futur appel direct ferait diverger l'état de la chaîne sans qu'aucune
+    /// erreur ne soit levée, et le premier symptôme serait un « ancre inconnue »
+    /// inexplicable bien plus tard.
+    pub(crate) fn apply_proved_tx(&mut self, tx: &ProvedTx) -> Result<Vec<u64>, LedgerError> {
         // 1. Anchor connu et récent.
         if !self.recent_roots.contains(&tx.anchor.to_bytes()) {
             return Err(LedgerError::UnknownRoot);
@@ -250,6 +279,16 @@ impl ProvedLedgerState {
             return Err(BlocRefus::HauteurInattendue {
                 attendue: self.hauteur + 1,
                 recue: bloc.hauteur,
+            });
+        }
+        // FRONTIÈRE DU COÛT, comme au mempool : ce contrôle O(1) sur un champ déjà
+        // décodé précède l'instantané ET la boucle de vérification. Placé après, un
+        // bloc de 512 transactions valides suivies d'une 513ᵉ nous coûterait ~2 s de
+        // vérification STARK avant d'être refusé — un déni de service par bloc.
+        if bloc.transactions.len() > crate::bloc::MAX_TX_PAR_BLOC {
+            return Err(BlocRefus::TropDeTransactions {
+                borne: crate::bloc::MAX_TX_PAR_BLOC,
+                recues: bloc.transactions.len(),
             });
         }
 
@@ -768,6 +807,54 @@ mod tests {
         assert!(etat.is_spent(&nf));
         assert_eq!(etat.tete(), id);
         assert_eq!(etat.hauteur(), 1);
+    }
+
+    /// Une ANCRE doit survivre à l'application d'un bloc PLEIN.
+    ///
+    /// `remember_root` étant appelé à chaque insertion, une fenêtre plus courte qu'un
+    /// bloc était intégralement purgée par un seul bloc chargé — et la transaction
+    /// qu'un wallet mettait ≈1,8 s à prouver arrivait sur une ancre morte, refusée
+    /// avec un message qui désigne l'ancre et jamais la cause.
+    #[test]
+    fn une_ancre_survit_a_un_bloc_plein() {
+        let mut etat = ProvedLedgerState::with_depth(20);
+        let ancre = etat.tree.root();
+        assert!(etat.anchor_connu(&ancre));
+
+        // Autant d'insertions qu'un bloc plein en produit au maximum (2 sorties par
+        // transaction), plus une marge.
+        for i in 0..(crate::bloc::MAX_TX_PAR_BLOC as u64) {
+            etat.mint(&digest(i * 7 + 1)).unwrap();
+        }
+        assert!(
+            etat.anchor_connu(&ancre),
+            "l'ancre d'une transaction en vol doit survivre à un bloc plein"
+        );
+    }
+
+    /// Un bloc au-delà de la borne est refusé AVANT toute vérification coûteuse.
+    ///
+    /// Le contrôle est O(1) sur un champ déjà décodé. Placé après la boucle, un bloc
+    /// de 512 transactions valides suivies d'une 513ᵉ nous aurait coûté ~2 s de
+    /// vérification STARK avant le refus — un déni de service par bloc.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "sous-preuves gatées : --release")]
+    fn bloc_hors_borne_refuse_avant_verification() {
+        let (mut etat, tx) = setup();
+        // Une SEULE preuve, recopiée : le refus doit tomber avant qu'on en regarde
+        // une seule. Si le contrôle était mal placé, ce test échouerait sur une autre
+        // variante (Transaction { .. }) plutôt que sur celle-ci — c'est ce qui le
+        // rend probant.
+        let octets = tx.to_bytes();
+        let trop: Vec<circuit::ProvedTx> = (0..crate::bloc::MAX_TX_PAR_BLOC + 1)
+            .map(|_| circuit::ProvedTx::from_bytes(&octets).unwrap())
+            .collect();
+        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, trop);
+        assert!(matches!(
+            etat.appliquer_bloc(&bloc),
+            Err(BlocRefus::TropDeTransactions { .. })
+        ));
+        assert_eq!(etat.hauteur(), 0, "aucune trace du bloc refusé");
     }
 
     /// La position dans la chaîne SURVIT au redémarrage. Sans elle, un nœud rechargé

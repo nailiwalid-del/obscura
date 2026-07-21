@@ -124,8 +124,15 @@ fn annonce_declenche_une_demande_sur_le_fil() {
     serveur.join().expect("thread serveur");
 }
 
-/// Un pair qui envoie du BRUIT (message indécodable) est pénalisé, sans faire
-/// tomber le nœud : la surface réseau reste hostile jusqu'au bout de la chaîne.
+/// Un pair qui envoie une MALFORMATION est pénalisé, sans faire tomber le nœud : la
+/// surface réseau reste hostile jusqu'au bout de la chaîne.
+///
+/// ⚠️ Politique AFFINÉE : un tag applicatif inconnu ne pénalise plus. Il est
+/// indissociable d'un message d'une version FUTURE du protocole, et le pénaliser
+/// ferait bannir les nœuds d'une autre version en une centaine de secondes — avec eux
+/// s'effondrerait la diversité de groupes réseau dont dépend l'anti-eclipse, donc
+/// l'anonymat de Dandelion++. On sanctionne donc les malformations DANS une version
+/// connue (troncature, borne dépassée), jamais l'inconnu.
 #[test]
 fn message_indecodable_penalise_sans_faire_tomber_le_noeud() {
     let id_serveur = SigKeypair::generate();
@@ -152,12 +159,46 @@ fn message_indecodable_penalise_sans_faire_tomber_le_noeud() {
 
     let mut client = Runtime::new(noeud(2));
     let pair = client.connecter(adresse, &id_client).expect("handshake");
-    // Un tag de message inexistant : décodable au niveau transport, pas applicatif.
-    client.executer(vec![node::orchestration::Action::Envoyer(
-        pair,
-        Message::Annonce(vec![]),
-    )]);
-    // Puis du vrai bruit, injecté sous la couche applicative.
+    // Une ANNONCE TRONQUÉE : tag connu (1), longueur annoncée mais octets absents.
+    // C'est une malformation dans une version que nous comprenons — donc une faute.
+    client.envoyer_octets_bruts(pair, &[1, 2, 0, 0, 0]);
+
+    serveur.join().expect("thread serveur");
+}
+
+/// Un tag applicatif INCONNU ne pénalise pas : c'est un message d'une version future.
+///
+/// Le pénaliser ferait qu'une mise à jour de réseau partitionne le testnet toute
+/// seule — chaque nœud bannissant ceux qui parlent la version qu'il ne connaît pas
+/// encore, et dégradant au passage sa propre défense anti-eclipse.
+#[test]
+fn tag_inconnu_ne_penalise_pas() {
+    let id_serveur = SigKeypair::generate();
+    let id_client = SigKeypair::generate();
+
+    let ecoute = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();
+    let adresse = ecoute.local_addr().unwrap();
+
+    let serveur = std::thread::spawn(move || {
+        let mut rt = Runtime::new(noeud(1));
+        let (flux, _) = ecoute.accept().unwrap();
+        let pair = rt.accepter(flux, &id_serveur).expect("handshake");
+        rt.noeud_mut()
+            .pairs
+            .ajouter(pair, SocketAddr::from((Ipv4Addr::LOCALHOST, 1)));
+        assert!(
+            attendre(|| rt.pomper(0) > 0, Duration::from_secs(10)),
+            "message non reçu"
+        );
+        assert_eq!(
+            rt.noeud().pairs.get(&pair).map(|p| p.score),
+            Some(0),
+            "un tag d'une version future ne doit PAS pénaliser"
+        );
+    });
+
+    let mut client = Runtime::new(noeud(2));
+    let pair = client.connecter(adresse, &id_client).expect("handshake");
     client.envoyer_octets_bruts(pair, &[0xFF, 0xFF, 0xFF]);
 
     serveur.join().expect("thread serveur");

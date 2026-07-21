@@ -75,8 +75,38 @@ impl Runtime {
         Ok(l)
     }
 
+    /// Échéances posées sur CHAQUE flux, avant même le handshake.
+    ///
+    /// # Sans elles, un pair muet fige le nœud ENTIER
+    ///
+    /// Les lectures et écritures d'un `TcpStream` sont bloquantes et sans limite de
+    /// temps par défaut. Trois conséquences, toutes réelles :
+    ///
+    /// - un pair qui ouvre une connexion puis n'envoie jamais la première passe du
+    ///   handshake bloque la boucle principale dans `read_exact` — plus d'`accept`,
+    ///   plus de `pomper`, plus de `tick` Dandelion++ (les embargos n'expirent plus),
+    ///   plus de scellement, plus de sauvegarde d'état ;
+    /// - un pair qui cesse de LIRE fait bloquer notre `write_all` une fois les
+    ///   tampons pleins — et `executer` tient le verrou des liens pendant l'écriture,
+    ///   donc le nœud entier s'arrête ;
+    /// - dans les deux cas le nœud reste debout et silencieux : rien ne le distingue
+    ///   d'un nœud au repos.
+    ///
+    /// L'échéance transforme ces blocages définitifs en une erreur d'E/S, que le
+    /// reste du code traite déjà comme un lien mort. C'est un préalable à tout
+    /// service volumineux : sans elle, la protection la mieux conçue ne s'applique
+    /// qu'APRÈS le point de blocage.
+    const ECHEANCE: std::time::Duration = std::time::Duration::from_secs(20);
+
+    fn poser_echeances(flux: &TcpStream) -> Result<(), NetError> {
+        flux.set_read_timeout(Some(Self::ECHEANCE))
+            .and_then(|_| flux.set_write_timeout(Some(Self::ECHEANCE)))
+            .map_err(|e| NetError::Io(e.kind()))
+    }
+
     /// Accepte une connexion entrante, fait le handshake, et enregistre le lien.
     pub fn accepter(&mut self, flux: TcpStream, identite: &SigKeypair) -> Result<PeerId, NetError> {
+        Self::poser_echeances(&flux)?;
         let connexion = Connexion::accepter(flux, identite)?;
         self.enregistrer(connexion)
     }
@@ -88,6 +118,7 @@ impl Runtime {
         identite: &SigKeypair,
     ) -> Result<PeerId, NetError> {
         let flux = TcpStream::connect(adresse).map_err(|e| NetError::Io(e.kind()))?;
+        Self::poser_echeances(&flux)?;
         let connexion = Connexion::connecter(flux, identite)?;
         let id = self.enregistrer(connexion)?;
         // Le pair est authentifié : on le retient avec son adresse, pour que la
@@ -110,6 +141,14 @@ impl Runtime {
                             break; // la boucle principale s'est arrêtée
                         }
                     }
+                    // Une ÉCHÉANCE de lecture écoulée ne veut pas dire « lien mort » :
+                    // elle veut dire « ce pair est silencieux ». Un protocole piloté
+                    // par les événements passe l'essentiel de son temps silencieux —
+                    // confondre les deux couperait tous les liens toutes les 20
+                    // secondes et détruirait le réseau, en toute discrétion.
+                    Err(NetError::Io(
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut,
+                    )) => continue,
                     Err(_) => {
                         // Fermeture propre ou erreur : dans les deux cas le lien est
                         // fini. On le signale plutôt que de boucler à vide.
@@ -136,7 +175,14 @@ impl Runtime {
                         let actions = self.noeud.traiter(de, message, maintenant_ms);
                         self.executer(actions);
                     }
-                    // Message indécodable : le pair ne parle pas le protocole.
+                    // Une version que NOUS ne connaissons pas n'est pas une faute du
+                    // pair : le pénaliser bannirait, en cours de mise à jour, les
+                    // nœuds restés en arrière — et avec eux la diversité de groupes
+                    // réseau dont dépend l'anti-eclipse. On l'ignore, comme un bloc
+                    // qui ne s'enchaîne pas.
+                    Err(e) if e.version_inconnue() => {}
+                    // Malformation dans une version connue : là, le pair ne parle
+                    // pas le protocole.
                     Err(_) => self.noeud.message_invalide(&de),
                 },
                 Evenement::Deconnecte(de) => {

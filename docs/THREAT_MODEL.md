@@ -123,6 +123,44 @@ lèverait plus tard sans y toucher — supporter les réorganisations exigerait 
 redessiner l'état du ledger (arbre versionné, nullifiers datés par hauteur, journal de
 défaisage). La chaîne est linéaire et un bloc accepté est définitif.
 
+### Defauts trouves par revue adversariale et corriges
+
+Une revue multi-agents (4 concepteurs + 3 critiques : divergence, DoS, vie privee) a
+trouve six defauts dans la finalite telle que livree. Consignes parce que leur forme se
+reproduira :
+
+1. **Une borne verifiee au decodage ne protege que l'entrant.** `Noeud::sceller` ne
+   plafonnait pas `MAX_TX_PAR_BLOC` : le mempool tenant 5 000 transactions, un noeud
+   pouvait sceller un bloc localement valide, indiffusable et inacceptable par
+   quiconque - partition definitive, l'etat etant append-only. Regle qui en decoule :
+   *toute borne de `from_bytes` doit exister aussi dans le constructeur*.
+2. **La fenetre d'ancres etait plus courte qu'un bloc.** `RECENT_ROOTS_WINDOW = 100`
+   contre `MAX_TX_PAR_BLOC = 512`, `remember_root` appele a chaque insertion : un
+   bloc charge purgeait toutes les ancres. Un wallet passant environ 1,8 s a prouver
+   voyait sa transaction refusee pour « ancre inconnue » - message qui designe l'ancre
+   et jamais la cause. Vecteur adverse : n'importe qui pouvant sceller, on purgeait la
+   fenetre a partir du mempool honnete, sans fabriquer une preuve. Censure a cout nul.
+3. **Une version inconnue faisait bannir.** Un bloc d'une autre version devenait un
+   message indecodable, penalise -10, banni au dixieme bloc, soit 100 s. Les bannis
+   quittant la selection sortante, la diversite de groupes reseau s'effondrait - donc
+   l'anti-eclipse, donc l'anonymat de Dandelion++. Une mise a jour partitionnait le
+   reseau en degradant sa propre defense. On distingue desormais « version que je ne
+   connais pas » (aucune sanction) de « malformation dans une version connue »
+   (sanction).
+4. **Aucune echeance sur les sockets.** Un pair ouvrant une connexion sans jamais
+   parler figeait la boucle principale dans le handshake ; un pair cessant de lire
+   figeait `executer`, verrou tenu. Le noeud restait debout et muet. Correction
+   partielle : les echeances transforment le blocage en lien mort, mais `executer`
+   tient toujours le verrou pendant l'ecriture.
+5. **`apply_proved_tx` etait publique** : une seconde porte d'insertion dans l'arbre,
+   hors de tout bloc. Desormais `pub(crate)` - son seul appelant legitime est
+   `appliquer_bloc`.
+6. **Un bloc manque figeait le noeud en silence.** `ParentInattendu` ne produit ni
+   sanction (correct) ni signal (faux) : un noeud ayant manque un bloc refuse tous les
+   suivants pour toujours, indiscernable d'un noeud au repos. Un compteur
+   (`blocs_desaccordes`) le rend visible. **Le rattrapage de bloc reste a ecrire** :
+   il n'existe aucun moyen de redemander une hauteur manquante.
+
 ### Trou restant : un wallet ne peut toujours pas RECEVOIR
 
 Il lui faut rejouer dans l'ordre tous les commitments insérés dans l'arbre pour en
@@ -131,8 +169,40 @@ l'historique (`MerkleFrontier` = bord droit seulement) et n'a rien à servir. Le
 fonctionne de bout en bout (`crates/node/tests/paiement_wallet.rs`), mais la monnaie
 rendue sort de la vue du wallet faute d'index.
 
-C'est le prochain manque structurel : un nœud doit conserver et servir l'historique des
+C'est le prochain manque structurel : un noeud doit conserver et servir l'historique des
 sorties, et un wallet doit pouvoir le rejouer.
+
+**Contraintes de conception deja etablies par la revue** - a respecter quand cette
+brique sera ecrite, car chacune corrige un defaut identifie dans les premieres
+propositions :
+
+- **L'unite de synchronisation doit etre le BLOC, pas la plage de feuilles.** Raison :
+  `ProvedTx::anchor` est public et vaut la racine de l'arbre du WALLET, c'est-a-dire sa
+  position de synchronisation exacte. Des wallets s'arretant chacun a une feuille
+  differente publieraient donc chacun une ancre quasi unique - un pseudonyme permanent,
+  exactement le defaut corrige pour la cle d'intention. Ancres sur une frontiere de
+  bloc, tous les wallets a jour partagent la meme ancre.
+- **Aucun champ choisi par le client sur le fil**, hormis sa position. Un `max`
+  d'entrees par reponse est une empreinte de client qui survit a l'identite de
+  transport ephemere : le noeud separe les wallets par leur `max`, puis suit chacun par
+  sa position. Le debit se regle par la FREQUENCE des demandes.
+- **Jamais d'`Option<EncNote>`** : un drapeau de presence partitionnerait publiquement
+  les feuilles en emises et transferees. Une emission sans beneficiaire doit porter une
+  enveloppe FACTICE, indistinguable d'une vraie - c'est precisement la propriete que
+  les tests IK-CCA verifient deja.
+- **L'etranglement s'indexe sur `GroupeReseau` (/16, /32), jamais sur `PeerId`** : une
+  identite de pair est gratuite, et le wallet en tire une neuve a chaque commande. Le
+  groupe reseau est deja l'unite de cout Sybil du projet.
+- **Aucune indexation directe d'un indice venu du reseau** : `usize::try_from`,
+  `saturating_sub`, `get(..)` - jamais `&journal[i..i+n]`.
+- **Un noeud servant l'historique apprend l'IP, la cadence et la position de chaine** du
+  wallet, et peut MENTIR PAR OMISSION (taire une sortie : le paiement reste invisible,
+  la racine est intacte, rien ne l'attrape). Il ne peut ni fabriquer de credit ni
+  apprendre quelles notes sont les notres - le balayage est local. A ecrire tel quel.
+- **Le role d'archiviste est SEPARE et optionnel** : l'etat consensus reste borne
+  (frontier). Un noeud qui n'archive pas est valide, il ne peut simplement pas amorcer
+  de wallet. Ne jamais faire dependre l'admission d'une transaction du fait de servir
+  l'historique, sans quoi la confidentialite deviendrait un privilege d'operateur.
 
 ## Security Claims — Phase 3 (validité + witness-hiding 3z-b1)
 

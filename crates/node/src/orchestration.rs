@@ -66,6 +66,14 @@ pub struct Noeud {
     pub mempool: Mempool,
     pub pairs: TablePairs,
     pub dandelion: Dandelion,
+    /// Blocs refusés faute de s'enchaîner à notre tête, depuis le démarrage.
+    ///
+    /// Ne PAS sanctionner un tel bloc est correct (deux scellements simultanés, ou
+    /// simple retard). Mais se taire l'était moins : un nœud qui a manqué UN bloc
+    /// refuse ensuite tous les suivants, en silence, et reste figé pour toujours —
+    /// indiscernable d'un nœud au repos. Ce compteur est le seul signal qui les
+    /// distingue tant qu'aucun protocole de rattrapage n'existe.
+    blocs_desaccordes: u64,
 }
 
 impl Noeud {
@@ -80,7 +88,14 @@ impl Noeud {
             mempool: Mempool::new(),
             pairs: TablePairs::new(),
             dandelion: Dandelion::new(secret_dandelion),
+            blocs_desaccordes: 0,
         }
+    }
+
+    /// Nombre de blocs refusés faute de s'enchaîner. Non nul et qui croît = ce nœud
+    /// n'est PAS au repos, il est sur une autre chaîne ou il a manqué un bloc.
+    pub fn blocs_desaccordes(&self) -> u64 {
+        self.blocs_desaccordes
     }
 
     /// Soumet une transaction ÉMISE PAR CE NŒUD (depuis le wallet).
@@ -138,6 +153,20 @@ impl Noeud {
     /// compétition pour l'espace, cela n'achète rien aujourd'hui ; le jour où l'ordre
     /// aura de la valeur (MEV), ce critère devra changer.
     ///
+    /// # La borne est portée par la CONSTRUCTION, pas seulement par le décodage
+    ///
+    /// Le mempool tient jusqu'à `CAPACITE_DEFAUT` (5 000) transactions, très au-delà
+    /// de `MAX_TX_PAR_BLOC` (512). Sceller sans plafonner produisait un bloc
+    /// localement valide, **indiffusable** (le cadre réseau le refuse) et
+    /// **inacceptable par quiconque** (`from_bytes` rend `TropDeTransactions`) : le
+    /// nœud avançait seul sur une chaîne que personne ne pouvait rejoindre, et l'état
+    /// étant append-only, la partition était définitive.
+    ///
+    /// Règle générale qui en découle : **toute borne vérifiée dans `from_bytes` doit
+    /// l'être aussi dans le constructeur**, sinon elle ne protège que l'entrant.
+    ///
+    /// Le surplus n'est pas perdu : il reste au mempool pour le bloc suivant.
+    ///
     /// Retourne le bloc scellé et l'action de diffusion, ou `None` si le mempool ne
     /// contient rien à sceller.
     pub fn sceller(&mut self) -> Option<(Bloc, Vec<Action>)> {
@@ -146,6 +175,7 @@ impl Noeud {
             return None;
         }
         digests.sort_unstable();
+        digests.truncate(ledger::bloc::MAX_TX_PAR_BLOC);
 
         let transactions: Vec<circuit::ProvedTx> = digests
             .iter()
@@ -205,9 +235,19 @@ impl Noeud {
                 self.pairs.ajuster_score(&de, PENALITE_BLOC_INVALIDE);
                 Vec::new()
             }
-            // Chaînage : ni faute ni relais. Se taire est la bonne réponse — relayer
-            // un bloc qu'on n'a pas appliqué propagerait une chaîne qu'on ne suit pas.
-            Err(_) => Vec::new(),
+            // Chaînage : ni faute ni relais. Ne pas sanctionner est la bonne réponse
+            // (deux scellements simultanés, ou un simple retard), et relayer un bloc
+            // qu'on n'a pas appliqué propagerait une chaîne qu'on ne suit pas.
+            //
+            // ⚠️ MAIS on le COMPTE. Un nœud qui a manqué un bloc refuse ensuite tous
+            // les suivants et reste figé indéfiniment ; sans ce compteur, rien ne le
+            // distingue d'un nœud au repos. Le rattrapage de bloc (redemander la
+            // hauteur manquante) reste à écrire — c'est un manque du protocole, pas
+            // de cette fonction.
+            Err(_) => {
+                self.blocs_desaccordes += 1;
+                Vec::new()
+            }
         }
     }
 
