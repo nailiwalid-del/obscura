@@ -215,6 +215,9 @@ mod plan {
 
     /// Longueur de trace pour une profondeur d'arbre donnée : lignes utiles +
     /// lignes de blinding, arrondies à la puissance de 2 supérieure (winterfell).
+    /// (Depuis C2-T2, le constructeur passe par `Forme::trace_len` ; cette forme
+    /// libre reste la référence des tests d'équivalence 2/2. À retirer en C2-T8.)
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn trace_len(depth: usize) -> usize {
         (used_rows(depth) + BLIND_ROWS).next_power_of_two()
     }
@@ -371,6 +374,12 @@ mod plan {
         Err(_) => panic!("bornes MAX invalides"),
     };
     const _: () = assert!(FORME_MAX.width() <= winterfell::TraceInfo::MAX_TRACE_WIDTH);
+
+    /// Largeur du TAMPON de construction de trace : celle de la forme MAXIMALE.
+    /// Le tampon est transient (mémoire de travail du prouveur) ; la trace ÉMISE
+    /// garde la largeur de la FORME (spec D2) — les colonnes du tampon au-delà de
+    /// `forme.width()` ne sont jamais copiées dans la TraceTable.
+    pub(crate) const WIDTH_MAX: usize = FORME_MAX.width();
     // Et F22 reproduit exactement la géométrie des constantes historiques.
     const _: () = assert!(Forme::F22.width() == WIDTH);
     const _: () = assert!(Forme::F22.s_col() == S_COL);

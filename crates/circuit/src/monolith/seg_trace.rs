@@ -34,10 +34,67 @@ use winter_math::fields::f64::BaseElement;
 use winter_math::FieldElement;
 use winterfell::TraceTable;
 
+/// Témoin du monolithe segmenté à FORME VARIABLE (3z-c2) : m entrées, n sorties.
+///
+/// Construit VALIDÉ : la forme sort du constructeur ou pas du tout — les bornes
+/// `1..=MAX` vivent dans `Forme::new`, et les profondeurs des chemins doivent
+/// concorder (deux entrées prouvant à des profondeurs différentes ne décrivent pas
+/// le même arbre ; un témoin pareil est un bug de l'appelant, pas une entrée
+/// hostile — le prouveur est notre propre wallet — d'où l'`assert`).
+pub(crate) struct SegWitness {
+    pub secret: proved_hash::digest::ShieldedSecret,
+    pub inputs: Vec<crate::ProvedInput>,
+    pub outputs: Vec<crate::SpendNote>,
+    /// Consommé à partir de C2-T3 (les publics à forme variable sortent du témoin).
+    #[allow(dead_code)]
+    pub fee: u64,
+    forme: Forme,
+}
+
+impl SegWitness {
+    pub(crate) fn new(
+        secret: proved_hash::digest::ShieldedSecret,
+        inputs: Vec<crate::ProvedInput>,
+        outputs: Vec<crate::SpendNote>,
+        fee: u64,
+    ) -> Result<Self, FormeInvalide> {
+        let forme = Forme::new(inputs.len(), outputs.len())?;
+        let depth = inputs[0].path.len();
+        assert!(
+            inputs.iter().all(|i| i.path.len() == depth),
+            "tous les chemins d'un témoin doivent avoir la même profondeur"
+        );
+        Ok(SegWitness {
+            secret,
+            inputs,
+            outputs,
+            fee,
+            forme,
+        })
+    }
+
+    pub(crate) fn forme(&self) -> Forme {
+        self.forme
+    }
+
+    /// Conversion depuis le témoin 2/2 historique — le pont de parité : tant que
+    /// `prove_seg_monolith` prend un `MonolithWitness`, l'oracle côte-à-côte et
+    /// toute la suite 2/2 tournent sur le chemin GÉNÉRALISÉ via cette conversion.
+    pub(crate) fn depuis_2in2out(w: &MonolithWitness) -> SegWitness {
+        SegWitness::new(
+            w.secret.clone(),
+            w.inputs.to_vec(),
+            w.outputs.to_vec(),
+            w.fee,
+        )
+        .expect("2/2 est une forme valide")
+    }
+}
+
 /// Recopie `rows` dans le tampon segmenté à `(row_off, col_off)`. Pendant de
 /// `super::trace::segment`, mais pour la largeur `WIDTH` du layout SEGMENTÉ.
 fn seg_copy<const N: usize>(
-    dst: &mut [[BaseElement; WIDTH]],
+    dst: &mut [[BaseElement; WIDTH_MAX]],
     rows: &[[BaseElement; N]],
     row_off: usize,
     col_off: usize,
@@ -50,7 +107,7 @@ fn seg_copy<const N: usize>(
 /// Écrit un digest sur TOUTES les lignes d'une colonne porteuse (valeur constante,
 /// lisible depuis n'importe quel segment — c'est le mécanisme de chaînage
 /// inter-segments, inchangé par rapport au côte-à-côte).
-fn set_carrier_digest(rows: &mut [[BaseElement; WIDTH]], col: usize, d: &Digest) {
+fn set_carrier_digest(rows: &mut [[BaseElement; WIDTH_MAX]], col: usize, d: &Digest) {
     let be: [BaseElement; DIGEST_FELTS] = core::array::from_fn(|k| d.0[k].to_winter());
     for row in rows.iter_mut() {
         row[col..col + DIGEST_FELTS].copy_from_slice(&be);
@@ -58,7 +115,7 @@ fn set_carrier_digest(rows: &mut [[BaseElement; WIDTH]], col: usize, d: &Digest)
 }
 
 /// Idem pour une porteuse scalaire (montants).
-fn set_carrier_scalar(rows: &mut [[BaseElement; WIDTH]], col: usize, v: u64) {
+fn set_carrier_scalar(rows: &mut [[BaseElement; WIDTH_MAX]], col: usize, v: u64) {
     let be = BaseElement::new(v);
     for row in rows.iter_mut() {
         row[col] = be;
@@ -291,7 +348,7 @@ fn lignes_commitment(
 /// (forges comprises) — y compris la forge de padding, dont le digest ne peut pas
 /// se recalculer via `rescue::note_commitment`.
 #[cfg_attr(not(test), allow(dead_code))]
-fn commitment_injecte(w: &MonolithWitness, i: usize, forge: SegForge) -> Digest {
+fn commitment_injecte(w: &SegWitness, i: usize, forge: SegForge) -> Digest {
     let note = &w.inputs[i].note;
     let owner = forge.owner_commit(i, note.owner);
     let rho = forge.rho_commit(i, note.rho);
@@ -303,7 +360,7 @@ fn commitment_injecte(w: &MonolithWitness, i: usize, forge: SegForge) -> Digest 
 /// Feuille qui sera réellement injectée dans l'arbre pour l'entrée `i`, forges
 /// comprises. Utilisé par la pré-passe de reconstruction d'arbre.
 #[cfg_attr(not(test), allow(dead_code))]
-fn feuille_injectee(w: &MonolithWitness, i: usize, forge: SegForge) -> Digest {
+fn feuille_injectee(w: &SegWitness, i: usize, forge: SegForge) -> Digest {
     let cm = commitment_injecte(w, i, forge);
     let cm_leaf = forge.cm_feuille(i, cm);
     let leaf = proved_hash::merkle::leaf(&cm_leaf);
@@ -316,6 +373,15 @@ pub(crate) fn build_seg_trace(w: &MonolithWitness) -> TraceTable<BaseElement> {
     build_seg_trace_seeded(w, &mut rand::rngs::OsRng)
 }
 
+/// Point d'entrée à FORME VARIABLE (3z-c2). Les fonctions `MonolithWitness`
+/// ci-dessous convertissent vers celui-ci : UN seul chemin de construction.
+pub(crate) fn build_seg_trace_forme_seeded(
+    w: &SegWitness,
+    rng: &mut impl rand::Rng,
+) -> TraceTable<BaseElement> {
+    build_seg_trace_interne(w, rng, SegForge::Aucune)
+}
+
 /// Trace segmentée FORGÉE (tests de soundness) : aléa de production, mais une
 /// liaison sabotée.
 #[cfg_attr(not(test), allow(dead_code))]
@@ -323,7 +389,7 @@ pub(crate) fn build_seg_trace_forge(
     w: &MonolithWitness,
     forge: SegForge,
 ) -> TraceTable<BaseElement> {
-    build_seg_trace_interne(w, &mut rand::rngs::OsRng, forge)
+    build_seg_trace_interne(&SegWitness::depuis_2in2out(w), &mut rand::rngs::OsRng, forge)
 }
 
 /// Construit la trace segmentée du monolithe 2-in/2-out à partir du témoin `w`.
@@ -345,25 +411,22 @@ pub(crate) fn build_seg_trace_seeded(
     w: &MonolithWitness,
     rng: &mut impl rand::Rng,
 ) -> TraceTable<BaseElement> {
-    build_seg_trace_interne(w, rng, SegForge::Aucune)
+    build_seg_trace_forme_seeded(&SegWitness::depuis_2in2out(w), rng)
 }
 
 /// Cœur du constructeur, paramétré par le point de forge (`SegForge::Aucune` pour
 /// une trace honnête). UN seul chemin de code pour l'honnête et le forgé.
 fn build_seg_trace_interne(
-    w: &MonolithWitness,
+    w: &SegWitness,
     rng: &mut impl rand::Rng,
     forge: SegForge,
 ) -> TraceTable<BaseElement> {
+    let f = w.forme();
     let depth = w.inputs[0].path.len();
-    assert_eq!(
-        depth,
-        w.inputs[1].path.len(),
-        "les deux chemins doivent avoir la même profondeur"
-    );
-    let len = trace_len(depth);
-    let mut rows = vec![[BaseElement::ZERO; WIDTH]; len];
-    let schedule = schedule_2in2out();
+    let len = f.trace_len(depth);
+    // Tampon à largeur MAX (transient) ; la trace ÉMISE garde `f.width()` colonnes
+    // — spec D2 : une 1-in/2-out ne paie pas les colonnes d'une 4-in/4-out.
+    let mut rows = vec![[BaseElement::ZERO; WIDTH_MAX]; len];
 
     // Pré-passe de RECONSTRUCTION D'ARBRE. Une forge qui altère le commitment ou la
     // feuille change la racine repliée : si on gardait les chemins du témoin, les
@@ -373,22 +436,28 @@ fn build_seg_trace_interne(
     // self-consistante et que SEULE la liaison visée diffère.
     // (La reconstruction est gatée `cfg(test)` : hors tests, `forge` vaut toujours
     // `Aucune` et les chemins sont ceux du témoin.)
-    let chemins_temoin = || [w.inputs[0].path.clone(), w.inputs[1].path.clone()];
+    let chemins_temoin = || -> Vec<Vec<Digest>> {
+        w.inputs.iter().map(|i| i.path.clone()).collect()
+    };
     #[cfg(test)]
-    let chemins: [Vec<Digest>; 2] = if forge.rebatit_arbre() {
+    let chemins: Vec<Vec<Digest>> = if forge.rebatit_arbre() {
+        // Les forges à reconstruction restent 2/2 jusqu'à C2-T4 (le helper
+        // `build_tree_from_leaves` est câblé sur deux feuilles) : asserté, pas
+        // silencieusement faux sur une autre forme.
+        assert_eq!(f, Forme::F22, "forge à reconstruction d'arbre : 2/2 seulement (C2-T4)");
         let f0 = feuille_injectee(w, 0, forge);
         let f1 = feuille_injectee(w, 1, forge);
         let (_root, p0, p1) = super::trace::build_tree_from_leaves(&f0, &f1);
-        [p0, p1]
+        vec![p0, p1]
     } else {
         chemins_temoin()
     };
     #[cfg(not(test))]
-    let chemins: [Vec<Digest>; 2] = chemins_temoin();
+    let chemins: Vec<Vec<Digest>> = chemins_temoin();
 
     // --- Segment KEY : owner ∧ nk du MÊME secret. ---
     let key_i = 0;
-    debug_assert_eq!(schedule[key_i], SegKind::Key);
+    debug_assert_eq!(f.seg_kind(key_i), SegKind::Key);
     // Forge SecretNk : le bloc nk part d'un secret DIFFÉRENT. La porteuse NK_C et
     // le nullifier consomment ensuite ce nk = H_nk(s') en cascade HONNÊTE — seule
     // la liaison secret owner↔nk peut donc mordre.
@@ -400,7 +469,7 @@ fn build_seg_trace_interne(
     // segment ; le reste est inactif (voir seg_layout : alignement sur le cycle 16).
     debug_assert_eq!(kr.len(), KEY_USED_ROWS);
     // (`KEY_USED_ROWS <= KEY_LEN` est garanti par une garde compile-time de seg_layout.)
-    seg_copy(&mut rows, &kr, seg_start(key_i, depth), SEG_KEY_OFF);
+    seg_copy(&mut rows, &kr, f.seg_start(key_i, depth), SEG_KEY_OFF);
     let owner = read_digest(&kr, kr.len() - 1, RATE_START);
     let nk = read_digest(&kr, kr.len() - 1, KEY_NK_LOCAL_OFF + RATE_START);
     set_carrier_digest(&mut rows, OWNER_C, &owner);
@@ -413,9 +482,10 @@ fn build_seg_trace_interne(
     let mut root_vu: Option<Digest> = None;
     let (mut n_in, mut n_out) = (0usize, 0usize);
 
-    for (i, kind) in schedule.iter().enumerate() {
-        let start = seg_start(i, depth);
-        let seg_rows = seg_len(*kind, depth);
+    for i in 0..f.n_segments() {
+        let kind = f.seg_kind(i);
+        let start = f.seg_start(i, depth);
+        let seg_rows = seg_len(kind, depth);
         match kind {
             SegKind::Key => {
                 // Aucune contribution à l'équilibre : `S` reste constant, bits à 0.
@@ -491,15 +561,15 @@ fn build_seg_trace_interne(
                     None => root_vu = Some(root_i),
                     Some(r0) => debug_assert_eq!(
                         *r0, root_i,
-                        "les deux entrées doivent prouver contre la MÊME racine"
+                        "TOUTES les entrées doivent prouver contre la MÊME racine"
                     ),
                 }
 
                 // Porteuses de l'entrée + bits/équilibre du montant.
-                set_carrier_digest(&mut rows, RHO_C[n_in], &note.rho);
-                set_carrier_digest(&mut rows, CM_C[n_in], &cm);
-                set_carrier_digest(&mut rows, LEAF_C[n_in], &leaf_d);
-                set_carrier_scalar(&mut rows, VIN_C[n_in], note.value);
+                set_carrier_digest(&mut rows, f.rho_c(n_in), &note.rho);
+                set_carrier_digest(&mut rows, f.cm_c(n_in), &cm);
+                set_carrier_digest(&mut rows, f.leaf_c(n_in), &leaf_d);
+                set_carrier_scalar(&mut rows, f.vin_c(n_in), note.value);
                 s = fill_segment_balance(
                     &mut rows,
                     start,
@@ -508,6 +578,7 @@ fn build_seg_trace_interne(
                     true,
                     s,
                     forge.vacc_initial(true, n_in),
+                    f.s_col(),
                 );
 
                 n_in += 1;
@@ -523,7 +594,7 @@ fn build_seg_trace_interne(
                 debug_assert_eq!(out_rows.len(), CM_ROWS_END - CM_ROWS_START);
                 seg_copy(&mut rows, &out_rows, start + CM_ROWS_START, SEG_SPONGE_OFF);
 
-                set_carrier_scalar(&mut rows, VOUT_C[n_out], valeur_out);
+                set_carrier_scalar(&mut rows, f.vout_c(n_out), valeur_out);
                 s = fill_segment_balance(
                     &mut rows,
                     start,
@@ -532,13 +603,14 @@ fn build_seg_trace_interne(
                     false,
                     s,
                     forge.vacc_initial(false, n_out),
+                    f.s_col(),
                 );
 
                 n_out += 1;
             }
         }
     }
-    debug_assert_eq!((n_in, n_out), (2, 2));
+    debug_assert_eq!((n_in, n_out), (f.m(), f.n()));
 
     // Porteuse de racine : partagée, assertée publique une seule fois par l'AIR.
     if let Some(root) = root_vu {
@@ -547,8 +619,12 @@ fn build_seg_trace_interne(
 
     // --- Blinding (witness-hiding 3z-b1) : aléa frais sur TOUTES les colonnes de
     //     la région [used, len), S_COL comprise (l'AIR y est gatée par blind_off). ---
-    let used = used_rows(depth);
-    debug_assert_eq!(used, seg_start(N_SEGMENTS - 1, depth) + seg_len(schedule[N_SEGMENTS - 1], depth));
+    let used = f.used_rows(depth);
+    debug_assert_eq!(
+        used,
+        f.seg_start(f.n_segments() - 1, depth)
+            + seg_len(f.seg_kind(f.n_segments() - 1), depth)
+    );
     for row in rows.iter_mut().skip(used) {
         for cell in row.iter_mut() {
             *cell = felt_alea(rng);
@@ -571,15 +647,17 @@ fn build_seg_trace_interne(
                     *cell = BaseElement::new(0xDEAD_BEEF);
                 }
                 rows[r][SEG_BALBIT_OFF + SEG_BAL_BIT] = BaseElement::new(5); // non booléen
-                rows[r][S_COL] = BaseElement::new(999_999); // S qui saute
+                rows[r][f.s_col()] = BaseElement::new(999_999); // S qui saute
                 rows[r][OWNER_C] = BaseElement::new(1); // porteuse discontinue
             }
         }
     }
 
-    let mut trace = TraceTable::new(WIDTH, len);
+    // Émission à la LARGEUR DE LA FORME : les colonnes du tampon au-delà de
+    // `f.width()` (réservées aux formes plus larges) ne sortent jamais d'ici.
+    let mut trace = TraceTable::new(f.width(), len);
     for (i, row) in rows.iter().enumerate() {
-        trace.update_row(i, row);
+        trace.update_row(i, &row[..f.width()]);
     }
     trace
 }
@@ -594,14 +672,16 @@ fn build_seg_trace_interne(
 /// les bits, remise à 0 au début du segment. Les lignes au-delà de `RANGE_BITS`
 /// portent un bit nul (elles ne contribuent pas) — c'est ce qui borne le montant à
 /// `< 2^RANGE_BITS`.
+#[allow(clippy::too_many_arguments)]
 fn fill_segment_balance(
-    rows: &mut [[BaseElement; WIDTH]],
+    rows: &mut [[BaseElement; WIDTH_MAX]],
     start: usize,
     seg_rows: usize,
     value: u64,
     est_entree: bool,
     s_initial: BaseElement,
     vacc_initial: BaseElement,
+    s_col: usize,
 ) -> BaseElement {
     let sign = if est_entree {
         BaseElement::ONE
@@ -623,7 +703,7 @@ fn fill_segment_balance(
         let bit_be = BaseElement::new(bit);
         row[SEG_BALBIT_OFF + SEG_BAL_BIT] = bit_be;
         row[SEG_BALBIT_OFF + SEG_BAL_VACC] = vacc;
-        row[S_COL] = s;
+        row[s_col] = s;
         if r < crate::range_check::RANGE_BITS {
             let pow = BaseElement::new(1u64 << r);
             s += sign * bit_be * pow;
@@ -687,6 +767,178 @@ mod tests {
 
     /// Lit la cellule `(row, col)` d'une `TraceTable` (l'API winterfell est
     /// `get(col, row)` — on garde l'ordre `(row, col)` ici, plus lisible).
+    /// Témoin à forme (m, n) sur un VRAI arbre partagé (profondeur 2, jusqu'à
+    /// 4 feuilles) : toutes les entrées prouvent contre la même racine, comme
+    /// l'exige le constructeur.
+    fn witness_forme(m: usize, n: usize) -> SegWitness {
+        use proved_hash::merkle::ProvedMerkleTree;
+        let secret = ShieldedSecret::from_felts(core::array::from_fn(|i| {
+            Felt::from_canonical_u64(4_000 + i as u64).unwrap()
+        }));
+        let owner = proved_hash::rescue::hash(Domain::Owner, secret.as_felts());
+        let d = |seed: u64| {
+            Digest(core::array::from_fn(|i| {
+                Felt::from_canonical_u64(seed + i as u64).unwrap()
+            }))
+        };
+
+        let notes: Vec<crate::SpendNote> = (0..m)
+            .map(|i| crate::SpendNote {
+                value: 1_000 * (i as u64 + 1),
+                owner,
+                rho: d(100 + 10 * i as u64),
+                r: d(200 + 10 * i as u64),
+            })
+            .collect();
+        let mut arbre = ProvedMerkleTree::new(2);
+        let index: Vec<u64> = notes
+            .iter()
+            .map(|note| {
+                let cm = proved_hash::rescue::note_commitment(
+                    note.value, &note.owner, &note.rho, &note.r,
+                );
+                arbre.append(&cm)
+            })
+            .collect();
+        let inputs: Vec<crate::ProvedInput> = notes
+            .into_iter()
+            .zip(index)
+            .map(|(note, i)| crate::ProvedInput {
+                note,
+                path: arbre.path(i).unwrap(),
+                index: i,
+            })
+            .collect();
+
+        let total: u64 = inputs.iter().map(|i| i.note.value).sum();
+        let fee = 7u64;
+        // Sorties : répartition quelconque qui équilibre (dernière = reste).
+        let part = (total - fee) / n as u64;
+        let outputs: Vec<crate::SpendNote> = (0..n)
+            .map(|j| crate::SpendNote {
+                value: if j == n - 1 {
+                    total - fee - part * (n as u64 - 1)
+                } else {
+                    part
+                },
+                owner: d(500 + 10 * j as u64),
+                rho: d(600 + 10 * j as u64),
+                r: d(700 + 10 * j as u64),
+            })
+            .collect();
+
+        SegWitness::new(secret, inputs, outputs, fee).expect("forme valide")
+    }
+
+    /// SANITÉ PARAMÉTRIQUE sur 5 formes : la trace émise a la largeur de SA forme,
+    /// chaque porteuse est à SA colonne, et l'accumulateur d'équilibre traverse le
+    /// schedule variable de 0 à `Σin − Σout = fee`.
+    ///
+    /// C'est le test qui donnera son sens à l'AIR paramétrée (C2-T3) : si le
+    /// constructeur plaçait une porteuse une colonne trop loin sur la forme 4/1,
+    /// aucune suite à forme fixe ne le verrait — et l'AIR contraindrait alors des
+    /// cellules vides, preuve valide sur un statement vide.
+    #[test]
+    fn trace_parametrique_5_formes() {
+        use winter_math::StarkField;
+        for (m, n) in [(1, 1), (2, 2), (4, 4), (1, 4), (4, 1)] {
+            let w = witness_forme(m, n);
+            let f = w.forme();
+            let t = build_seg_trace_forme_seeded(&w, &mut rand::rngs::OsRng);
+            let etiquette = format!("forme {m}/{n}");
+            let depth = 2;
+
+            // La trace émise a la LARGEUR DE LA FORME (spec D2), pas celle du tampon.
+            assert_eq!(t.width(), f.width(), "{etiquette}");
+            assert_eq!(t.length(), f.trace_len(depth), "{etiquette}");
+
+            // Porteuses : chaque entrée et chaque sortie à SA colonne.
+            for (i, input) in w.inputs.iter().enumerate() {
+                assert_eq!(
+                    cell_digest(&t, 0, f.rho_c(i)),
+                    input.note.rho,
+                    "{etiquette} rho[{i}]"
+                );
+                assert_eq!(
+                    cell(&t, 0, f.vin_c(i)),
+                    BaseElement::new(input.note.value),
+                    "{etiquette} vin[{i}]"
+                );
+            }
+            for (j, out) in w.outputs.iter().enumerate() {
+                assert_eq!(
+                    cell(&t, 0, f.vout_c(j)),
+                    BaseElement::new(out.value),
+                    "{etiquette} vout[{j}]"
+                );
+            }
+
+            // L'accumulateur S traverse le schedule : 0 au départ, cumul signé à
+            // chaque frontière de segment, fee à l'entame du dernier segment + sa
+            // contribution — soit, à la dernière ligne utile, S = fee une fois la
+            // dernière sortie retranchée. On vérifie les frontières, qui suffisent :
+            // l'intérieur des segments est couvert par `equilibre_chaine_de_zero_a_fee`.
+            let mut attendu = 0i128;
+            for i in 0..f.n_segments() {
+                let s_frontiere = cell(&t, f.seg_start(i, depth), f.s_col());
+                let attendu_be = if attendu >= 0 {
+                    BaseElement::new(attendu as u64)
+                } else {
+                    -BaseElement::new((-attendu) as u64)
+                };
+                assert_eq!(s_frontiere, attendu_be, "{etiquette} S au segment {i}");
+                match f.seg_kind(i) {
+                    SegKind::Key => {}
+                    SegKind::Input => attendu += w.inputs[i - 1].note.value as i128,
+                    SegKind::Output => {
+                        attendu -= w.outputs[i - 1 - f.m()].value as i128;
+                    }
+                }
+            }
+            assert_eq!(
+                attendu, w.fee as i128,
+                "{etiquette} : Σin − Σout = fee (témoin équilibré)"
+            );
+
+            // Racine : la porteuse ROOT_C vaut la racine de l'arbre partagé —
+            // TOUTES les entrées ont replié vers elle (le debug_assert du
+            // constructeur l'exige déjà ; ici on le voit depuis la trace émise).
+            let _ = BaseElement::MODULUS; // (use) — garde l'import justifié
+            assert_eq!(
+                cell_digest(&t, 0, ROOT_C),
+                {
+                    use proved_hash::merkle::ProvedMerkleTree;
+                    let mut a = ProvedMerkleTree::new(2);
+                    for input in &w.inputs {
+                        let note = &input.note;
+                        let cm = proved_hash::rescue::note_commitment(
+                            note.value, &note.owner, &note.rho, &note.r,
+                        );
+                        a.append(&cm);
+                    }
+                    a.root()
+                },
+                "{etiquette} : ROOT_C = racine de l'arbre partagé"
+            );
+        }
+    }
+
+    /// Les BORNES du témoin vivent dans son constructeur : 0 entrée ou 5 sorties
+    /// sont refusées AVANT toute construction de trace.
+    #[test]
+    fn witness_hors_bornes_refuse() {
+        let bon = witness_forme(1, 1);
+        // 0 entrée : le constructeur de Forme refuse (aucune autorité de dépense).
+        assert!(
+            SegWitness::new(bon.secret.clone(), Vec::new(), bon.outputs.clone(), 0).is_err()
+        );
+        // 5 sorties : au-delà de MAX_OUT.
+        let trop: Vec<crate::SpendNote> = (0..MAX_OUT + 1)
+            .map(|_| bon.outputs[0].clone())
+            .collect();
+        assert!(SegWitness::new(bon.secret.clone(), bon.inputs.clone(), trop, 0).is_err());
+    }
+
     fn cell(t: &TraceTable<BaseElement>, row: usize, col: usize) -> BaseElement {
         t.get(col, row)
     }

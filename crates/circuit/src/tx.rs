@@ -51,6 +51,7 @@ use winter_math::fields::f64::BaseElement;
 pub const INTENT_DOMAIN: &str = "obscura/proved-tx-intent/v3";
 
 /// Une entrée à dépenser : la note, son chemin de Merkle et sa position.
+#[derive(Clone)]
 pub struct ProvedInput {
     pub note: SpendNote,
     pub path: Vec<Digest>,
