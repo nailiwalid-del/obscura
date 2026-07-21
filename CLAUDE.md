@@ -292,7 +292,7 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   qui ne pilote rien (la position n'avance que sur la tranche demandée) ; `hauteur_tete <
   hauteur` est refusé au décodage. Testé sur sockets réelles
   (`crates/node/tests/synchronisation.rs`).
-  ⚠️ Restent : `executer` tient le verrou pendant l'écriture ; `ArchiveBlocs` (blocs récents,
+  ⚠️ Restent : `ArchiveBlocs` (blocs récents,
   rattrapage) NON persistée — à ne pas confondre avec l'historique des sorties, qui
   l'est ; un nœud sur une chaîne DIVERGENTE ne se répare pas (état append-only) ;
   le découpage multi-morceaux n'est testé qu'au niveau du FORMAT (une genèse plafonne à

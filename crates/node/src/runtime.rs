@@ -8,8 +8,11 @@
 //! # Modèle de concurrence
 //!
 //! Un **thread de lecture par connexion**, qui pousse les messages reçus dans une
-//! file commune. La boucle principale dépile, appelle `Noeud::traiter`, et exécute
-//! les actions en écrivant sur les connexions.
+//! file commune. La boucle principale dépile, appelle `Noeud::traiter`, et DÉPOSE
+//! les actions dans la file d'envoi de chaque lien — un **thread d'écriture par
+//! connexion** (file bornée) fait les E/S. La boucle principale ne touche donc
+//! JAMAIS une socket : un pair lent ne peut retarder ni `pomper`, ni `tick`, ni
+//! le scellement.
 //!
 //! Lecture et écriture d'une même connexion sont **découplées** (`Connexion::separer`) :
 //! sans cela, un thread bloqué en lecture sur un pair silencieux empêcherait aussi
@@ -19,11 +22,11 @@ use crate::message::Message;
 use crate::orchestration::{Action, Noeud};
 use crypto::sig::SigKeypair;
 use net::pairs::PeerId;
-use net::{Connexion, Ecrivain, NetError};
+use net::{Connexion, NetError};
 use std::collections::HashMap;
 use std::io;
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel, Receiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -35,8 +38,20 @@ pub enum Evenement {
     Deconnecte(PeerId),
 }
 
-/// Ensemble des liens sortants ouverts, adressables par pair.
-type Liens = Arc<Mutex<HashMap<PeerId, Ecrivain<TcpStream>>>>;
+/// Profondeur de la file d'envoi d'UN lien, en messages.
+///
+/// Elle borne deux choses à la fois : la mémoire qu'un pair LENT peut nous faire
+/// retenir (≤ `FILE_ENVOI × MAX_CADRE` ≈ 16 Mio par lien, au pire), et la patience
+/// qu'on lui accorde — une file pleine signifie qu'il n'absorbe plus depuis
+/// longtemps, et le lien est coupé comme le ferait une erreur d'écriture. C'est le
+/// remplacement de l'ancienne politique « échéance d'écriture de 20 s sous le
+/// verrou global », qui figeait la boucle PRINCIPALE en attendant.
+const FILE_ENVOI: usize = 16;
+
+/// Ensemble des liens ouverts, adressables par pair. La valeur est la FILE
+/// d'envoi du lien, pas l'écrivain : celui-ci vit dans son thread d'écriture,
+/// et la boucle principale ne fait que déposer (jamais d'E/S sous ce verrou).
+type Liens = Arc<Mutex<HashMap<PeerId, SyncSender<Vec<u8>>>>>;
 
 /// Nœud en fonctionnement : sockets, threads de lecture, exécution des actions.
 pub struct Runtime {
@@ -87,8 +102,8 @@ impl Runtime {
     ///   plus de `pomper`, plus de `tick` Dandelion++ (les embargos n'expirent plus),
     ///   plus de scellement, plus de sauvegarde d'état ;
     /// - un pair qui cesse de LIRE fait bloquer notre `write_all` une fois les
-    ///   tampons pleins — et `executer` tient le verrou des liens pendant l'écriture,
-    ///   donc le nœud entier s'arrête ;
+    ///   tampons pleins — le thread d'écriture de CE lien s'arrête dessus (la
+    ///   boucle principale, elle, continue : elle ne fait que déposer en file) ;
     /// - dans les deux cas le nœud reste debout et silencieux : rien ne le distingue
     ///   d'un nœud au repos.
     ///
@@ -140,7 +155,8 @@ impl Runtime {
         Ok(id)
     }
 
-    /// Scinde la connexion, lance son thread de lecture, mémorise l'écrivain.
+    /// Scinde la connexion, lance ses threads de LECTURE et d'ÉCRITURE, mémorise
+    /// la file d'envoi.
     fn enregistrer(&mut self, connexion: Connexion<TcpStream>) -> Result<PeerId, NetError> {
         let id = PeerId::depuis_identite(connexion.pair());
         let (mut lecteur, ecrivain) = connexion.separer(|f| f.try_clone())?;
@@ -172,7 +188,23 @@ impl Runtime {
             }
         });
 
-        self.liens.lock().unwrap().insert(id, ecrivain);
+        // Thread d'ÉCRITURE : seul propriétaire de l'écrivain (donc du chiffrement
+        // et du compteur de séquence de cette direction). Il meurt quand la file
+        // est fermée (lien retiré de la table) ou quand l'écriture échoue — auquel
+        // cas il le SIGNALE, comme le fait le thread de lecture.
+        let (file_envoi, a_envoyer) = std::sync::mpsc::sync_channel::<Vec<u8>>(FILE_ENVOI);
+        let vers_boucle = self.emetteur_evenements.clone();
+        let mut ecrivain = ecrivain;
+        thread::spawn(move || {
+            while let Ok(octets) = a_envoyer.recv() {
+                if ecrivain.envoyer(&octets).is_err() {
+                    let _ = vers_boucle.send(Evenement::Deconnecte(id));
+                    break;
+                }
+            }
+        });
+
+        self.liens.lock().unwrap().insert(id, file_envoi);
         Ok(id)
     }
 
@@ -212,18 +244,23 @@ impl Runtime {
         traites
     }
 
-    /// Exécute les actions décidées par l'orchestration.
+    /// Exécute les actions décidées par l'orchestration — en DÉPOSANT, jamais en
+    /// écrivant : les E/S appartiennent aux threads d'écriture. Le verrou des
+    /// liens n'est donc tenu que le temps d'un `try_send`, et un pair lent ne
+    /// retarde plus la boucle principale.
     ///
-    /// Une écriture qui échoue retire simplement le lien : un pair injoignable ne
-    /// doit ni faire paniquer le nœud, ni bloquer les autres envois.
+    /// Une file PLEINE vaut lien mort : le pair n'absorbe plus depuis
+    /// `FILE_ENVOI` messages, on coupe — même politique que l'erreur d'écriture,
+    /// décidée ici plutôt que subie 20 s plus tard sous échéance. Le thread
+    /// d'écriture meurt de lui-même quand sa file est fermée.
     pub fn executer(&mut self, actions: Vec<Action>) {
         let mut liens = self.liens.lock().unwrap();
         for action in actions {
             match action {
                 Action::Envoyer(vers, message) => {
                     let octets = message.to_bytes();
-                    if let Some(e) = liens.get_mut(&vers) {
-                        if e.envoyer(&octets).is_err() {
+                    if let Some(file) = liens.get(&vers) {
+                        if file.try_send(octets).is_err() {
                             liens.remove(&vers);
                         }
                     }
@@ -231,8 +268,8 @@ impl Runtime {
                 Action::Diffuser(message) => {
                     let octets = message.to_bytes();
                     let mut morts: Vec<PeerId> = Vec::new();
-                    for (id, e) in liens.iter_mut() {
-                        if e.envoyer(&octets).is_err() {
+                    for (id, file) in liens.iter() {
+                        if file.try_send(octets.clone()).is_err() {
                             morts.push(*id);
                         }
                     }
@@ -259,11 +296,12 @@ impl Runtime {
     ///
     /// Réservé aux tests : permet d'injecter du bruit décodable au niveau TRANSPORT
     /// mais pas au niveau applicatif, afin d'éprouver la robustesse du nœud face à
-    /// un pair authentifié mais non conforme.
+    /// un pair authentifié mais non conforme. Passe par la MÊME file que le trafic
+    /// normal (l'ordre relatif des envois vers un pair est préservé).
     pub fn envoyer_octets_bruts(&mut self, vers: PeerId, octets: &[u8]) {
-        let mut liens = self.liens.lock().unwrap();
-        if let Some(e) = liens.get_mut(&vers) {
-            let _ = e.envoyer(octets);
+        let liens = self.liens.lock().unwrap();
+        if let Some(file) = liens.get(&vers) {
+            let _ = file.try_send(octets.to_vec());
         }
     }
 }
