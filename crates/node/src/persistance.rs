@@ -500,7 +500,7 @@ mod tests {
         .unwrap();
         let mut etat = d.charger_ou_amorcer_archive(&genese).unwrap();
         assert_eq!(etat.historique().unwrap().len(), 2);
-        let bloc = Bloc::sceller(&etat.tete(), 1, Vec::new());
+        let bloc = Bloc::sceller(&etat.tete(), 1, Vec::new()).unwrap();
         etat.appliquer_bloc(&bloc).unwrap();
         d.enregistrer_etat(&etat).unwrap();
 
@@ -537,7 +537,7 @@ mod tests {
 
         // L'état avance d'un bloc et est sauvegardé SEUL — exactement ce qu'un crash
         // entre les deux écritures produirait dans le mauvais sens.
-        let bloc = Bloc::sceller(&etat.tete(), 1, Vec::new());
+        let bloc = Bloc::sceller(&etat.tete(), 1, Vec::new()).unwrap();
         etat.appliquer_bloc(&bloc).unwrap();
         etat.save(&dir.join(FICHIER_ETAT)).unwrap();
 
@@ -574,7 +574,7 @@ mod tests {
         let genese =
             Bloc::genese_avec(vec![ledger::proved_wallet::emission_factice(&digest(1))]).unwrap();
         let mut etat = d.charger_ou_amorcer_etat(&genese).unwrap(); // SANS archive
-        let bloc = Bloc::sceller(&etat.tete(), 1, Vec::new());
+        let bloc = Bloc::sceller(&etat.tete(), 1, Vec::new()).unwrap();
         etat.appliquer_bloc(&bloc).unwrap();
         d.enregistrer_etat(&etat).unwrap();
         assert!(

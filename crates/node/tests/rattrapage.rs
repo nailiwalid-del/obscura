@@ -182,7 +182,7 @@ fn un_noeud_qui_a_manque_un_bloc_rattrape() {
     //    en accepte — c'est le plus court moyen de faire avancer A d'une hauteur
     //    sans fabriquer une seconde preuve STARK. Il joue exactement le rôle du
     //    « bloc suivant » que B ne saura pas enchaîner.
-    let bloc2 = Bloc::sceller(&a.noeud().etat.tete(), 2, Vec::new());
+    let bloc2 = Bloc::sceller(&a.noeud().etat.tete(), 2, Vec::new()).unwrap();
     let id2 = bloc2.id();
     let actions = a
         .noeud_mut()
@@ -273,7 +273,7 @@ fn deux_noeuds_desaccordes_ne_bouclent_pas() {
     );
     let fictif = pair_fictif();
     for h in 1..=3u64 {
-        let b = Bloc::sceller(&noeud_a.etat.tete(), h, Vec::new());
+        let b = Bloc::sceller(&noeud_a.etat.tete(), h, Vec::new()).unwrap();
         let _ = noeud_a.traiter(fictif, Message::Bloc(Box::new(b)), 0);
     }
     assert_eq!(noeud_a.etat.hauteur(), 3);

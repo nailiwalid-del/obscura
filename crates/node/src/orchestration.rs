@@ -272,18 +272,43 @@ impl Noeud {
             return None;
         }
         digests.sort_unstable();
-        digests.truncate(ledger::bloc::MAX_TX_PAR_BLOC);
 
-        let transactions: Vec<circuit::ProvedTx> = digests
-            .iter()
-            .filter_map(|d| self.mempool.get(d))
-            .filter_map(|tx| ProvedTx::from_bytes(&tx.to_bytes()).ok())
-            .collect();
+        // SÉLECTION SOUS DOUBLE BUDGET : nombre ET octets. Le second est le seul qui
+        // garantisse un bloc DIFFUSABLE — à ≈68 Kio la transaction, la borne de 512
+        // est atteinte des dizaines de fois après le cadre réseau. On s'arrête au
+        // premier dépassement plutôt que de continuer à chercher plus petit : l'ordre
+        // est celui du digest, le fausser ici rendrait deux nœuds divergents.
+        let mut octets = ledger::bloc::SURCOUT_BLOC_VIDE;
+        let mut transactions: Vec<circuit::ProvedTx> = Vec::new();
+        let mut retenus: Vec<[u8; 64]> = Vec::new();
+        for d in &digests {
+            if transactions.len() >= ledger::bloc::MAX_TX_PAR_BLOC {
+                break;
+            }
+            let Some(brute) = self.mempool.get(d) else {
+                continue;
+            };
+            let o = brute.to_bytes();
+            let cout = ledger::bloc::cout_transaction(o.len());
+            if octets + cout > ledger::bloc::MAX_OCTETS_BLOC {
+                break;
+            }
+            let Ok(tx) = ProvedTx::from_bytes(&o) else {
+                continue;
+            };
+            octets += cout;
+            transactions.push(tx);
+            retenus.push(*d);
+        }
         if transactions.is_empty() {
             return None;
         }
+        // Seuls les RETENUS quittent le mempool : ce qui n'entrait pas dans ce bloc
+        // doit rester candidat pour le suivant, sinon sceller PERDRAIT des paiements.
+        let digests = retenus;
 
-        let bloc = Bloc::sceller(&self.etat.tete(), self.etat.hauteur() + 1, transactions);
+        let bloc =
+            Bloc::sceller(&self.etat.tete(), self.etat.hauteur() + 1, transactions).ok()?;
         // On applique à NOTRE état avant de diffuser : diffuser un bloc qu'on n'a pas
         // su appliquer soi-même reviendrait à demander aux autres de nous croire.
         match self.etat.appliquer_bloc(&bloc) {
@@ -799,6 +824,25 @@ mod tests {
         assert!(!n.pairs.get(&p).unwrap().banni());
     }
 
+    /// INVARIANT DE DIFFUSION : un bloc que NOUS scellons doit tenir dans un cadre
+    /// réseau, tel qu'il partira sur le fil (`Message::Bloc`, tag applicatif compris).
+    /// Sans le plafond d'octets, un mempool chargé produirait un bloc localement
+    /// valide que personne ne pourrait recevoir — partition définitive.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
+    fn un_bloc_scelle_tient_toujours_dans_un_cadre_reseau() {
+        let (mut n, tx) = noeud_avec_transaction();
+        n.mempool.admettre(&n.etat, tx).expect("admission");
+        let (bloc, _) = n.sceller().expect("un bloc à sceller");
+        let sur_le_fil = crate::message::Message::Bloc(Box::new(bloc)).to_bytes();
+        assert!(
+            sur_le_fil.len() <= net::MAX_CADRE,
+            "bloc de {} o sur le fil : au-delà du cadre de {} o",
+            sur_le_fil.len(),
+            net::MAX_CADRE
+        );
+    }
+
     /// SCELLER vide le mempool dans l'état : c'est le chaînon qui manquait entre
     /// « la transaction est reçue » et « la transaction est définitive ».
     #[test]
@@ -840,7 +884,7 @@ mod tests {
         let (p, adr) = pair(1);
         n.pairs.ajouter(p, adr);
 
-        let etranger = Bloc::sceller(&[9u8; 64], 1, Vec::new());
+        let etranger = Bloc::sceller(&[9u8; 64], 1, Vec::new()).unwrap();
         let actions = n.traiter(p, Message::Bloc(Box::new(etranger)), 0);
         assert!(actions.is_empty(), "on ne relaie pas un bloc qu'on n'applique pas");
         assert_eq!(
@@ -864,7 +908,7 @@ mod tests {
         let (p, adr) = pair(1);
         n.pairs.ajouter(p, adr);
 
-        let bloc = Bloc::sceller(&n.etat.tete(), 1, vec![tx]);
+        let bloc = Bloc::sceller(&n.etat.tete(), 1, vec![tx]).unwrap();
         n.traiter(p, Message::Bloc(Box::new(bloc)), 0);
         assert_eq!(n.pairs.get(&p).unwrap().score, PENALITE_BLOC_INVALIDE);
         assert_eq!(n.etat.hauteur(), 0, "aucune trace du bloc refusé");
@@ -884,7 +928,7 @@ mod tests {
         n.pairs.ajouter(p, adr);
 
         // Bien chaîné, bien numéroté — seule l'émission cloche.
-        let mut inflation = Bloc::sceller(&n.etat.tete(), 1, Vec::new());
+        let mut inflation = Bloc::sceller(&n.etat.tete(), 1, Vec::new()).unwrap();
         inflation.emissions = vec![ledger::proved_wallet::emission_factice(
             &proved_hash::digest::Digest(core::array::from_fn(|i| {
                 proved_hash::felt::Felt::from_canonical_u64(1_000 + i as u64).unwrap()
@@ -921,7 +965,7 @@ mod tests {
         n.pairs.ajouter(p, adr);
 
         // Nous sommes à la hauteur 0 ; un pair diffuse un bloc de hauteur 4.
-        let avance = Bloc::sceller(&[9u8; 64], 4, Vec::new());
+        let avance = Bloc::sceller(&[9u8; 64], 4, Vec::new()).unwrap();
         let actions = n.traiter(p, Message::Bloc(Box::new(avance)), 0);
         match actions.as_slice() {
             [Action::Envoyer(vers, Message::DemandeBloc { hauteur })] => {
@@ -953,7 +997,7 @@ mod tests {
         n.pairs.ajouter(p, adr);
 
         // Hauteur 1 = exactement celle qu'on attend, mais chaîné ailleurs.
-        let concurrent = Bloc::sceller(&[9u8; 64], 1, Vec::new());
+        let concurrent = Bloc::sceller(&[9u8; 64], 1, Vec::new()).unwrap();
         let actions = n.traiter(p, Message::Bloc(Box::new(concurrent)), 0);
         assert!(
             actions.is_empty(),
@@ -975,13 +1019,13 @@ mod tests {
         n.pairs.ajouter(p, adr);
 
         // 1er échange : bloc en avance → une demande part.
-        let avance = Bloc::sceller(&[9u8; 64], 5, Vec::new());
+        let avance = Bloc::sceller(&[9u8; 64], 5, Vec::new()).unwrap();
         assert_eq!(n.traiter(p, Message::Bloc(Box::new(avance)), 0).len(), 1);
 
         // 2e échange : le pair sert la hauteur 1… d'une chaîne qui n'est pas la
         // nôtre. Elle est refusée, et surtout elle ne relance rien.
         for _ in 0..5 {
-            let reponse = Bloc::sceller(&[9u8; 64], 1, Vec::new());
+            let reponse = Bloc::sceller(&[9u8; 64], 1, Vec::new()).unwrap();
             let actions = n.traiter(p, Message::Bloc(Box::new(reponse)), 0);
             assert!(actions.is_empty(), "aucune demande ne doit repartir");
         }

@@ -808,7 +808,7 @@ mod tests {
 
         // Le nœud scelle et applique le bloc 1, ce qui inscrit les DEUX sorties dans
         // l'arbre (le paiement du destinataire et notre monnaie).
-        let bloc = ledger::bloc::Bloc::sceller(&etat.tete(), 1, vec![tx]);
+        let bloc = ledger::bloc::Bloc::sceller(&etat.tete(), 1, vec![tx]).unwrap();
         etat.appliquer_bloc(&bloc).expect("bloc valide");
         let historique = etat.historique().expect("état archivant");
         let tranche = historique.tranche(1).expect("tranche du bloc 1").clone();

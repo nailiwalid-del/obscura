@@ -148,7 +148,7 @@ mod tests {
     use super::*;
 
     fn bloc(hauteur: u64) -> Bloc {
-        Bloc::sceller(&[hauteur as u8; ledger::bloc::TAILLE_ID], hauteur, Vec::new())
+        Bloc::sceller(&[hauteur as u8; ledger::bloc::TAILLE_ID], hauteur, Vec::new()).unwrap()
     }
 
     /// Un bloc conservé est resservi À L'IDENTIQUE, octet pour octet.

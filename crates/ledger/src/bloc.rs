@@ -123,6 +123,30 @@ const CADRE_NET: usize = 1024 * 1024;
 /// la compilation au lieu de laisser une note périmée.
 const _: () = assert!(MAX_TX_PAR_BLOC * TAILLE_TX_INDICATIVE > CADRE_NET);
 
+/// Surcoût d'encodage d'un bloc VIDE : `version ‖ parent ‖ hauteur ‖ n ‖ m`.
+pub const SURCOUT_BLOC_VIDE: usize = 1 + TAILLE_ID + 8 + 4 + 4;
+
+/// Marge réservée à l'enveloppe applicative (`Message::Bloc` = 1 octet de tag) et à
+/// tout en-tête futur. Généreuse à dessein : la dépasser coûterait un bloc indiffusable.
+const MARGE_MESSAGE: usize = 64;
+
+/// PLAFOND DE SCELLEMENT EN OCTETS — la borne qui rend un bloc DIFFUSABLE.
+///
+/// `MAX_TX_PAR_BLOC` borne le NOMBRE de transactions, pas leur POIDS : à ≈68 Kio
+/// pièce, une quinzaine suffit à dépasser le cadre réseau. Un bloc scellé au-delà
+/// serait localement valide, applicable par son producteur… et refusé par tous les
+/// autres faute de pouvoir seulement le recevoir — partition définitive, l'état étant
+/// append-only. C'est le défaut n°1 de la revue adversariale dans sa variante OCTETS.
+pub const MAX_OCTETS_BLOC: usize = CADRE_NET - MARGE_MESSAGE;
+
+const _: () = assert!(MAX_OCTETS_BLOC < CADRE_NET);
+const _: () = assert!(SURCOUT_BLOC_VIDE < MAX_OCTETS_BLOC);
+
+/// Coût sérialisé d'une transaction DANS un bloc : sa longueur + son préfixe de 4 o.
+pub fn cout_transaction(octets_tx: usize) -> usize {
+    4 + octets_tx
+}
+
 /// Taille maximale d'une émission sérialisée : commitment + les deux champs de
 /// l'`EncNote`, chacun préfixé de sa longueur.
 const TAILLE_EMISSION_MAX: usize = DIGEST_BYTES + 4 + KEM_CT_LEN + 4 + MAX_ENC_NOTE_LEN;
@@ -163,6 +187,10 @@ pub enum BlocConstructionError {
     TropDEmissions { recues: usize },
     #[error("émission {0} hors bornes (kem_ct ou enc_note de taille invalide)")]
     EmissionHorsBornes(usize),
+    #[error("{recues} transactions (borne : {MAX_TX_PAR_BLOC})")]
+    TropDeTransactions { recues: usize },
+    #[error("bloc de {octets} o : indiffusable (borne : {MAX_OCTETS_BLOC} o)")]
+    TropDOctets { octets: usize },
 }
 
 /// Une émission : un commitment de note créé EX NIHILO, avec son enveloppe chiffrée.
@@ -242,13 +270,32 @@ impl Bloc {
     /// Aucune émission n'est acceptée ici, et il n'existe aucun paramètre pour en
     /// ajouter : à hauteur non nulle elles seraient refusées par le consensus, et
     /// offrir le champ inviterait à croire le contraire.
-    pub fn sceller(parent: &[u8; TAILLE_ID], hauteur: u64, transactions: Vec<ProvedTx>) -> Self {
-        Bloc {
+    /// Scelle un bloc, en refusant ce qui serait INDIFFUSABLE.
+    ///
+    /// Deux bornes, toutes deux vérifiées ICI et pas seulement au décodage (même
+    /// discipline que `genese_avec`) : le NOMBRE de transactions, et surtout leur
+    /// POIDS — un bloc plus lourd qu'un cadre réseau ne peut atteindre personne.
+    pub fn sceller(
+        parent: &[u8; TAILLE_ID],
+        hauteur: u64,
+        transactions: Vec<ProvedTx>,
+    ) -> Result<Self, BlocConstructionError> {
+        if transactions.len() > MAX_TX_PAR_BLOC {
+            return Err(BlocConstructionError::TropDeTransactions {
+                recues: transactions.len(),
+            });
+        }
+        let bloc = Bloc {
             parent: *parent,
             hauteur,
             transactions,
             emissions: Vec::new(),
+        };
+        let octets = bloc.to_bytes().len();
+        if octets > MAX_OCTETS_BLOC {
+            return Err(BlocConstructionError::TropDOctets { octets });
         }
+        Ok(bloc)
     }
 
     /// Identifiant du bloc = `dual_hash` de son encodage canonique.
@@ -395,9 +442,9 @@ mod tests {
     #[test]
     fn id_lie_le_chainage() {
         let g = Bloc::genese().id();
-        let a = Bloc::sceller(&g, 1, Vec::new());
-        let b = Bloc::sceller(&g, 2, Vec::new());
-        let c = Bloc::sceller(&[9u8; TAILLE_ID], 1, Vec::new());
+        let a = Bloc::sceller(&g, 1, Vec::new()).unwrap();
+        let b = Bloc::sceller(&g, 2, Vec::new()).unwrap();
+        let c = Bloc::sceller(&[9u8; TAILLE_ID], 1, Vec::new()).unwrap();
         assert_ne!(a.id(), b.id(), "la hauteur doit entrer dans l'identifiant");
         assert_ne!(a.id(), c.id(), "le parent doit entrer dans l'identifiant");
     }
@@ -405,7 +452,7 @@ mod tests {
     /// Aller-retour d'un bloc VIDE (le cas le plus courant d'une chaîne au repos).
     #[test]
     fn aller_retour_bloc_vide() {
-        let bloc = Bloc::sceller(&[3u8; TAILLE_ID], 7, Vec::new());
+        let bloc = Bloc::sceller(&[3u8; TAILLE_ID], 7, Vec::new()).unwrap();
         let r = Bloc::from_bytes(&bloc.to_bytes()).expect("aller-retour");
         assert_eq!(r.parent, bloc.parent);
         assert_eq!(r.hauteur, 7);
@@ -442,7 +489,7 @@ mod tests {
         assert!(matches!(Bloc::from_bytes(&[0x01]), Err(BlocDecodeError::VersionInconnue(0x01))));
         assert!(matches!(Bloc::from_bytes(&[VERSION_BLOC]), Err(BlocDecodeError::Tronque)));
 
-        let bon = Bloc::sceller(&[1u8; TAILLE_ID], 3, Vec::new()).to_bytes();
+        let bon = Bloc::sceller(&[1u8; TAILLE_ID], 3, Vec::new()).unwrap().to_bytes();
         assert!(matches!(Bloc::from_bytes(&bon[..bon.len() - 1]), Err(BlocDecodeError::Tronque)));
         let mut trop = bon.clone();
         trop.push(0);
@@ -513,6 +560,20 @@ mod tests {
     /// l'encodage révèle est « il y a une émission ici ». Un `Option<EncNote>` aurait
     /// partitionné publiquement les feuilles en émises-sans-bénéficiaire et
     /// attribuées, et ce gabarit aurait été recopié le jour d'une coinbase shielded.
+    /// Le plafond d'octets EST la capacité réelle d'un bloc, et elle est bien plus
+    /// basse que `MAX_TX_PAR_BLOC` : une quinzaine de transactions, pas 512. Ce test
+    /// fige le chiffre — s'il bouge, c'est que le format de transaction a changé.
+    #[test]
+    fn le_plafond_doctets_borne_a_une_quinzaine_de_transactions() {
+        assert!(MAX_OCTETS_BLOC < CADRE_NET, "un bloc doit tenir dans un cadre");
+        let pour = |n: usize| SURCOUT_BLOC_VIDE + n * cout_transaction(TAILLE_TX_INDICATIVE);
+        assert!(pour(15) <= MAX_OCTETS_BLOC, "15 transactions doivent tenir");
+        assert!(
+            pour(16) > MAX_OCTETS_BLOC,
+            "16 doivent déborder : c'est précisément pourquoi le plafond existe,              MAX_TX_PAR_BLOC = {MAX_TX_PAR_BLOC} ne bornant que le NOMBRE"
+        );
+    }
+
     #[test]
     fn emission_factice_indistinguable_dune_reelle() {
         use circuit::SpendNote;
@@ -661,7 +722,7 @@ mod tests {
     /// pas être refusé pour inflation par accident.
     #[test]
     fn un_bloc_scelle_na_jamais_demission() {
-        let b = Bloc::sceller(&[1u8; TAILLE_ID], 9, Vec::new());
+        let b = Bloc::sceller(&[1u8; TAILLE_ID], 9, Vec::new()).unwrap();
         assert!(b.emissions.is_empty());
     }
 }

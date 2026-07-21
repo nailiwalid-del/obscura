@@ -1049,7 +1049,7 @@ mod tests {
         sabotee.output_commitments[0] = digest(1_234_567); // preuve invalidée
         let avant_racine = etat.tree.root();
 
-        let mut bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, vec![sabotee]);
+        let mut bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, vec![sabotee]).unwrap();
         // Champs publics : on force l'émission comme le ferait un pair hostile.
         bloc.emissions = vec![crate::proved_wallet::emission_factice(&digest(5_000))];
 
@@ -1078,7 +1078,7 @@ mod tests {
     #[test]
     fn emission_prime_sur_le_refus_de_chainage() {
         let mut etat = ProvedLedgerState::with_depth(6);
-        let mut bloc = crate::bloc::Bloc::sceller(&[9u8; TAILLE_ID], 1, Vec::new());
+        let mut bloc = crate::bloc::Bloc::sceller(&[9u8; TAILLE_ID], 1, Vec::new()).unwrap();
         bloc.emissions = vec![crate::proved_wallet::emission_factice(&digest(1))];
         assert!(matches!(
             etat.appliquer_bloc(&bloc),
@@ -1121,7 +1121,7 @@ mod tests {
     /// silencieusement faux.
     #[test]
     fn genese_malformee_refusee() {
-        let ordinaire = crate::bloc::Bloc::sceller(&[7u8; TAILLE_ID], 3, Vec::new());
+        let ordinaire = crate::bloc::Bloc::sceller(&[7u8; TAILLE_ID], 3, Vec::new()).unwrap();
         assert!(matches!(
             ProvedLedgerState::depuis_genese_depth(&ordinaire, 6),
             Err(GeneseRefus::ParentPresent)
@@ -1194,21 +1194,21 @@ mod tests {
         assert_eq!(etat.hauteur(), 0);
 
         // Bloc chaîné ailleurs.
-        let orphelin = crate::bloc::Bloc::sceller(&[9u8; TAILLE_ID], 1, Vec::new());
+        let orphelin = crate::bloc::Bloc::sceller(&[9u8; TAILLE_ID], 1, Vec::new()).unwrap();
         assert!(matches!(
             etat.appliquer_bloc(&orphelin),
             Err(BlocRefus::ParentInattendu)
         ));
 
         // Bon parent, mauvaise hauteur.
-        let saute = crate::bloc::Bloc::sceller(&etat.tete(), 5, Vec::new());
+        let saute = crate::bloc::Bloc::sceller(&etat.tete(), 5, Vec::new()).unwrap();
         assert!(matches!(
             etat.appliquer_bloc(&saute),
             Err(BlocRefus::HauteurInattendue { attendue: 1, recue: 5 })
         ));
 
         // Le bloc suivant, lui, passe — et la tête avance.
-        let suivant = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new());
+        let suivant = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new()).unwrap();
         let id = suivant.id();
         assert!(etat.appliquer_bloc(&suivant).is_ok());
         assert_eq!(etat.tete(), id);
@@ -1243,7 +1243,7 @@ mod tests {
         let avant_hauteur = etat.hauteur();
         let nf0 = tx.nullifiers[0];
 
-        let bloc = crate::bloc::Bloc::sceller(&avant_tete, 1, vec![tx, sabotee]);
+        let bloc = crate::bloc::Bloc::sceller(&avant_tete, 1, vec![tx, sabotee]).unwrap();
         assert!(
             matches!(
                 etat.appliquer_bloc(&bloc),
@@ -1273,7 +1273,7 @@ mod tests {
     fn bloc_valide_applique_et_avance_la_tete() {
         let (mut etat, tx) = setup();
         let nf = tx.nullifiers[0];
-        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, vec![tx]);
+        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, vec![tx]).unwrap();
         let id = bloc.id();
 
         let indices = etat.appliquer_bloc(&bloc).expect("bloc valide");
@@ -1323,12 +1323,40 @@ mod tests {
         let trop: Vec<circuit::ProvedTx> = (0..crate::bloc::MAX_TX_PAR_BLOC + 1)
             .map(|_| circuit::ProvedTx::from_bytes(&octets).unwrap())
             .collect();
-        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, trop);
+        // Construction par LITTÉRAL, à dessein : `Bloc::sceller` refuserait désormais
+        // ce bloc (borne dans le constructeur). Or ce test simule un bloc venu d'un
+        // pair HOSTILE, qui n'emprunte évidemment pas notre constructeur — c'est le
+        // chemin d'APPLICATION qu'on veut éprouver ici.
+        let bloc = crate::bloc::Bloc {
+            parent: etat.tete(),
+            hauteur: 1,
+            transactions: trop,
+            emissions: Vec::new(),
+        };
         assert!(matches!(
             etat.appliquer_bloc(&bloc),
             Err(BlocRefus::TropDeTransactions { .. })
         ));
         assert_eq!(etat.hauteur(), 0, "aucune trace du bloc refusé");
+    }
+
+    /// Le PLAFOND D'OCTETS mord bien AVANT la borne de nombre : 20 transactions, soit
+    /// vingt-cinq fois moins que `MAX_TX_PAR_BLOC`, suffisent déjà à dépasser le cadre
+    /// réseau. C'est tout l'objet de la borne — sceller un tel bloc produirait un
+    /// artefact que personne ne pourrait recevoir.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "sous-preuves gatées : --release")]
+    fn sceller_refuse_un_bloc_trop_lourd_bien_avant_la_borne_de_nombre() {
+        let (etat, tx) = setup();
+        let octets = tx.to_bytes();
+        let vingt: Vec<circuit::ProvedTx> = (0..20)
+            .map(|_| circuit::ProvedTx::from_bytes(&octets).unwrap())
+            .collect();
+        assert!(vingt.len() < crate::bloc::MAX_TX_PAR_BLOC, "sous la borne de NOMBRE");
+        assert!(matches!(
+            crate::bloc::Bloc::sceller(&etat.tete(), 1, vingt),
+            Err(crate::bloc::BlocConstructionError::TropDOctets { .. })
+        ));
     }
 
     /// La position dans la chaîne SURVIT au redémarrage. Sans elle, un nœud rechargé
@@ -1338,7 +1366,7 @@ mod tests {
     fn position_dans_la_chaine_survit_au_dump() {
         let mut etat = ProvedLedgerState::with_depth(6);
         etat.mint(&digest(1)).unwrap();
-        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new());
+        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new()).unwrap();
         etat.appliquer_bloc(&bloc).unwrap();
 
         let recharge = ProvedLedgerState::from_bytes(&etat.to_bytes()).expect("aller-retour");
@@ -1347,7 +1375,7 @@ mod tests {
 
         // Et il accepte bien la SUITE de la chaîne, pas autre chose.
         let mut recharge = recharge;
-        let suivant = crate::bloc::Bloc::sceller(&recharge.tete(), 2, Vec::new());
+        let suivant = crate::bloc::Bloc::sceller(&recharge.tete(), 2, Vec::new()).unwrap();
         assert!(recharge.appliquer_bloc(&suivant).is_ok());
     }
 
@@ -1477,7 +1505,7 @@ mod tests {
     #[cfg_attr(debug_assertions, ignore = "sous-preuves gatées : --release")]
     fn historique_rejoue_reproduit_larbre_et_ses_racines() {
         let (mut etat, tx) = setup_avec(true);
-        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, vec![tx]);
+        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, vec![tx]).unwrap();
         etat.appliquer_bloc(&bloc).expect("bloc valide");
 
         let h = etat.historique().expect("état archiviste");
@@ -1519,7 +1547,7 @@ mod tests {
     #[cfg_attr(debug_assertions, ignore = "sous-preuves gatées : --release")]
     fn historique_est_exactement_ce_que_le_bloc_engage() {
         let (mut etat, tx) = setup_avec(true);
-        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, vec![tx]);
+        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, vec![tx]).unwrap();
         etat.appliquer_bloc(&bloc).expect("bloc valide");
 
         let servies = etat
@@ -1582,7 +1610,7 @@ mod tests {
         let avant_entrees = etat.historique().unwrap().len();
         let avant_tranches = etat.historique().unwrap().nombre_de_tranches();
 
-        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, vec![tx, sabotee]);
+        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, vec![tx, sabotee]).unwrap();
         assert!(matches!(
             etat.appliquer_bloc(&bloc),
             Err(BlocRefus::Transaction { index: 1, .. })
@@ -1618,9 +1646,9 @@ mod tests {
         assert!(archiviste.historique().is_some());
 
         for hauteur in 1..=3u64 {
-            let b = crate::bloc::Bloc::sceller(&sobre.tete(), hauteur, Vec::new());
+            let b = crate::bloc::Bloc::sceller(&sobre.tete(), hauteur, Vec::new()).unwrap();
             sobre.appliquer_bloc(&b).unwrap();
-            let b = crate::bloc::Bloc::sceller(&archiviste.tete(), hauteur, Vec::new());
+            let b = crate::bloc::Bloc::sceller(&archiviste.tete(), hauteur, Vec::new()).unwrap();
             archiviste.appliquer_bloc(&b).unwrap();
         }
         assert_eq!(
@@ -1645,7 +1673,7 @@ mod tests {
         ])
         .unwrap();
         let mut etat = ProvedLedgerState::depuis_genese_depth_archivant(&genese, 6).unwrap();
-        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new());
+        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new()).unwrap();
         etat.appliquer_bloc(&bloc).unwrap();
 
         let octets_etat = etat.to_bytes();
@@ -1697,7 +1725,7 @@ mod tests {
             .unwrap()
             .to_bytes();
         let mut avance = ProvedLedgerState::depuis_genese_depth_archivant(&genese, 6).unwrap();
-        let b = crate::bloc::Bloc::sceller(&avance.tete(), 1, Vec::new());
+        let b = crate::bloc::Bloc::sceller(&avance.tete(), 1, Vec::new()).unwrap();
         avance.appliquer_bloc(&b).unwrap();
         assert!(matches!(
             avance.adopter_historique(HistoriqueSorties::from_bytes(&vieux).unwrap()),

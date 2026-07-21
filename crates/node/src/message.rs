@@ -349,7 +349,7 @@ mod tests {
     /// Aller-retour d'un bloc VIDE sur le fil — le cas courant d'une chaîne au repos.
     #[test]
     fn bloc_roundtrip() {
-        let bloc = ledger::bloc::Bloc::sceller(&[5u8; 64], 3, Vec::new());
+        let bloc = ledger::bloc::Bloc::sceller(&[5u8; 64], 3, Vec::new()).unwrap();
         let id = bloc.id();
         let octets = Message::Bloc(Box::new(bloc)).to_bytes();
         match Message::from_bytes(&octets).unwrap() {
