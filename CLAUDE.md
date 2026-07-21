@@ -14,11 +14,16 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
 - `crates/crypto` : hash, kem, sig, aead — testés
 - `crates/ledger` : notes engagées, nullifiers, Merkle (BLAKE3, prof. 16), tx, validation — testés
 - `crates/circuit` : circuit STARK **monolithe** (`monolith/`) — P1–P7 d'une tx
-  2-in/2-out en UNE SEULE trace/preuve (201 col × 1024 lignes dont 40 lignes de
-  blinding), publics minimaux (root, nullifiers, output_commitments, fee),
-  `ProvedTx` **v3** — **witness-hiding (HVZK en ROM)** depuis 3z-b1 (lignes de
-  blinding, gating global `blind_off`, aléa OsRng frais par preuve) — testé,
-  benché (≈1477,7 ms génération, ≈3,0 ms vérification, ≈90,5 Kio/preuve).
+  2-in/2-out en UNE SEULE trace/preuve, publics minimaux (root, nullifiers,
+  output_commitments, fee), `ProvedTx` **v3** — **witness-hiding (HVZK en ROM)**
+  depuis 3z-b1 (lignes de blinding, gating global `blind_off`, aléa OsRng frais
+  par preuve) — testé et benché. ⚠️ **Deux dispositions coexistent** : le
+  **SEGMENTÉ** (`seg_*`, 92 col × 2048 lignes) est celui que `tx.rs` utilise
+  depuis la bascule 3z-c1 — ≈1783 ms génération, ≈4,1 ms vérification,
+  ≈67,9 Kio/preuve à profondeur 32 ; le **côte-à-côte** (201 col × 1024 lignes,
+  ≈1260 ms / 2,8 ms / 89,3 Kio) n'est plus sur le chemin de production et ne sert
+  plus qu'à l'oracle de parité. (Sur master non fusionné : le côte-à-côte reste
+  actif — voir point 2 ci-dessous.)
   Caveat : honnête-vérifieur, prototype non audité (voir docs/STARK_STATEMENT.md,
   « Argument HVZK »). Les gadgets autonomes du crate restent validity-only.
   `ProvedTx` v3 porte les `enc_notes` (enveloppes chiffrées des sorties, scan wallet
@@ -51,12 +56,19 @@ avant sophistication crypto**. Reste :
    load}` — dump canonique frontier+nullifiers+racines, écriture atomique
    tmp+rename). Ne reste que les tests key-privacy IK-CCA (**phase 4**) → #7
    effectivement bouclé pour la phase 3.
-2. **3z-c — généralisation M-in/N-out** : au-delà du 2-in/2-out figé, empilement
-   accru des colonnes (levier de réduction de taille de preuve additionnel).
-   Statut : la 1re tranche **3z-c1** (refonte segmentée à parité) a été entamée
-   puis **parquée** (commit 333e4e4, master restauré sur le monolithe 3z-b1) ;
-   design/plan dans docs/superpowers et T1 dans l'historique (aa4076f, 7cceb27)
-   pour reprise.
+2. **3z-c — généralisation M-in/N-out**. La 1re tranche **3z-c1 (monolithe
+   segmenté) est LIVRÉE** sur la branche `3z-c1-monolithe-segmente` (pas encore
+   fusionnée) : trace en segments séquentiels `[KEY][IN][IN][OUT][OUT]`
+   (`monolith/seg_{layout,trace,air}.rs`), largeur **92 vs 201**, **209 slots de
+   contraintes vs 263**, preuve **67,9 Kio vs 89,3 (−24 %)** à profondeur 32 pour
+   ×1,41 en génération et ×1,46 en vérification (4,1 ms). `tx.rs` a basculé ;
+   l'API et tous les tests préexistants sont inchangés. Le côte-à-côte est
+   conservé pour l'**oracle de parité** (mêmes publics, même témoin).
+   Reste : **3z-c2** (variabilité M/N ≤ MAX — la couture `SegKind`/schedule est en
+   place), plus 2 forges non portées (`PaddingMerkle`, `VaccInitial` fine).
+   ⚠️ Piège identifié à ne pas rejouer : mutualiser des colonnes peut SUPPRIMER
+   une garantie que la redondance offrait gratuitement (cf. « Liaison de racine »
+   dans STARK_STATEMENT.md) — auditer chaque fusion sous cet angle.
 Puis phase 4 (P2P PQ + Dandelion++ + test key privacy) et phase 5 (nœud/wallet/testnet).
 
 ## Décisions v0.2 (revue intégrée — ne pas régresser)

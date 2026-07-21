@@ -2,7 +2,8 @@
 //!
 //! Mesure le temps de génération/vérification et la taille d'une preuve `ProvedTx`
 //! v3 (circuit P1–P7 monolithique) AVEC WITNESS-HIDING (lignes de blinding en AIR).
-//! Trace étendue à 1024 lignes (vs 512 validity-only), blowup = 16.
+//! Depuis la bascule 3z-c1, `prove_tx` utilise le monolithe SEGMENTÉ : trace de
+//! 2048 lignes sur 92 colonnes (vs 1024 × 201 en côte-à-côte), blowup = 16.
 //! Preuve unique remplace les ~219 Kio (15 preuves v1).
 //! Lancer en RELEASE :
 //!   cargo run --release --example tx_bench -p circuit
@@ -88,17 +89,19 @@ fn main() {
     let verify_ms = t1.elapsed().as_secs_f64() * 1e3 / V as f64;
 
     let bytes = total_proof_bytes(&tx);
-    println!("=== WITNESS-HIDING (3z-b1, blinding AIR) ===");
+    println!("=== ACTUEL : monolithe SEGMENTÉ (3z-c1) + witness-hiding (3z-b1) ===");
     println!("génération  : {prove_ms:8.1} ms");
     println!("vérification: {verify_ms:8.1} ms  (moy. sur {V})");
     println!("taille preuve totale : {bytes} o  ({:.1} Kio)", bytes as f64 / 1024.0);
-    println!("  = 1 SEULE preuve STARK monolithique (P1–P7, trace 1024 lignes avec blinding)");
+    println!("  = 1 SEULE preuve STARK monolithique SEGMENTÉE (P1–P7, 92 col × 2048 lignes)");
     println!();
-    println!("=== BASELINE (3z-a, validity-only) ===");
-    println!("génération  :    634.0 ms");
-    println!("vérification:      1.5 ms");
-    println!("taille preuve totale : 85.3 Kio (trace 512 lignes)");
+    println!("=== RÉFÉRENCE : monolithe CÔTE-À-CÔTE (3z-b1, avant bascule 3z-c1) ===");
+    println!("génération  :   1260.6 ms");
+    println!("vérification:      2.8 ms");
+    println!("taille preuve totale : 89.3 Kio (201 col × 1024 lignes)");
     println!();
-    println!("Δ facteur vs baseline: {:.2}× génération, {:.2}× vérification, {:.2}× taille",
-        prove_ms / 634.0, verify_ms / 1.5, bytes as f64 / 1024.0 / 85.3);
+    println!("Δ facteur vs côte-à-côte: {:.2}× génération, {:.2}× vérification, {:.3}× taille",
+        prove_ms / 1260.6, verify_ms / 2.8, bytes as f64 / 1024.0 / 89.3);
+    println!("(< 1 en taille = le segmenté gagne ; la taille est le coût PERMANENT,");
+    println!(" payé par chaque nœud qui stocke et relaie chaque transaction)");
 }
