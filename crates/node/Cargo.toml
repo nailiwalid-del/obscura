@@ -11,5 +11,6 @@ ledger = { path = "../ledger" }
 net = { path = "../net" }
 proved-hash = { path = "../proved-hash" }
 wallet = { path = "../wallet" }
+hex.workspace = true
 thiserror.workspace = true
 rand_core.workspace = true

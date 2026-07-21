@@ -31,6 +31,17 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   ⚠️ L'identité du RÉPONDEUR reste révélée à un MitM actif (inhérent au rôle ;
   fermable par un motif Noise-IK pour les sorties) — cf. spec transport-pq.
 - `crates/ledger` : notes engagées, nullifiers, Merkle (BLAKE3, prof. 16), tx, validation — testés.
+  **`bloc`** (finalité) : lot ORDONNÉ chaîné au parent, id = `dual_hash` non tronqué,
+  décodage borné (MAX_TX_PAR_BLOC vérifié AVANT allocation ; `const _: () = assert!`
+  consigne à la compilation qu'un bloc plein dépasse 30× le cadre réseau).
+  `ProvedLedgerState::appliquer_bloc` est ATOMIQUE — un bloc à moitié appliqué
+  placerait le nœud dans un état qu'AUCUN autre n'a, et il refuserait ensuite tout
+  pour « ancre inconnue » sans que rien ne désigne la cause. Restauration bon marché
+  grâce à la frontier (clone O(depth)). Les tx s'appliquent DANS L'ORDRE (une tx peut
+  s'ancrer sur une racine née dans le même bloc — tout valider d'abord rejetterait ce
+  cas). L'état porte tête + hauteur, sérialisées (sinon un nœud rechargé ne saurait
+  plus quel bloc attendre). ⚠️ AUCUNE réorganisation possible : l'état est append-only
+  de bout en bout ; les supporter exigerait de redessiner le ledger.
   **Mempool** (phase 4, brique 3) : contrôles ordonnés du MOINS au PLUS coûteux —
   l'asymétrie de coût (~4 ms de vérification STARK pour ~68 Kio envoyés) est LE
   vecteur de DoS du projet, donc les 5 filtres O(1) précèdent la vérification.
@@ -110,6 +121,14 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   notes, l'ordre inverse perdrait des notes jamais dépensées si l'envoi échouait).
   Chemin couvert par `crates/node/tests/paiement_wallet.rs`, qui va de l'adresse
   TEXTUELLE jusqu'au déchiffrement par le bénéficiaire.
+  **Finalité câblée** : `Message::Bloc` (diffusé ENTIER — un bloc neuf n'est connu de
+  personne, l'aller-retour annonce/demande ne ferait que retarder), `Noeud::sceller`
+  (tri par `tx_digest` → deux nœuds scellant le même mempool produisent le MÊME bloc ;
+  ⚠️ grindable, à changer quand l'ordre aura de la valeur), `sur_bloc` (bloc non
+  chaîné = AUCUNE sanction — c'est le cas normal de deux scellements simultanés ou
+  d'un retard ; seule une tx invalide dans un bloc bien chaîné pénalise).
+  `obscura-node --sceller <ms>`, **OFF par défaut** : produire des blocs est une
+  décision d'opérateur. ⚠️ Aucune élection de producteur — ordre CONVENU, pas DÉFENDU.
 - `docs/PROTOCOL.md`, `docs/THREAT_MODEL.md` et `docs/STARK_STATEMENT.md` : spécification de référence
 - `cargo test --all-features --release` : suite verte (crypto/net/ledger/circuit/wallet/node)
 
@@ -131,19 +150,17 @@ sophistication crypto**. Reste :
    ⚠️ Piège identifié à ne pas rejouer : mutualiser des colonnes peut SUPPRIMER
    une garantie que la redondance offrait gratuitement (cf. « Liaison de racine »
    dans STARK_STATEMENT.md) — auditer chaque fusion sous cet angle.
-2. **FINALITÉ — le trou structurel restant, et la priorité.**
-   `ProvedLedgerState::apply_proved_tx` implémente et teste la règle de consensus,
-   mais AUCUN chemin du nœud ne l'appelle : les transactions s'accumulent dans le
-   mempool sans jamais être appliquées. Ce n'est pas un simple câblage manquant —
-   appliquer localement SANS ordre convenu ferait diverger les arbres entre nœuds,
-   donc les racines, ce qui est pire que de ne rien appliquer. Il manque une notion
-   d'ordre (bloc / lot ordonné identifié et chaîné).
-   Conséquence directe : **un wallet ne peut pas RECEVOIR**. Il lui faut rejouer
-   dans l'ordre tous les commitments pour connaître ses index et produire ses
-   chemins ; le nœud n'en garde pas l'historique (frontier = bord droit) et n'a
-   rien à servir. Le paiement marche de bout en bout, mais la monnaie rendue sort
-   de la vue du wallet faute d'index. Deux briques en découlent : finalité, puis
-   protocole de synchronisation wallet ↔ nœud.
+2. **SYNCHRONISATION WALLET ↔ NŒUD — le trou structurel restant.**
+   La finalité EXISTE désormais (`ledger::bloc` + `appliquer_bloc` + `Noeud::sceller`
+   + `Message::Bloc`, convergence de deux nœuds vérifiée sur sockets réelles dans
+   `crates/node/tests/finalite.rs`). Reste que **le wallet ne peut pas RECEVOIR** :
+   il lui faut rejouer dans l'ordre tous les commitments pour connaître ses index
+   et produire ses chemins, or le nœud n'en garde pas l'historique (frontier = bord
+   droit seulement) et n'a rien à servir. Deux briques : le nœud CONSERVE et SERT
+   l'historique des sorties (commitment + enc_note, par index), le wallet le rejoue.
+   ⚠️ Ne pas oublier au passage : `mint` (faucet) insère HORS bloc, donc deux nœuds
+   qui émettent séparément divergent — l'émission devra entrer dans un bloc
+   (coinbase) le jour où le faucet cessera d'être une commodité de test.
 3. Persistance du wallet ✅ / du nœud ✅ / CLI ✅ (faits) ; restent le chiffrement
    au repos du fichier de wallet (Argon2 + saisie interactive) et un faucet de dev.
 

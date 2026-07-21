@@ -45,7 +45,8 @@ consensus : `dev-transparent` (ledger transparent, non-privé) et `dev-circuits`
    commitments/Merkle, spend_pk/path retirés, witness-hiding) — reste 3z-c (M-in/N-out)
 4. ✅ Réseau P2P chiffré PQ + Dandelion++ + test de key privacy
 5. ✅ Nœud, wallet CLI, testnet local multi-nœuds
-6. ⬜ **Finalité** (ordre convenu entre nœuds) puis synchronisation wallet ↔ nœud
+6. 🟡 **Finalité** : bloc + application atomique + convergence entre nœuds ✅ ;
+   élection du producteur et synchronisation wallet ↔ nœud ⬜
 
 > Phase 3 : intégrité prouvée (P1–P7, monolithe 2-in/2-out) ; depuis 3z-b1 la preuve
 > de consensus est **witness-hiding (HVZK dans le modèle de l'oracle aléatoire)** —
@@ -57,14 +58,25 @@ consensus : `dev-transparent` (ledger transparent, non-privé) et `dev-circuits`
 > anti-eclipse, mempool ordonné par coût, Dandelion++, nœud réel et testnet local.
 > Trois binaires : `obscura-node`, `obscura-demo`, `obscura-wallet`.
 
-## Trou de complétude connu
+## Trous de complétude connus
 
-`ProvedLedgerState::apply_proved_tx` implémente et teste la règle de consensus, mais
-**aucun chemin du nœud ne l'appelle** : les transactions s'accumulent dans le mempool
-sans jamais être finalisées. Appliquer localement sans ordre convenu ferait diverger
-les arbres entre nœuds — c'est une brique de FINALITÉ qui manque, pas un câblage.
+Une transaction devient maintenant **définitive** : elle entre dans un bloc (lot
+ordonné, chaîné à son parent), le bloc s'applique **atomiquement**, et deux nœuds qui
+acceptent la même chaîne convergent vers la même racine de Merkle — vérifié sur de
+vraies sockets (`crates/node/tests/finalite.rs`).
 
-Conséquence : **un wallet peut payer, pas recevoir**. Détail dans
-docs/THREAT_MODEL.md.
+Restent deux manques, tous deux consignés en détail dans docs/THREAT_MODEL.md :
+
+1. **Personne n'a autorité pour sceller.** Aucune élection de producteur n'existe :
+   tout nœud lancé avec `--sceller` fabrique des blocs. L'ordre obtenu est *convenu*
+   entre participants coopératifs, pas *défendu* contre un adversaire. Testnet local
+   uniquement.
+2. **Un wallet peut payer, pas recevoir.** Il lui faut rejouer l'historique des
+   commitments pour connaître ses index ; le nœud n'en conserve pas la trace
+   (`MerkleFrontier` = bord droit seulement) et n'a rien à servir.
+
+Et une conséquence structurelle à connaître : **aucune réorganisation n'est
+possible**. L'état est append-only de bout en bout ; supporter les réorganisations
+exigerait de redessiner le ledger, pas d'ajouter une fonction.
 
 **Prototype pédagogique — pas d'audit de sécurité, ne pas utiliser en production.**

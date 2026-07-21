@@ -194,7 +194,7 @@
     <div class="stat-row">
       <div class="stat"><b>7</b><span>crates Rust</span></div>
       <div class="stat"><b>20&nbsp;475</b><span>lignes de code</span></div>
-      <div class="stat"><b>308</b><span>tests</span></div>
+      <div class="stat"><b>328</b><span>tests</span></div>
       <div class="stat"><b>P1–P7</b><span>prouvés en circuit</span></div>
       <div class="stat"><b>≈68<small> Kio</small></b><span>preuve d'une tx</span></div>
     </div>
@@ -277,7 +277,7 @@
   <p>Le circuit sait aujourd'hui <strong>vérifier qu'une transaction est valide</strong> (elle existe, m'appartient, est équilibrée, sans double-dépense), il gouverne un vrai registre, et la preuve de consensus <strong>masque ses témoins</strong> (witness-hiding par lignes de blinding, 3z-b1 — HVZK en ROM, vérifieur honnête). Depuis les phases 4–5, cette transaction prouvée <strong>voyage entre de vrais nœuds</strong> : liens chiffrés post-quantiques, origine protégée par Dandelion++, admission anti-DoS — testnet local validé, y compris à travers un intermédiaire, avec identité et état qui survivent aux redémarrages. Les réserves restantes : pas de zero-knowledge à vérifieur malicieux revendiqué, argument non formalisé au niveau publication, prototype non audité.</p>
   </div>
 
-  <div class="callout"><span class="lab">Le trou de complétude, dit franchement</span><p>Un wallet Obscura sait aujourd'hui <strong>payer</strong>, pas <strong>recevoir</strong>. La règle qui applique une transaction à l'état (<code>apply_proved_tx</code>) est écrite et testée, mais <em>aucun chemin du nœud ne l'appelle</em> : les transactions s'accumulent dans la réserve sans jamais être finalisées. Ce n'est pas un câblage oublié — appliquer chacun dans son coin, sans ordre convenu, ferait diverger les arbres d'un nœud à l'autre, ce qui est pire que de ne rien appliquer. Il manque une brique de <strong>finalité</strong>, puis un moyen pour un wallet de rejouer l'historique des commitments (sans quoi il ignore les index dont ses preuves ont besoin). C'est le prochain manque structurel, avant toute sophistication cryptographique supplémentaire.</p></div>
+  <div class="callout"><span class="lab">Les trous de complétude, dits franchement</span><p>Une transaction devient désormais <strong>définitive</strong> : elle entre dans un <em>bloc</em> — un lot de transactions dans un ordre écrit, chaîné à son parent — qui s'applique en tout-ou-rien, et deux nœuds acceptant la même chaîne convergent vers le même arbre (vérifié sur de vraies sockets). Restent deux manques, nommés plutôt que tus&nbsp;: <strong>(1) personne n'a autorité pour sceller</strong> — aucune élection de producteur n'existe, donc l'ordre obtenu est <em>convenu</em> entre participants coopératifs et non <em>défendu</em> contre un adversaire&nbsp;; <strong>(2) un wallet sait payer, pas recevoir</strong> — il lui faudrait rejouer l'historique des commitments pour connaître les index dont ses preuves ont besoin, et aucun nœud ne conserve cet historique. À savoir aussi&nbsp;: l'état étant <em>append-only</em> de bout en bout, <strong>aucune réorganisation de chaîne n'est possible</strong> — les supporter demanderait de redessiner le registre, pas d'ajouter une fonction.</p></div>
 
   <div class="col">
   <h3 id="briques">4. Comment ça marche, en clair</h3>
@@ -314,6 +314,8 @@
     </div>
     <figcaption>Cycle de vie d'une note — de l'émission à la dépense</figcaption>
   </figure>
+
+  <div class="callout"><span class="lab">🕹️ Envie de manipuler ?</span><p>Ce cycle de vie se comprend mieux en le faisant : <a href="obscura-atelier.html"><strong>ouvrez l'atelier interactif</strong></a> — créez une identité, recevez des notes, dépensez avec la checklist P1–P7 animée, tentez une double dépense, et comparez ce que voit le réseau à ce que sait le wallet. (Simulation pédagogique, hachage-jouet.)</p></div>
 
   <div class="col">
   <h3 id="profondeur">5. « Défense en profondeur » : deux serrures valent mieux qu'une</h3>
@@ -543,7 +545,7 @@
   <section class="part-divider big" id="p6">
     <div class="k">Partie VI</div>
     <h2 class="serif">État du projet &amp; feuille de route</h2>
-    <p class="sub">Ce qui est fait, ce qui reste. Les phases 1–5 sont prototypées : le circuit masque, le ledger obéit à la preuve, et un testnet local fait circuler des transactions prouvées entre nœuds réels — mais sans finalité, donc sans réception.</p>
+    <p class="sub">Ce qui est fait, ce qui reste. Les phases 1–5 sont prototypées : le circuit masque, le ledger obéit à la preuve, un testnet local fait circuler des transactions prouvées entre nœuds réels, et un bloc les rend définitives — mais sans producteur légitime, et sans réception côté wallet.</p>
   </section>
 
   <div class="board" id="board">

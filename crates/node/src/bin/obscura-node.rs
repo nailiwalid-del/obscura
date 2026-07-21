@@ -26,12 +26,21 @@ const EPOQUE_MS: u64 = 600_000; // 10 min
 /// Intervalle d'enregistrement de l'état sur disque (ms).
 const SAUVEGARDE_MS: u64 = 30_000;
 
+/// Cadence de scellement par défaut si `--sceller` est demandé sans valeur.
+const SCELLEMENT_MS_DEFAUT: u64 = 10_000;
+
 fn usage() -> ! {
     eprintln!("usage : obscura-node --ecoute <adresse> [--pair <adresse>]... [--donnees <rep>]");
     eprintln!();
     eprintln!("  --ecoute  <adresse>  adresse d'écoute (ex. 127.0.0.1:9333)");
     eprintln!("  --pair    <adresse>  pair à contacter (répétable)");
     eprintln!("  --donnees <rep>      répertoire de données (défaut : ./donnees-obscura)");
+    eprintln!("  --sceller <ms>       SCELLER des blocs toutes les <ms> (défaut : off)");
+    eprintln!();
+    eprintln!("⚠️  --sceller n'est protégé par AUCUNE élection de producteur : tout nœud");
+    eprintln!("    qui l'active fabrique des blocs. L'ordre obtenu est CONVENU entre");
+    eprintln!("    participants coopératifs, pas DÉFENDU contre un adversaire. Testnet");
+    eprintln!("    local uniquement.");
     std::process::exit(2)
 }
 
@@ -40,6 +49,9 @@ fn main() {
     let mut ecoute: Option<SocketAddr> = None;
     let mut pairs: Vec<SocketAddr> = Vec::new();
     let mut donnees = String::from("./donnees-obscura");
+    // Scellement DÉSACTIVÉ par défaut : produire des blocs est une décision
+    // d'opérateur, pas un comportement qu'un nœud adopte de lui-même.
+    let mut sceller_ms: Option<u64> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -47,6 +59,15 @@ fn main() {
             "--donnees" => {
                 let Some(v) = args.get(i + 1) else { usage() };
                 donnees = v.clone();
+                i += 2;
+            }
+            "--sceller" => {
+                let Some(v) = args.get(i + 1) else { usage() };
+                let Ok(ms) = v.parse::<u64>() else {
+                    eprintln!("cadence de scellement invalide : {v}");
+                    std::process::exit(2);
+                };
+                sceller_ms = Some(if ms == 0 { SCELLEMENT_MS_DEFAUT } else { ms });
                 i += 2;
             }
             "--ecoute" | "--pair" => {
@@ -95,10 +116,18 @@ fn main() {
         }
     };
     println!(
-        "identité {} ({} notes en chaîne)",
+        "identité {} — chaîne à la hauteur {} ({} notes)",
         if neuve { "CRÉÉE" } else { "rechargée" },
+        etat.hauteur(),
         etat.tree.len()
     );
+    match sceller_ms {
+        Some(ms) => {
+            println!("scellement ACTIVÉ toutes les {ms} ms");
+            println!("⚠️  aucune élection de producteur : ordre convenu, pas défendu");
+        }
+        None => println!("scellement désactivé (--sceller <ms> pour l'activer)"),
+    }
 
     let mut secret_dandelion = [0u8; 32];
     rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut secret_dandelion);
@@ -130,6 +159,7 @@ fn main() {
     let depart = Instant::now();
     let mut derniere_epoque = u64::MAX;
     let mut derniere_sauvegarde = 0u64;
+    let mut dernier_scellement = 0u64;
     loop {
         let maintenant = depart.elapsed().as_millis() as u64;
 
@@ -154,6 +184,23 @@ fn main() {
 
         rt.pomper(maintenant);
         rt.tick(maintenant);
+
+        // Scellement : ce qui rend les transactions DÉFINITIVES. Sans lui, le mempool
+        // ne se vide jamais et rien n'entre dans l'arbre.
+        if let Some(cadence) = sceller_ms {
+            if maintenant.saturating_sub(dernier_scellement) >= cadence {
+                dernier_scellement = maintenant;
+                if let Some((bloc, actions)) = rt.noeud_mut().sceller() {
+                    println!(
+                        "bloc {} scellé à la hauteur {} ({} transactions)",
+                        hex::encode(&bloc.id()[..8]),
+                        bloc.hauteur,
+                        bloc.transactions.len()
+                    );
+                    rt.executer(actions);
+                }
+            }
+        }
 
         // Sauvegarde périodique de l'état (écriture atomique : un arrêt brutal
         // laisse la version précédente intacte, jamais un fichier à moitié écrit).

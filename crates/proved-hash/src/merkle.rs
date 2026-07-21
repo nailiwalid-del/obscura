@@ -249,6 +249,10 @@ pub enum FrontierDecodeError {
 /// (rôle wallet : lui garde les feuilles). Racine identique à `ProvedMerkleTree`
 /// (mêmes `node`/`leaf`/`empties`) → les preuves `circuit::membership` sont
 /// inchangées (test différentiel `frontier_differentiel_full_tree`).
+///
+/// `Clone` est bon marché (O(depth), pas O(n)) — c'est ce qui permet d'appliquer un
+/// bloc de façon ATOMIQUE en gardant une copie de l'arbre avant mutation.
+#[derive(Clone)]
 pub struct MerkleFrontier {
     depth: usize,
     /// Bord droit : à chaque niveau `i`, le dernier nœud gauche en attente de frère.

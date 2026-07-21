@@ -39,6 +39,7 @@ const TAILLE_DIGEST: usize = 64;
 const TAG_ANNONCE: u8 = 1;
 const TAG_DEMANDE: u8 = 2;
 const TAG_TRANSACTION: u8 = 3;
+const TAG_BLOC: u8 = 4;
 
 /// Erreur de décodage d'un message applicatif.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -53,6 +54,8 @@ pub enum MessageError {
     TropDeDigests,
     #[error("transaction indécodable")]
     TransactionInvalide,
+    #[error("bloc indécodable : {0}")]
+    BlocInvalide(ledger::bloc::BlocDecodeError),
 }
 
 /// Message applicatif échangé entre nœuds.
@@ -63,6 +66,16 @@ pub enum Message {
     Demande(Vec<[u8; TAILLE_DIGEST]>),
     /// Livraison d'une transaction complète.
     Transaction(Box<ProvedTx>),
+    /// Livraison d'un BLOC — l'ordre qui rend les transactions définitives.
+    ///
+    /// Contrairement aux transactions, un bloc est diffusé ENTIER plutôt qu'annoncé
+    /// par digest. La raison est asymétrique : une transaction annoncée peut être
+    /// déjà connue de dix pairs, alors qu'un bloc neuf ne l'est de personne — un
+    /// aller-retour annonce/demande ne ferait que retarder ce que tout le monde va
+    /// vouloir. ⚠️ Un bloc plein (~34 Mio) dépasse largement le cadre réseau de
+    /// 1 Mio : à la cadence actuelle du prototype les blocs sont petits, mais un
+    /// transfert fragmenté sera nécessaire avant tout usage sérieux.
+    Bloc(Box<ledger::bloc::Bloc>),
 }
 
 impl Message {
@@ -81,6 +94,10 @@ impl Message {
                 b.push(TAG_TRANSACTION);
                 b.extend_from_slice(&tx.to_bytes());
             }
+            Message::Bloc(bloc) => {
+                b.push(TAG_BLOC);
+                b.extend_from_slice(&bloc.to_bytes());
+            }
         }
         b
     }
@@ -94,6 +111,11 @@ impl Message {
             TAG_TRANSACTION => {
                 let tx = ProvedTx::from_bytes(reste).map_err(|_| MessageError::TransactionInvalide)?;
                 Ok(Message::Transaction(Box::new(tx)))
+            }
+            TAG_BLOC => {
+                let bloc =
+                    ledger::bloc::Bloc::from_bytes(reste).map_err(MessageError::BlocInvalide)?;
+                Ok(Message::Bloc(Box::new(bloc)))
             }
             _ => Err(MessageError::TagInconnu),
         }
@@ -201,6 +223,38 @@ mod tests {
         let mut trop = Message::Annonce(vec![dg(1)]).to_bytes();
         trop.push(0);
         assert!(matches!(Message::from_bytes(&trop), Err(MessageError::OctetsResiduels)));
+    }
+
+    /// Aller-retour d'un bloc VIDE sur le fil — le cas courant d'une chaîne au repos.
+    #[test]
+    fn bloc_roundtrip() {
+        let bloc = ledger::bloc::Bloc::sceller(&[5u8; 64], 3, Vec::new());
+        let id = bloc.id();
+        let octets = Message::Bloc(Box::new(bloc)).to_bytes();
+        match Message::from_bytes(&octets).unwrap() {
+            Message::Bloc(b) => {
+                assert_eq!(b.id(), id, "l'identifiant doit survivre au fil");
+                assert_eq!(b.hauteur, 3);
+            }
+            _ => panic!("mauvais type"),
+        }
+    }
+
+    /// Un bloc indécodable est rejeté proprement, et l'erreur CONSERVE la cause :
+    /// « trop de transactions » et « tronqué » n'appellent pas la même réaction (la
+    /// première est une tentative d'abus, la seconde peut être un lien coupé).
+    #[test]
+    fn bloc_indecodable_rejete_en_conservant_la_cause() {
+        let mut b = vec![TAG_BLOC, 0x01];
+        b.extend_from_slice(&[0u8; 64]); // parent
+        b.extend_from_slice(&0u64.to_le_bytes()); // hauteur
+        b.extend_from_slice(&1_000_000u32.to_le_bytes()); // n hors borne
+        assert!(matches!(
+            Message::from_bytes(&b),
+            Err(MessageError::BlocInvalide(
+                ledger::bloc::BlocDecodeError::TropDeTransactions
+            ))
+        ));
     }
 
     /// Une transaction indécodable est rejetée proprement (le message porte des

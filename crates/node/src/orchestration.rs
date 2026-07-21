@@ -29,8 +29,9 @@
 use crate::message::Message;
 use circuit::ProvedTx;
 use crypto::sig::SigKeypair;
+use ledger::bloc::Bloc;
 use ledger::mempool::Mempool;
-use ledger::proved_state::ProvedLedgerState;
+use ledger::proved_state::{BlocRefus, ProvedLedgerState};
 use net::dandelion::{Dandelion, Routage};
 use net::pairs::{PeerId, TablePairs};
 
@@ -41,6 +42,14 @@ pub const PENALITE_PREUVE_INVALIDE: i32 = -34;
 
 /// Pénalité pour un message indécodable (le pair ne parle pas le protocole).
 pub const PENALITE_MESSAGE_INVALIDE: i32 = -10;
+
+/// Pénalité pour un bloc dont une transaction est invalide.
+///
+/// Aussi lourde qu'une preuve invalide isolée : faire vérifier tout un bloc avant de
+/// le rejeter coûte bien plus cher qu'une transaction seule. En revanche un bloc qui
+/// ne s'enchaîne PAS à notre tête ne pénalise pas — c'est le cas normal quand deux
+/// nœuds scellent en même temps, ou quand on est simplement en retard.
+pub const PENALITE_BLOC_INVALIDE: i32 = -34;
 
 /// Action à exécuter par la boucle d'événements. Aucune E/S n'est faite ici.
 pub enum Action {
@@ -104,6 +113,101 @@ impl Noeud {
             Message::Annonce(digests) => self.sur_annonce(de, digests),
             Message::Demande(digests) => self.sur_demande(de, digests),
             Message::Transaction(tx) => self.sur_transaction(de, *tx, maintenant_ms),
+            Message::Bloc(bloc) => self.sur_bloc(de, *bloc),
+        }
+    }
+
+    /// Scelle un bloc avec les transactions du mempool, l'applique, et le diffuse.
+    ///
+    /// # Personne n'a autorité pour faire cela — et c'est assumé
+    ///
+    /// Aucune élection de producteur n'existe (hors périmètre : docs/THREAT_MODEL.md).
+    /// N'importe quel nœud peut donc sceller, à n'importe quel moment. La chaîne qui
+    /// en résulte est un ordre CONVENU entre participants coopératifs, pas un ordre
+    /// DÉFENDU contre un adversaire. C'est utilisable pour un testnet local, pas au
+    /// delà.
+    ///
+    /// # L'ordre est déterministe, à dessein
+    ///
+    /// Les transactions sont triées par `tx_digest`. Deux nœuds scellant le même
+    /// mempool produisent alors le MÊME bloc — ce qui rend les collisions inoffensives
+    /// au lieu de provoquer une divergence.
+    ///
+    /// ⚠️ Un tri par digest est *grindable* : un émetteur peut faire varier sa
+    /// transaction jusqu'à obtenir un digest favorable. Sans marché de frais ni
+    /// compétition pour l'espace, cela n'achète rien aujourd'hui ; le jour où l'ordre
+    /// aura de la valeur (MEV), ce critère devra changer.
+    ///
+    /// Retourne le bloc scellé et l'action de diffusion, ou `None` si le mempool ne
+    /// contient rien à sceller.
+    pub fn sceller(&mut self) -> Option<(Bloc, Vec<Action>)> {
+        let mut digests = self.mempool.digests();
+        if digests.is_empty() {
+            return None;
+        }
+        digests.sort_unstable();
+
+        let transactions: Vec<circuit::ProvedTx> = digests
+            .iter()
+            .filter_map(|d| self.mempool.get(d))
+            .filter_map(|tx| ProvedTx::from_bytes(&tx.to_bytes()).ok())
+            .collect();
+        if transactions.is_empty() {
+            return None;
+        }
+
+        let bloc = Bloc::sceller(&self.etat.tete(), self.etat.hauteur() + 1, transactions);
+        // On applique à NOTRE état avant de diffuser : diffuser un bloc qu'on n'a pas
+        // su appliquer soi-même reviendrait à demander aux autres de nous croire.
+        match self.etat.appliquer_bloc(&bloc) {
+            Ok(_) => {
+                for d in &digests {
+                    self.mempool.retirer(d);
+                }
+                let octets = bloc.to_bytes();
+                let copie = Bloc::from_bytes(&octets).ok()?;
+                Some((bloc, vec![Action::Diffuser(Message::Bloc(Box::new(copie)))]))
+            }
+            // Notre propre mempool contenait une transaction devenue inapplicable
+            // (état avancé entre-temps). On purge et on réessaiera au tour suivant.
+            Err(_) => {
+                self.mempool.purger(&self.etat);
+                None
+            }
+        }
+    }
+
+    /// Un bloc arrive : on l'applique s'il prolonge NOTRE chaîne.
+    ///
+    /// Trois issues distinctes, et la distinction compte :
+    ///
+    /// - il s'enchaîne et s'applique → on purge le mempool et on relaie ;
+    /// - il ne s'enchaîne pas (parent ou hauteur) → **aucune sanction** : c'est le cas
+    ///   normal de deux nœuds qui scellent en même temps, ou d'un nœud en retard.
+    ///   Pénaliser ici bannirait les pairs les plus actifs ;
+    /// - il s'enchaîne mais contient une transaction invalide → **sanction lourde** :
+    ///   nous a fait vérifier tout un bloc pour rien.
+    fn sur_bloc(&mut self, de: PeerId, bloc: Bloc) -> Vec<Action> {
+        match self.etat.appliquer_bloc(&bloc) {
+            Ok(_) => {
+                // Les transactions du bloc ne sont plus en attente ; celles qui sont
+                // devenues inapplicables (double-dépense) partent avec la purge.
+                for tx in &bloc.transactions {
+                    self.mempool.retirer(&tx.tx_digest);
+                }
+                self.mempool.purger(&self.etat);
+                match Bloc::from_bytes(&bloc.to_bytes()) {
+                    Ok(copie) => vec![Action::Diffuser(Message::Bloc(Box::new(copie)))],
+                    Err(_) => Vec::new(),
+                }
+            }
+            Err(BlocRefus::Transaction { .. }) => {
+                self.pairs.ajuster_score(&de, PENALITE_BLOC_INVALIDE);
+                Vec::new()
+            }
+            // Chaînage : ni faute ni relais. Se taire est la bonne réponse — relayer
+            // un bloc qu'on n'a pas appliqué propagerait une chaîne qu'on ne suit pas.
+            Err(_) => Vec::new(),
         }
     }
 
@@ -349,6 +453,77 @@ mod tests {
             "50 doublons ne doivent PAS pénaliser : c'est le cas normal du gossip"
         );
         assert!(!n.pairs.get(&p).unwrap().banni());
+    }
+
+    /// SCELLER vide le mempool dans l'état : c'est le chaînon qui manquait entre
+    /// « la transaction est reçue » et « la transaction est définitive ».
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
+    fn sceller_finalise_les_transactions_du_mempool() {
+        let (mut n, tx) = noeud_avec_transaction();
+        let nf = tx.nullifiers[0];
+        n.mempool.admettre(&n.etat, tx).expect("admission");
+        assert_eq!(n.mempool.len(), 1);
+        assert_eq!(n.etat.hauteur(), 0);
+
+        let (bloc, actions) = n.sceller().expect("un bloc à sceller");
+        assert_eq!(bloc.hauteur, 1);
+        assert_eq!(n.etat.hauteur(), 1, "notre chaîne a avancé");
+        assert_eq!(n.etat.tete(), bloc.id());
+        assert!(n.etat.is_spent(&nf), "le nullifier est DÉFINITIVEMENT dépensé");
+        assert_eq!(n.mempool.len(), 0, "la transaction n'est plus en attente");
+        assert!(matches!(actions.as_slice(), [Action::Diffuser(Message::Bloc(_))]));
+    }
+
+    /// Un mempool vide ne produit pas de bloc : une chaîne au repos ne doit pas
+    /// s'allonger de blocs vides que chaque nœud devrait ensuite propager.
+    #[test]
+    fn sceller_sans_rien_ne_produit_pas_de_bloc() {
+        let mut n = noeud_de_test();
+        assert!(n.sceller().is_none());
+        assert_eq!(n.etat.hauteur(), 0);
+    }
+
+    /// Un bloc qui ne s'enchaîne PAS ne pénalise pas.
+    ///
+    /// C'est le cas NORMAL : deux nœuds scellent en même temps, ou nous sommes en
+    /// retard. Sanctionner ici bannirait les pairs les plus actifs — la même erreur
+    /// que pénaliser les doublons de gossip, dans un contexte où elle est plus facile
+    /// encore à commettre.
+    #[test]
+    fn bloc_non_chaine_ne_penalise_pas() {
+        let mut n = noeud_de_test();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+
+        let etranger = Bloc::sceller(&[9u8; 64], 1, Vec::new());
+        let actions = n.traiter(p, Message::Bloc(Box::new(etranger)), 0);
+        assert!(actions.is_empty(), "on ne relaie pas un bloc qu'on n'applique pas");
+        assert_eq!(
+            n.pairs.get(&p).unwrap().score,
+            0,
+            "un bloc concurrent ou en avance n'est PAS une faute"
+        );
+        assert_eq!(n.etat.hauteur(), 0, "notre chaîne n'a pas bougé");
+    }
+
+    /// Un bloc bien chaîné mais contenant une transaction invalide pénalise
+    /// lourdement : il nous a fait vérifier tout un bloc pour rien.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
+    fn bloc_a_transaction_invalide_penalise() {
+        let (mut n, mut tx) = noeud_avec_transaction();
+        // Un commitment de sortie falsifié invalide la preuve du monolithe.
+        tx.output_commitments[0] = proved_hash::digest::Digest(core::array::from_fn(|i| {
+            proved_hash::felt::Felt::from_canonical_u64(999_000 + i as u64).unwrap()
+        }));
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+
+        let bloc = Bloc::sceller(&n.etat.tete(), 1, vec![tx]);
+        n.traiter(p, Message::Bloc(Box::new(bloc)), 0);
+        assert_eq!(n.pairs.get(&p).unwrap().score, PENALITE_BLOC_INVALIDE);
+        assert_eq!(n.etat.hauteur(), 0, "aucune trace du bloc refusé");
     }
 
     /// Un message indécodable pénalise — le pair ne parle pas le protocole.

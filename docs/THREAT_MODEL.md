@@ -86,25 +86,53 @@ avant la phase 3.
   protège la propagation, pas le premier saut : le pair auquel on soumet observe
   directement l'origine. Se connecter à son propre nœud, ou via un réseau anonymisant,
   reste à la charge de l'utilisateur.
-- **Aucune finalité, donc aucune réception.** Voir « Trou de complétude » ci-dessous.
+- **Aucune réception.** Voir « Finalité » ci-dessous.
 
-## Trou de complétude connu : pas de finalité, donc pas de réception
+## Finalité : ce qui existe, et ce qui n'existe pas
 
-`ProvedLedgerState::apply_proved_tx` implémente et teste la règle de consensus, mais
-**aucun chemin du nœud ne l'appelle** : les transactions s'accumulent dans le mempool
-sans jamais être appliquées. Il manque une notion d'ORDRE convenu entre nœuds —
-appliquer localement sans accord ferait diverger les arbres, et donc les racines, ce
-qui est pire que ne rien appliquer.
+Une transaction devient définitive en entrant dans un **bloc** (`ledger::bloc`) : un
+lot de transactions dans un ordre écrit, chaîné à son parent par un identifiant
+`dual_hash` non tronqué. `ProvedLedgerState::appliquer_bloc` l'applique **atomiquement**
+et deux nœuds acceptant la même chaîne convergent vers la même racine — vérifié sur de
+vraies sockets (`crates/node/tests/finalite.rs`).
 
-Conséquence directe : un wallet ne peut pas **recevoir**. Il lui faut rejouer dans
-l'ordre tous les commitments insérés dans l'arbre pour en connaître les index et
-produire ses chemins de Merkle ; or le nœud n'en conserve pas l'historique
-(`MerkleFrontier` = bord droit seulement) et n'a rien à servir. Le paiement lui-même
+L'atomicité n'est pas un raffinement : un bloc à moitié appliqué placerait le nœud dans
+un état qu'aucun autre n'a, sans qu'il le sache. Il refuserait ensuite toutes les
+transactions pour « ancre inconnue », et rien dans les messages d'erreur ne désignerait
+le bloc fautif.
+
+### ⚠️ Personne n'a autorité pour sceller
+
+Aucune élection de producteur n'existe — c'est explicitement hors périmètre (économie et
+gouvernance du consensus). Tout nœud lancé avec `--sceller` fabrique donc des blocs, et
+la chaîne obtenue est un ordre **convenu** entre participants coopératifs, jamais un
+ordre **défendu** contre un adversaire. Un participant hostile peut sceller ce qu'il
+veut, quand il veut. Testnet local uniquement.
+
+L'ordre interne d'un bloc est le tri par `tx_digest` : deux nœuds scellant le même
+mempool produisent le même bloc, ce qui rend les collisions inoffensives. Ce critère est
+*grindable* (on peut faire varier une transaction jusqu'à obtenir un digest favorable) ;
+sans marché de frais cela n'achète rien, mais devra changer le jour où l'ordre aura de
+la valeur.
+
+### ⚠️ Aucune réorganisation n'est possible, par construction
+
+L'état repose sur une `MerkleFrontier` append-only et un ensemble de nullifiers sans
+historique : **rien ne peut être défait**. Ce n'est pas un choix d'implémentation qu'on
+lèverait plus tard sans y toucher — supporter les réorganisations exigerait de
+redessiner l'état du ledger (arbre versionné, nullifiers datés par hauteur, journal de
+défaisage). La chaîne est linéaire et un bloc accepté est définitif.
+
+### Trou restant : un wallet ne peut toujours pas RECEVOIR
+
+Il lui faut rejouer dans l'ordre tous les commitments insérés dans l'arbre pour en
+connaître les index et produire ses chemins de Merkle ; or le nœud n'en conserve pas
+l'historique (`MerkleFrontier` = bord droit seulement) et n'a rien à servir. Le paiement
 fonctionne de bout en bout (`crates/node/tests/paiement_wallet.rs`), mais la monnaie
 rendue sort de la vue du wallet faute d'index.
 
-C'est le prochain manque structurel à combler, avant toute sophistication
-cryptographique supplémentaire.
+C'est le prochain manque structurel : un nœud doit conserver et servir l'historique des
+sorties, et un wallet doit pouvoir le rejouer.
 
 ## Security Claims — Phase 3 (validité + witness-hiding 3z-b1)
 

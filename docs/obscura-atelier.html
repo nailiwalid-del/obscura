@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="L'atelier Obscura — une simulation interactive et pédagogique du cycle de vie d'une note : identité, commitments, arbre de Merkle, preuve P1–P7, nullifiers et double dépense.">
+<title>L'atelier Obscura — comprendre en manipulant</title>
+<style>
+  /* Charte partagée avec obscura-overview.html */
+  :root{
+    --ink:#14161d; --paper:#f2f3f6; --surface:#ffffff; --surface-2:#e9ebf0;
+    --muted:#59616f; --line:#d8dce3; --accent:#0f9a82; --accent-ink:#0b6f5e;
+    --accent-soft:#d8f1eb; --secret:#a86f16; --secret-soft:#f4e9d3;
+    --done:#0f8f6c; --pending:#8b94a2; --danger:#c2483d; --danger-soft:#f7e2e0;
+    --code-bg:#eef1f5;
+    --shadow:0 1px 2px rgba(20,22,29,.06),0 8px 24px rgba(20,22,29,.05);
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --ink:#e7eaf1; --paper:#0c0e13; --surface:#14171f; --surface-2:#1b1f2a;
+      --muted:#98a2b2; --line:#272c38; --accent:#2fd0b0; --accent-ink:#54e0c4;
+      --accent-soft:#123029; --secret:#e2ac52; --secret-soft:#2b2415;
+      --done:#33c99a; --pending:#69727f; --danger:#e07a70; --danger-soft:#3a1f1c;
+      --code-bg:#161a22;
+      --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"]{
+    --ink:#14161d; --paper:#f2f3f6; --surface:#ffffff; --surface-2:#e9ebf0;
+    --muted:#59616f; --line:#d8dce3; --accent:#0f9a82; --accent-ink:#0b6f5e;
+    --accent-soft:#d8f1eb; --secret:#a86f16; --secret-soft:#f4e9d3;
+    --done:#0f8f6c; --pending:#8b94a2; --danger:#c2483d; --danger-soft:#f7e2e0;
+    --code-bg:#eef1f5;
+    --shadow:0 1px 2px rgba(20,22,29,.06),0 8px 24px rgba(20,22,29,.05);
+  }
+  :root[data-theme="dark"]{
+    --ink:#e7eaf1; --paper:#0c0e13; --surface:#14171f; --surface-2:#1b1f2a;
+    --muted:#98a2b2; --line:#272c38; --accent:#2fd0b0; --accent-ink:#54e0c4;
+    --accent-soft:#123029; --secret:#e2ac52; --secret-soft:#2b2415;
+    --done:#33c99a; --pending:#69727f; --danger:#e07a70; --danger-soft:#3a1f1c;
+    --code-bg:#161a22;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35);
+  }
+
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto} *{transition:none!important; animation:none!important}}
+  body{
+    margin:0; background:var(--paper); color:var(--ink); min-height:100vh;
+    font-family:-apple-system,system-ui,"Segoe UI",Roboto,sans-serif;
+    font-size:16.5px; line-height:1.6; -webkit-font-smoothing:antialiased;
+  }
+  .mono{font-family:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace}
+  .shell{max-width:1060px; margin:0 auto; padding:0 clamp(18px,4vw,40px)}
+  a{color:var(--accent-ink)}
+  code{font-family:ui-monospace,Menlo,monospace; font-size:.86em; background:var(--code-bg); padding:.1em .38em; border-radius:5px; border:1px solid var(--line)}
+  :focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:3px}
+
+  header.hero{border-bottom:1px solid var(--line);
+    background:radial-gradient(900px 340px at 80% -10%, color-mix(in srgb,var(--accent) 16%, transparent), transparent 60%), var(--paper)}
+  .hero .shell{padding:clamp(36px,7vw,64px) clamp(18px,4vw,40px) clamp(26px,4vw,40px)}
+  .eyebrow{font-family:ui-monospace,Menlo,monospace; font-size:12.5px; letter-spacing:.22em; text-transform:uppercase; color:var(--accent-ink); margin:0 0 16px; display:flex; align-items:center; gap:12px}
+  .eyebrow::before{content:""; width:26px; height:1px; background:var(--accent)}
+  h1{font-family:Georgia,serif; font-weight:700; letter-spacing:-.015em; font-size:clamp(1.9rem,5vw,3.1rem); line-height:1.06; margin:0}
+  h1 em{font-style:normal; color:var(--accent)}
+  .lede{color:var(--muted); max-width:64ch; margin:14px 0 0; font-size:clamp(1rem,1.9vw,1.15rem)}
+  .toy-badge{display:inline-flex; align-items:center; gap:8px; margin-top:18px; font-family:ui-monospace,Menlo,monospace; font-size:12px;
+    background:var(--secret-soft); color:var(--secret); border:1px solid color-mix(in srgb,var(--secret) 35%,var(--line)); padding:6px 13px; border-radius:20px}
+
+  main{padding:34px 0 90px}
+  .step{background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:24px clamp(18px,3vw,30px); margin:22px 0; box-shadow:var(--shadow); transition:opacity .35s}
+  .step.locked{opacity:.42; pointer-events:none; user-select:none}
+  .step h2{font-family:Georgia,serif; font-size:1.35rem; margin:0 0 4px; display:flex; align-items:center; gap:12px; letter-spacing:-.01em}
+  .step h2 .n{flex:none; width:30px; height:30px; border-radius:50%; background:var(--accent-soft); color:var(--accent-ink); display:inline-flex; align-items:center; justify-content:center; font-family:ui-monospace,Menlo,monospace; font-size:14px; border:1px solid color-mix(in srgb,var(--accent) 35%,var(--line))}
+  .step.done h2 .n{background:var(--done); color:#fff; border-color:var(--done)}
+  .step .why{color:var(--muted); font-size:14.5px; margin:4px 0 16px; max-width:72ch}
+
+  button{font:inherit; cursor:pointer; border-radius:10px; border:1px solid var(--line); background:var(--surface-2); color:var(--ink); padding:9px 16px; transition:transform .08s, background .15s}
+  button:hover{background:color-mix(in srgb,var(--accent) 10%, var(--surface-2))}
+  button:active{transform:scale(.97)}
+  button.primary{background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600}
+  button.primary:hover{background:var(--accent-ink)}
+  button.danger{background:var(--danger-soft); border-color:color-mix(in srgb,var(--danger) 40%,var(--line)); color:var(--danger); font-weight:600}
+  button:disabled{opacity:.45; cursor:not-allowed; transform:none}
+  .btnrow{display:flex; flex-wrap:wrap; gap:10px; margin:10px 0}
+
+  .kv{display:grid; grid-template-columns:auto 1fr; gap:6px 14px; font-size:14.5px; margin:12px 0; align-items:baseline}
+  .kv .k{font-family:ui-monospace,Menlo,monospace; font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); white-space:nowrap}
+  .hash{font-family:ui-monospace,Menlo,monospace; font-size:13.5px; word-break:break-all}
+  .pill{display:inline-block; font-family:ui-monospace,Menlo,monospace; font-size:11px; padding:2px 9px; border-radius:20px; border:1px solid var(--line); background:var(--surface-2); color:var(--muted); letter-spacing:.05em; margin-left:8px; vertical-align:middle}
+  .pill.secret{color:var(--secret); background:var(--secret-soft); border-color:color-mix(in srgb,var(--secret) 40%,var(--line))}
+  .pill.pub{color:var(--accent-ink); background:var(--accent-soft); border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
+
+  .secretbox{border:1px dashed color-mix(in srgb,var(--secret) 55%,var(--line)); background:var(--secret-soft); border-radius:12px; padding:14px 16px; margin:14px 0}
+  .secretbox .lab{font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--secret); display:block; margin-bottom:6px}
+
+  /* Notes du wallet */
+  .notes{display:flex; flex-wrap:wrap; gap:12px; margin:14px 0}
+  .note{background:var(--surface-2); border:1px solid var(--line); border-radius:12px; padding:12px 15px; min-width:150px; position:relative; transition:box-shadow .15s, border-color .15s}
+  .note b{font-family:Georgia,serif; font-size:1.35rem}
+  .note .cm{font-family:ui-monospace,Menlo,monospace; font-size:11px; color:var(--muted); margin-top:4px; word-break:break-all}
+  .note.spent{opacity:.5}
+  .note.spent::after{content:"dépensée ✓"; position:absolute; top:8px; right:10px; font-family:ui-monospace,Menlo,monospace; font-size:10px; color:var(--danger)}
+  .note.selectable{cursor:pointer}
+  .note.selectable:hover{border-color:var(--accent)}
+  .note.selected{border-color:var(--accent); box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 45%, transparent)}
+  .note .who{font-family:ui-monospace,Menlo,monospace; font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--accent-ink)}
+  .note.change{border-style:dashed}
+
+  /* Arbre de Merkle */
+  .treewrap{background:var(--surface-2); border:1px solid var(--line); border-radius:14px; padding:18px 14px 10px; margin:16px 0; overflow-x:auto}
+  .treewrap .cap{font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); text-align:center; margin-top:10px}
+  .tree{display:flex; flex-direction:column; gap:14px; min-width:560px}
+  .trow{display:flex; justify-content:center; gap:8px}
+  .tnode{background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:5px 8px; font-family:ui-monospace,Menlo,monospace; font-size:11px; text-align:center; min-width:70px; transition:background .3s, border-color .3s, box-shadow .3s}
+  .tnode.empty{color:var(--pending); border-style:dashed}
+  .tnode.root{border-color:var(--accent); font-weight:700}
+  .tnode .tl{display:block; font-size:9px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted)}
+  .tnode.flash{background:var(--accent-soft); border-color:var(--accent)}
+  .tnode.path{background:var(--secret-soft); border-color:var(--secret); box-shadow:0 0 0 2px color-mix(in srgb,var(--secret) 40%, transparent)}
+
+  /* Formulaire de dépense */
+  .spendform{display:flex; flex-wrap:wrap; gap:14px; align-items:flex-end; margin:12px 0}
+  .field label{display:block; font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin-bottom:5px}
+  .field input[type=number]{font:inherit; width:110px; padding:8px 10px; border-radius:10px; border:1px solid var(--line); background:var(--surface); color:var(--ink)}
+  .balance{font-family:ui-monospace,Menlo,monospace; font-size:14px; background:var(--code-bg); border:1px solid var(--line); border-radius:10px; padding:10px 14px; margin:10px 0}
+  .balance.bad{color:var(--danger); border-color:color-mix(in srgb,var(--danger) 45%,var(--line))}
+  .balance.ok{color:var(--accent-ink)}
+
+  /* Checklist de preuve */
+  .checklist{list-style:none; margin:14px 0; padding:0; display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:8px}
+  .checklist li{display:flex; gap:9px; align-items:baseline; font-size:13.5px; background:var(--surface-2); border:1px solid var(--line); border-radius:9px; padding:8px 11px; opacity:.45; transition:opacity .25s, border-color .25s}
+  .checklist li .st{font-family:ui-monospace,Menlo,monospace; flex:none; width:1.3em; text-align:center; color:var(--pending)}
+  .checklist li.run{opacity:1; border-color:var(--accent)}
+  .checklist li.run .st{color:var(--accent-ink)}
+  .checklist li.okd{opacity:1}
+  .checklist li.okd .st{color:var(--done)}
+  .checklist li.ko{opacity:1; border-color:var(--danger); background:var(--danger-soft)}
+  .checklist li.ko .st{color:var(--danger)}
+  .checklist li b{font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--accent-ink)}
+
+  .verdict{font-family:ui-monospace,Menlo,monospace; font-size:14px; border-radius:10px; padding:11px 14px; margin:10px 0; display:none}
+  .verdict.show{display:block}
+  .verdict.ok{background:var(--accent-soft); color:var(--accent-ink); border:1px solid color-mix(in srgb,var(--accent) 40%,var(--line))}
+  .verdict.ko{background:var(--danger-soft); color:var(--danger); border:1px solid color-mix(in srgb,var(--danger) 45%,var(--line))}
+
+  /* Observateur */
+  .twocol{display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px; margin:14px 0}
+  .obs{border:1px solid var(--line); border-radius:14px; padding:16px 18px; background:var(--surface-2)}
+  .obs h3{margin:0 0 10px; font-size:1.02rem; display:flex; gap:8px; align-items:center}
+  .obs ul{margin:0; padding-left:1.2em; font-size:13.5px}
+  .obs li{margin:5px 0}
+  .obs .none{color:var(--muted); font-style:italic; font-size:13.5px}
+  .obs.network{border-left:3px solid var(--accent)}
+  .obs.alice{border-left:3px solid var(--secret)}
+  .journal{font-family:ui-monospace,Menlo,monospace; font-size:12.5px; max-height:180px; overflow-y:auto; background:var(--code-bg); border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-top:10px}
+  .journal div{padding:2px 0; border-bottom:1px dotted var(--line)}
+  .journal div:last-child{border-bottom:none}
+
+  .callout{border:1px solid var(--line); border-left:3px solid var(--accent); background:var(--surface); border-radius:10px; padding:14px 18px; margin:18px 0; box-shadow:var(--shadow); font-size:15px}
+  .callout .lab{font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--accent-ink); display:block; margin-bottom:5px}
+
+  .footer{border-top:1px solid var(--line); margin-top:50px; padding:24px 0 60px; color:var(--muted); font-size:14px}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="shell">
+    <p class="eyebrow">L'atelier Obscura · démo interactive</p>
+    <h1>Comprendre Obscura <em>en manipulant</em></h1>
+    <p class="lede">Vous êtes <strong>Alice</strong>. En cinq étapes, vous allez créer une identité, recevoir des notes, les dépenser avec une preuve, tenter une double dépense — et voir exactement ce que le réseau observe (presque rien).</p>
+    <span class="toy-badge">⚠ Simulation pédagogique : hachage-jouet, pas de vraie crypto — le vrai projet utilise Rescue-Prime et BLAKE3‖SHA3</span>
+  </div>
+</header>
+
+<main>
+<div class="shell">
+
+  <!-- ÉTAPE 1 -->
+  <section class="step" id="s1">
+    <h2><span class="n">1</span> Crée ton identité</h2>
+    <p class="why">Tout part d'un <strong>secret maître</strong> de 32 octets. Il ne quitte JAMAIS ton wallet : le circuit prouvera que tu le connais (P2, P4) sans le montrer. Deux valeurs en sont dérivées par hachage.</p>
+    <div class="btnrow"><button class="primary" id="btn-gen">🎲 Générer mon secret</button></div>
+    <div id="identity" hidden>
+      <div class="secretbox">
+        <span class="lab">🔒 Ne sort jamais du wallet</span>
+        <div class="kv">
+          <span class="k">shielded_secret</span><span class="hash" id="v-secret"></span>
+        </div>
+      </div>
+      <div class="kv">
+        <span class="k">owner</span><span><span class="hash" id="v-owner"></span><span class="pill">= H_owner(secret)</span></span>
+        <span class="k">nk</span><span><span class="hash" id="v-nk"></span><span class="pill">= H_nk(secret)</span></span>
+      </div>
+      <p class="why">👉 <code>owner</code> identifie tes notes, <code>nk</code> servira à fabriquer les nullifiers. Les deux dérivent du même secret — et le circuit le prouvera.</p>
+    </div>
+  </section>
+
+  <!-- ÉTAPE 2 -->
+  <section class="step locked" id="s2">
+    <h2><span class="n">2</span> Reçois des notes</h2>
+    <p class="why">Une <strong>note</strong> = un billet numérique <code>{valeur, owner, ρ, r}</code>. Le réseau n'en voit qu'un <strong>commitment</strong> <code>cm = H(note)</code> — une enveloppe scellée — inséré comme feuille dans l'arbre de Merkle. Personne ne peut en lire la valeur ni le propriétaire.</p>
+    <div class="btnrow">
+      <button data-mint="5">+ Recevoir 5 Ⓞ</button>
+      <button data-mint="10">+ Recevoir 10 Ⓞ</button>
+      <button data-mint="25">+ Recevoir 25 Ⓞ</button>
+    </div>
+    <div class="notes" id="wallet-notes"></div>
+    <div class="treewrap" aria-label="Arbre de Merkle des commitments">
+      <div class="tree" id="tree"></div>
+      <div class="cap">L'arbre de Merkle public (profondeur 3 ici, 32 dans le vrai protocole — 4 milliards de notes)</div>
+    </div>
+  </section>
+
+  <!-- ÉTAPE 3 -->
+  <section class="step locked" id="s3">
+    <h2><span class="n">3</span> Dépense — avec une preuve, pas des aveux</h2>
+    <p class="why">Choisis une note, un montant pour <strong>Bob</strong> et des frais. Ton wallet fabriquera une preuve des règles P1–P7, publiera le <strong>nullifier</strong> de la note dépensée (tampon « utilisée », inreliable à sa feuille) et deux nouveaux commitments : celui de Bob et ta <strong>monnaie rendue</strong>, rechiffrée vers toi-même.</p>
+    <p class="why" id="pick-hint">👇 Clique une note non dépensée pour la sélectionner.</p>
+    <div class="spendform">
+      <div class="field"><label>Vers Bob</label><input type="number" id="in-amount" min="0" value="7"></div>
+      <div class="field"><label>Frais</label><input type="number" id="in-fee" min="0" value="1"></div>
+      <button class="primary" id="btn-prove" disabled>🧮 Prouver &amp; envoyer</button>
+    </div>
+    <div class="balance" id="balance">Sélectionne une note…</div>
+    <ul class="checklist" id="checklist">
+      <li data-p="P1"><span class="st">·</span><span><b>P1</b> la note existe dans l'arbre (chemin de Merkle)</span></li>
+      <li data-p="P2"><span class="st">·</span><span><b>P2</b> owner = H_owner(secret) — c'est bien toi</span></li>
+      <li data-p="P3"><span class="st">·</span><span><b>P3</b> le nullifier est bien formé</span></li>
+      <li data-p="P4"><span class="st">·</span><span><b>P4</b> nk dérive du même secret que owner</span></li>
+      <li data-p="P5"><span class="st">·</span><span><b>P5</b> équilibre : entrées = sorties + frais</span></li>
+      <li data-p="P6"><span class="st">·</span><span><b>P6</b> montants dans les bornes (&lt; 2⁶⁰)</span></li>
+      <li data-p="P7"><span class="st">·</span><span><b>P7</b> les commitments de sortie sont corrects</span></li>
+      <li data-p="NF"><span class="st">·</span><span><b>nf</b> nullifier jamais vu par le réseau ?</span></li>
+    </ul>
+    <div class="verdict" id="verdict"></div>
+  </section>
+
+  <!-- ÉTAPE 4 -->
+  <section class="step locked" id="s4">
+    <h2><span class="n">4</span> Tente la double dépense 😈</h2>
+    <p class="why">Ta note est dépensée… mais son enveloppe est toujours dans l'arbre (on n'efface jamais rien). Essaie de la re-dépenser : la preuve P1–P7 passera — c'est le <strong>nullifier</strong>, déjà publié, qui te trahira. Un tampon unique par note, sans révéler laquelle.</p>
+    <div class="btnrow"><button class="danger" id="btn-double">😈 Rejouer la même note</button></div>
+    <div class="verdict" id="verdict2"></div>
+  </section>
+
+  <!-- ÉTAPE 5 -->
+  <section class="step locked" id="s5">
+    <h2><span class="n">5</span> L'œil de l'observateur</h2>
+    <p class="why">Compare : tout ce que le réseau a appris pendant tes manipulations, contre ce que ton wallet sait. C'est toute la promesse d'Obscura — la validité est publique, le contenu ne l'est pas.</p>
+    <div class="twocol">
+      <div class="obs network">
+        <h3>🌐 Ce que voit le réseau</h3>
+        <ul>
+          <li>la <strong>racine</strong> de l'arbre : <span class="hash" id="obs-root"></span></li>
+          <li><span id="obs-cm-count">0</span> commitments — des enveloppes scellées, indistinguables</li>
+          <li><span id="obs-nf-count">0</span> nullifiers — « une note a été dépensée », sans savoir laquelle</li>
+          <li>les <strong>frais</strong> de chaque transaction</li>
+        </ul>
+        <p class="none">Ni montants, ni expéditeur, ni destinataire, ni lien nullifier→feuille.</p>
+        <div class="journal" id="journal"><div>— journal public vide —</div></div>
+      </div>
+      <div class="obs alice">
+        <h3>👁 Ce que sait Alice</h3>
+        <ul id="obs-alice">
+          <li class="none">Rien encore…</li>
+        </ul>
+      </div>
+    </div>
+    <div class="callout"><span class="lab">Et sur le réseau ?</span>Cette page s'arrête à la transaction. Dans le vrai prototype, elle voyage ensuite sur des <strong>liens chiffrés post-quantiques</strong> et son origine est brouillée par <strong>Dandelion++</strong> — voir la <a href="obscura-overview.html">note de conception</a>.</div>
+  </section>
+
+  <div class="btnrow" style="margin-top:28px"><button id="btn-reset">↺ Recommencer l'atelier</button></div>
+
+</div>
+</main>
+
+<footer class="footer">
+  <div class="shell">
+    <p>L'atelier Obscura — simulation pédagogique (hachage-jouet FNV, arbre profondeur 3). Le protocole réel : <a href="obscura-overview.html">note de conception</a> · <code>docs/PROTOCOL.md</code> · <code>docs/STARK_STATEMENT.md</code>. Prototype non audité.</p>
+  </div>
+</footer>
+
+<script>
+"use strict";
+/* ============================================================
+   L'atelier Obscura — simulation pédagogique.
+   AUCUNE vraie crypto ici : un hachage-jouet (FNV-1a) suffit à
+   montrer les CONCEPTS (commitment, arbre, nullifier, équilibre).
+   ============================================================ */
+
+// --- Hachage-jouet : FNV-1a 32 bits, deux passes salées → 10 hex.
+function toyHash(domaine, ...morceaux){
+  const s = domaine + " " + morceaux.join(" ");
+  let h1 = 0x811c9dc5, h2 = 0x01000193;
+  for (let i = 0; i < s.length; i++){
+    h1 = Math.imul(h1 ^ s.charCodeAt(i), 0x01000193) >>> 0;
+    h2 = Math.imul(h2 ^ (s.charCodeAt(i) + 7), 0x01000193) >>> 0;
+  }
+  return (h1.toString(16).padStart(8,"0") + h2.toString(16).padStart(8,"0")).slice(0,10);
+}
+function alea(){ // 8 octets d'aléa hex (jouet)
+  let out = "";
+  for (let i = 0; i < 4; i++) out += Math.floor(Math.random()*65536).toString(16).padStart(4,"0");
+  return out;
+}
+
+// --- État de l'atelier.
+const FEUILLES = 8; // arbre de profondeur 3
+const etat = {
+  secret:null, owner:null, nk:null,
+  bobOwner:null,
+  notes:[],            // {id, valeur, rho, r, cm, feuille, depensee, qui}
+  feuilles:Array(FEUILLES).fill(null),
+  nullifiers:new Set(),
+  derniereDepense:null, // {note, montant, frais} pour l'étape 4
+  occupe:false,
+};
+
+const $ = id => document.getElementById(id);
+const attendre = ms => new Promise(r => setTimeout(r, ms));
+
+// --- Arbre de Merkle jouet.
+function merkle(){
+  const vide = toyHash("obscura-jouet/feuille-vide");
+  let niveau = etat.feuilles.map(cm => cm ?? vide);
+  const niveaux = [niveau.slice()];
+  while (niveau.length > 1){
+    const suivant = [];
+    for (let i = 0; i < niveau.length; i += 2)
+      suivant.push(toyHash("obscura-jouet/noeud", niveau[i], niveau[i+1]));
+    niveaux.unshift(suivant.slice());
+    niveau = suivant;
+  }
+  return niveaux; // [ [racine], [2], [4], [8 feuilles] ]
+}
+function cheminDe(feuille){ // indices {niveau, i} du chemin feuille→racine (pour surligner P1)
+  const sel = [];
+  let i = feuille;
+  for (let niveau = 3; niveau >= 0; niveau--){ sel.push(niveau + ":" + i); i = Math.floor(i/2); }
+  return new Set(sel);
+}
+function dessinerArbre(surligne){
+  const niveaux = merkle();
+  const cont = $("tree"); cont.innerHTML = "";
+  niveaux.forEach((nds, niveau) => {
+    const row = document.createElement("div"); row.className = "trow";
+    nds.forEach((h, i) => {
+      const d = document.createElement("div");
+      const feuilleVide = niveau === 3 && etat.feuilles[i] === null;
+      d.className = "tnode" + (niveau === 0 ? " root" : "") + (feuilleVide ? " empty" : "");
+      if (surligne && surligne.has(niveau + ":" + i)) d.classList.add("path");
+      d.innerHTML = (niveau === 0 ? '<span class="tl">racine</span>' : "") + (feuilleVide ? "∅" : h.slice(0,8));
+      row.appendChild(d);
+    });
+    cont.appendChild(row);
+  });
+  $("obs-root").textContent = niveaux[0][0];
+}
+
+// --- Rendu du wallet et de l'observateur.
+function dessinerNotes(){
+  const cont = $("wallet-notes"); cont.innerHTML = "";
+  etat.notes.filter(n => n.qui === "alice").forEach(n => {
+    const d = document.createElement("div");
+    d.className = "note" + (n.depensee ? " spent" : " selectable") + (n.rendue ? " change" : "") + (n === noteChoisie ? " selected" : "");
+    d.innerHTML = '<span class="who">' + (n.rendue ? "monnaie rendue" : "note") + '</span><br><b>' + n.valeur + ' Ⓞ</b><div class="cm">cm ' + n.cm + '</div>';
+    if (!n.depensee) d.onclick = () => { noteChoisie = (noteChoisie === n ? null : n); dessinerNotes(); majEquilibre(); };
+    cont.appendChild(d);
+  });
+}
+function journal(msg){
+  const j = $("journal");
+  if (j.firstChild && j.firstChild.textContent.startsWith("—")) j.innerHTML = "";
+  const d = document.createElement("div"); d.textContent = msg; j.appendChild(d);
+  j.scrollTop = j.scrollHeight;
+}
+function dessinerAlice(){
+  const ul = $("obs-alice"); ul.innerHTML = "";
+  const mien = etat.notes.filter(n => n.qui === "alice");
+  if (!mien.length){ ul.innerHTML = '<li class="none">Rien encore…</li>'; return; }
+  const solde = mien.filter(n => !n.depensee).reduce((s,n) => s + n.valeur, 0);
+  const li = t => { const e = document.createElement("li"); e.innerHTML = t; ul.appendChild(e); };
+  li("solde dépensable : <strong>" + solde + " Ⓞ</strong>");
+  mien.forEach(n => li((n.rendue ? "monnaie rendue " : "note ") + n.valeur + " Ⓞ — feuille #" + n.feuille + (n.depensee ? " (dépensée)" : "")));
+  if (etat.derniereDepense) li("→ payé <strong>" + etat.derniereDepense.montant + " Ⓞ</strong> à Bob (+" + etat.derniereDepense.frais + " de frais)");
+}
+function majCompteurs(){
+  $("obs-cm-count").textContent = etat.feuilles.filter(Boolean).length;
+  $("obs-nf-count").textContent = etat.nullifiers.size;
+}
+function deverrouiller(id){ const s = $(id); s.classList.remove("locked"); }
+function marquerFait(id){ $(id).classList.add("done"); }
+
+// --- Étape 1 : identité.
+$("btn-gen").onclick = () => {
+  etat.secret = alea() + alea();
+  etat.owner  = toyHash("obscura-jouet/owner", etat.secret);
+  etat.nk     = toyHash("obscura-jouet/nk", etat.secret);
+  etat.bobOwner = toyHash("obscura-jouet/owner", alea() + alea());
+  $("v-secret").textContent = etat.secret;
+  $("v-owner").textContent = etat.owner;
+  $("v-nk").textContent = etat.nk;
+  $("identity").hidden = false;
+  $("btn-gen").textContent = "🎲 Régénérer (nouveau wallet)";
+  marquerFait("s1"); deverrouiller("s2"); deverrouiller("s5");
+  dessinerArbre(); dessinerAlice();
+};
+
+// --- Étape 2 : frapper des notes.
+let idNote = 0;
+function frapper(valeur, qui, rendue){
+  const libre = etat.feuilles.findIndex(f => f === null);
+  if (libre < 0){ alert("Arbre-jouet plein (8 feuilles) — recommence l'atelier !"); return null; }
+  const rho = alea(), r = alea();
+  const owner = qui === "alice" ? etat.owner : etat.bobOwner;
+  const cm = toyHash("obscura-jouet/note", String(valeur), owner, rho, r);
+  const n = { id:++idNote, valeur, rho, r, cm, feuille:libre, depensee:false, qui, rendue:!!rendue };
+  etat.feuilles[libre] = cm;
+  etat.notes.push(n);
+  journal("+ cm " + cm + "  (feuille #" + libre + ")");
+  return n;
+}
+document.querySelectorAll("[data-mint]").forEach(b => b.onclick = async () => {
+  const n = frapper(parseInt(b.dataset.mint, 10), "alice");
+  if (!n) return;
+  dessinerNotes(); dessinerArbre(); dessinerAlice(); majCompteurs();
+  // petit flash sur la feuille insérée
+  const rows = $("tree").children;
+  const cel = rows[3].children[n.feuille];
+  cel.classList.add("flash"); await attendre(700); cel.classList.remove("flash");
+  marquerFait("s2"); deverrouiller("s3");
+});
+
+// --- Étape 3 : dépense prouvée.
+let noteChoisie = null;
+function majEquilibre(){
+  const bal = $("balance");
+  const montant = parseInt($("in-amount").value || "0", 10);
+  const frais = parseInt($("in-fee").value || "0", 10);
+  if (!noteChoisie){ bal.className = "balance"; bal.textContent = "Sélectionne une note…"; $("btn-prove").disabled = true; return; }
+  const rendu = noteChoisie.valeur - montant - frais;
+  const eq = noteChoisie.valeur + " = " + montant + " (Bob) + " + frais + " (frais) + " + rendu + " (monnaie rendue)";
+  if (rendu < 0 || montant < 0 || frais < 0){
+    bal.className = "balance bad"; bal.textContent = "✗ " + eq + " — déséquilibré, P5 refuserait";
+    $("btn-prove").disabled = true;
+  } else {
+    bal.className = "balance ok"; bal.textContent = "✓ " + eq;
+    $("btn-prove").disabled = etat.occupe;
+  }
+}
+$("in-amount").oninput = majEquilibre; $("in-fee").oninput = majEquilibre;
+
+function razChecklist(){
+  document.querySelectorAll("#checklist li").forEach(li => { li.className = ""; li.querySelector(".st").textContent = "·"; });
+  $("verdict").className = "verdict"; $("verdict2").className = "verdict";
+}
+async function passe(p, ok){
+  const li = document.querySelector('#checklist li[data-p="' + p + '"]');
+  li.classList.add("run"); li.querySelector(".st").textContent = "…";
+  await attendre(p === "P1" ? 900 : 420);
+  li.classList.remove("run");
+  li.classList.add(ok ? "okd" : "ko");
+  li.querySelector(".st").textContent = ok ? "✓" : "✗";
+  return ok;
+}
+
+async function prouverEtEnvoyer(note, montant, frais, rejouer){
+  etat.occupe = true; $("btn-prove").disabled = true; $("btn-double").disabled = true;
+  razChecklist();
+  // P1 : surligner le chemin de Merkle de la feuille dépensée
+  dessinerArbre(cheminDe(note.feuille));
+  await passe("P1", true);
+  dessinerArbre();
+  await passe("P2", true);
+  const nf = toyHash("obscura-jouet/nullifier", etat.nk, note.rho, note.cm);
+  await passe("P3", true);
+  await passe("P4", true);
+  await passe("P5", true);
+  await passe("P6", true);
+  await passe("P7", true);
+  const dejaVu = etat.nullifiers.has(nf);
+  await passe("NF", !dejaVu);
+  const verdict = rejouer ? $("verdict2") : $("verdict");
+  if (dejaVu){
+    verdict.className = "verdict ko show";
+    verdict.textContent = "✗ REJET — nullifier " + nf + " déjà publié. La preuve était pourtant valide : c'est le tampon anti-double-dépense qui protège le réseau.";
+    journal("✗ tx refusée : nf " + nf + " déjà vu");
+  } else {
+    etat.nullifiers.add(nf);
+    note.depensee = true;
+    const rendu = note.valeur - montant - frais;
+    journal("+ nf " + nf + "  (quelle feuille ? mystère)");
+    frapper(montant, "bob");
+    if (rendu > 0) frapper(rendu, "alice", true);
+    journal("· frais " + frais + " — tx acceptée ✓");
+    etat.derniereDepense = { note, montant, frais };
+    verdict.className = "verdict ok show";
+    verdict.textContent = "✓ Transaction acceptée — 1 preuve (~68 Kio dans le vrai prototype), 1 nullifier, 2 commitments. Personne ne sait laquelle des feuilles vient d'être dépensée.";
+    noteChoisie = null;
+    marquerFait("s3"); deverrouiller("s4"); marquerFait("s5");
+  }
+  dessinerNotes(); dessinerArbre(); dessinerAlice(); majCompteurs();
+  etat.occupe = false; $("btn-double").disabled = false; majEquilibre();
+}
+
+$("btn-prove").onclick = () => {
+  if (!noteChoisie) return;
+  const montant = parseInt($("in-amount").value || "0", 10);
+  const frais = parseInt($("in-fee").value || "0", 10);
+  prouverEtEnvoyer(noteChoisie, montant, frais, false);
+};
+
+// --- Étape 4 : double dépense.
+$("btn-double").onclick = () => {
+  if (!etat.derniereDepense){ return; }
+  const { note, montant, frais } = etat.derniereDepense;
+  document.getElementById("s3").scrollIntoView({ behavior:"smooth", block:"center" });
+  prouverEtEnvoyer(note, montant, frais, true).then(() => marquerFait("s4"));
+};
+
+// --- Reset.
+$("btn-reset").onclick = () => location.reload();
+
+// Premier rendu (arbre vide, avant même l'étape 1 — donne envie).
+dessinerArbre();
+</script>
+
+</body>
+</html>
