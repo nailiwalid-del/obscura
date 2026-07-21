@@ -116,6 +116,22 @@ pub(crate) enum SegForge {
     /// Feuille INJECTÉE dans le chemin de l'entrée `i` ≠ feuille produite par
     /// l'éponge (porteuse `LEAF_C` honnête).
     LeafChemin(usize, Digest),
+
+    /// Les bits du segment d'ENTRÉE 0 décomposent `valeur₀ + k`, ceux de l'entrée 1
+    /// `valeur₁ − k`. Deux segments de MÊME signe (+) : la somme signée `S` est
+    /// inchangée, donc `S_final = fee` tient et l'assertion d'équilibre ne masque
+    /// PAS la forge. Les porteuses `VIN_C` restent honnêtes → seules les liaisons
+    /// VIN↔VACC diffèrent. Isole la famille VIN de la famille VOUT.
+    ValeurEntrees(u64),
+    /// Miroir sur les deux segments de SORTIE (signe −) : isole VOUT de VIN.
+    ValeurSorties(u64),
+    /// Région de blinding remplie de valeurs ADVERSES au lieu d'aléa frais (copies
+    /// de lignes utiles, bits non booléens, `S` sautant, porteuses discontinues).
+    ///
+    /// ⚠️ Test d'INERTIE, à l'inverse de toutes les autres : la transaction doit
+    /// rester **ACCEPTÉE**. Aucune contrainte (toutes gatées `blind_off`) ni
+    /// assertion (toutes `< used`) ne lit cette région — l'attaquant n'y gagne rien.
+    BlindingAdversarial,
 }
 
 impl SegForge {
@@ -160,6 +176,22 @@ impl SegForge {
         match self {
             SegForge::LeafChemin(fi, a) if fi == i => a,
             _ => honnete,
+        }
+    }
+
+    /// Valeur réellement DÉCOMPOSÉE en bits dans le segment (la porteuse, elle,
+    /// garde la valeur honnête). `+k` sur l'unité 0, `−k` sur l'unité 1 : de même
+    /// signe, donc `S` est inchangé et l'assertion d'équilibre ne masque pas la
+    /// forge.
+    fn valeur_bits(self, est_entree: bool, n: usize, honnete: u64) -> u64 {
+        let k = match (self, est_entree) {
+            (SegForge::ValeurEntrees(k), true) => k,
+            (SegForge::ValeurSorties(k), false) => k,
+            _ => return honnete,
+        };
+        match n {
+            0 => honnete + k,
+            _ => honnete - k,
         }
     }
 }
@@ -364,7 +396,14 @@ fn build_seg_trace_interne(
                 set_carrier_digest(&mut rows, CM_C[n_in], &cm);
                 set_carrier_digest(&mut rows, LEAF_C[n_in], &leaf_d);
                 set_carrier_scalar(&mut rows, VIN_C[n_in], note.value);
-                s = fill_segment_balance(&mut rows, start, seg_rows, note.value, true, s);
+                s = fill_segment_balance(
+                    &mut rows,
+                    start,
+                    seg_rows,
+                    forge.valeur_bits(true, n_in, note.value),
+                    true,
+                    s,
+                );
 
                 n_in += 1;
             }
@@ -376,7 +415,14 @@ fn build_seg_trace_interne(
                 seg_copy(&mut rows, &out_rows, start + CM_ROWS_START, SEG_SPONGE_OFF);
 
                 set_carrier_scalar(&mut rows, VOUT_C[n_out], out.value);
-                s = fill_segment_balance(&mut rows, start, seg_rows, out.value, false, s);
+                s = fill_segment_balance(
+                    &mut rows,
+                    start,
+                    seg_rows,
+                    forge.valeur_bits(false, n_out, out.value),
+                    false,
+                    s,
+                );
 
                 n_out += 1;
             }
@@ -396,6 +442,28 @@ fn build_seg_trace_interne(
     for row in rows.iter_mut().skip(used) {
         for cell in row.iter_mut() {
             *cell = felt_alea(rng);
+        }
+    }
+
+    // Forge d'INERTIE : au lieu d'aléa, un attaquant choisit les valeurs de la
+    // région de blinding. Il tente (a) de recopier des lignes utiles pour
+    // « nourrir » une liaison, et (b) d'y écrire du junk qui VIOLERAIT chaque
+    // famille de contraintes s'il était lu. Comme rien n'y est lu, la transaction
+    // doit rester ACCEPTÉE — c'est ce que le test vérifie.
+    if forge == SegForge::BlindingAdversarial {
+        for r in used..len {
+            if r % 2 == 0 {
+                // (a) recopie d'une ligne utile.
+                rows[r] = rows[r % used];
+            } else {
+                // (b) junk violant chaque famille si elle était active.
+                for cell in rows[r].iter_mut() {
+                    *cell = BaseElement::new(0xDEAD_BEEF);
+                }
+                rows[r][SEG_BALBIT_OFF + SEG_BAL_BIT] = BaseElement::new(5); // non booléen
+                rows[r][S_COL] = BaseElement::new(999_999); // S qui saute
+                rows[r][OWNER_C] = BaseElement::new(1); // porteuse discontinue
+            }
         }
     }
 

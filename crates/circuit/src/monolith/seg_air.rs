@@ -1407,6 +1407,39 @@ mod tests {
         );
     }
 
+    /// FORGES (RED) des MONTANTS, et test d'INERTIE du blinding.
+    ///
+    /// Les forges de valeur sont COMPENSÉES entre deux segments de même signe :
+    /// sans cela, `S_final ≠ fee` et l'assertion d'équilibre rejetterait AVANT la
+    /// liaison VIN/VOUT↔VACC — le test serait vert sans rien prouver sur elle. La
+    /// compensation entre segments de même signe laisse `S` intact et n'expose que
+    /// les liaisons de montant.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
+    fn forges_montants_et_inertie_du_blinding() {
+        use crate::monolith::seg_trace::SegForge;
+
+        // VIN : bits de l'entrée 0 gonflés de k, ceux de l'entrée 1 dégonflés de k.
+        assert!(
+            !verdict_forge(SegForge::ValeurEntrees(11)),
+            "liaison VIN↔VACC doit mordre (montant décomposé ≠ porteuse)"
+        );
+        // VOUT : miroir sur les sorties — isole VOUT de VIN.
+        assert!(
+            !verdict_forge(SegForge::ValeurSorties(7)),
+            "liaison VOUT↔VACC doit mordre"
+        );
+
+        // INERTIE (verdict INVERSE) : région de blinding choisie par l'attaquant —
+        // recopies de lignes utiles et junk violant chaque famille. Rien ne la lit
+        // (contraintes gatées `blind_off`, assertions toutes < used), donc le
+        // statement prouvé est INCHANGÉ et la tx reste acceptée.
+        assert!(
+            verdict_forge(SegForge::BlindingAdversarial),
+            "un blinding adverse ne doit RIEN changer : la tx reste acceptée"
+        );
+    }
+
     /// ORACLE DE PARITÉ — le test que la construction côte à côte rend possible :
     /// le MÊME témoin doit produire les MÊMES publics par les deux monolithes.
     ///
