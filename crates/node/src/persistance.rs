@@ -45,7 +45,7 @@
 
 use crypto::sig::SigKeypair;
 use ledger::bloc::Bloc;
-use ledger::historique::HistoriqueSorties;
+use ledger::historique::{HistoriqueSorties, Reprise};
 use ledger::proved_state::ProvedLedgerState;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -79,6 +79,18 @@ pub enum PersistanceError {
     /// Le nœud doit archiver mais l'état est déjà à une hauteur non nulle sans archive.
     #[error("archivage demandé sur un état déjà à la hauteur {hauteur} sans fichier d'historique : le préfixe est irrécupérable")]
     HistoriqueAbsent { hauteur: u64 },
+    /// L'état sur disque descend d'une AUTRE genèse que celle demandée.
+    ///
+    /// Sans ce refus, l'erreur d'opérateur la plus banale — pointer `--donnees` vers
+    /// un répertoire peuplé par une autre chaîne — donnait un nœud d'apparence saine
+    /// qui refusait tous les blocs, indiscernable d'un nœud au repos. Les identifiants
+    /// sont montrés (8 premiers octets) pour que la correction soit évidente : soit la
+    /// bonne genèse, soit le bon répertoire.
+    #[error(
+        "l'état de ce répertoire descend de la genèse {trouvee}, pas de {demandee} : \
+         mauvais --genese ou mauvais --donnees — rien n'est écrasé"
+    )]
+    GeneseDifferente { demandee: String, trouvee: String },
 }
 
 /// Charge un bloc de GENÈSE depuis un fichier (octets de `Bloc::to_bytes`).
@@ -98,6 +110,13 @@ pub fn charger_genese(chemin: impl AsRef<Path>) -> Result<Bloc, PersistanceError
 /// Répertoire de données d'un nœud.
 pub struct Donnees {
     racine: PathBuf,
+    /// Tranches d'historique déjà PERSISTÉES dans le journal.
+    ///
+    /// C'est la comptabilité qui rend l'ajout possible : `enregistrer_etat` n'écrit
+    /// que les tranches au-delà de ce compte. `Cell` et non un champ nu : les
+    /// signatures de chargement/sauvegarde prennent `&self` partout et la persistance
+    /// est mono-thread — un verrou serait du théâtre.
+    tranches_persistees: std::cell::Cell<usize>,
 }
 
 impl Donnees {
@@ -105,7 +124,10 @@ impl Donnees {
     pub fn ouvrir(racine: impl AsRef<Path>) -> Result<Self, PersistanceError> {
         let racine = racine.as_ref().to_path_buf();
         fs::create_dir_all(&racine)?;
-        Ok(Donnees { racine })
+        Ok(Donnees {
+            racine,
+            tranches_persistees: std::cell::Cell::new(0),
+        })
     }
 
     fn chemin(&self, nom: &str) -> PathBuf {
@@ -137,13 +159,11 @@ impl Donnees {
     /// reviendrait à démarrer une chaîne à soi tout en croyant rejoindre celle des
     /// autres.
     ///
-    /// ⚠️ **Limite consignée** : quand le fichier d'état EXISTE, il est chargé tel
-    /// quel et `genese` est ignorée — l'état ne mémorise pas sur quelle genèse il a
-    /// été amorcé. Repartir avec une autre genèse sur un répertoire de données déjà
-    /// peuplé ne produit donc aucune erreur ; le désaccord n'apparaîtra qu'au premier
-    /// bloc refusé. Fermer ce trou demanderait d'ajouter l'identifiant de genèse au
-    /// dump (nouvelle version de format) — c'est écrit ici plutôt que laissé à
-    /// supposer.
+    /// L'identifiant de genèse est GRAVÉ dans le dump (VERSION_ETAT 0x03) et vérifié
+    /// ici : un état qui descend d'une autre genèse que celle demandée est REFUSÉ,
+    /// avec les deux identifiants dans le message. C'était la dernière divergence
+    /// silencieuse connue du démarrage — un répertoire peuplé par une autre chaîne
+    /// donnait un nœud d'apparence saine qui refusait tout.
     pub fn charger_ou_amorcer_etat(
         &self,
         genese: &Bloc,
@@ -153,7 +173,28 @@ impl Donnees {
             return ProvedLedgerState::depuis_genese(genese)
                 .map_err(|e| PersistanceError::GeneseRefusee(e.to_string()));
         }
-        ProvedLedgerState::load(&chemin).map_err(|e| PersistanceError::EtatInvalide(e.to_string()))
+        let etat = ProvedLedgerState::load(&chemin)
+            .map_err(|e| PersistanceError::EtatInvalide(e.to_string()))?;
+        Self::verifier_genese(&etat, genese)?;
+        Ok(etat)
+    }
+
+    /// Refuse un état qui ne descend pas de `genese`. AVANT toute autre confrontation
+    /// (historique compris) : comparer une archive à un état de la mauvaise chaîne
+    /// produirait un « désaccord » trompeur là où la cause est le répertoire.
+    fn verifier_genese(
+        etat: &ProvedLedgerState,
+        genese: &Bloc,
+    ) -> Result<(), PersistanceError> {
+        let demandee = genese.id();
+        let trouvee = etat.genese_id();
+        if trouvee != demandee {
+            return Err(PersistanceError::GeneseDifferente {
+                demandee: hex::encode(&demandee[..8]),
+                trouvee: hex::encode(&trouvee[..8]),
+            });
+        }
+        Ok(())
     }
 
     /// Charge l'état en ARCHIVANT l'historique des sorties, ou l'amorce sur `genese`.
@@ -181,6 +222,7 @@ impl Donnees {
         }
         let mut etat = ProvedLedgerState::load(&chemin_etat)
             .map_err(|e| PersistanceError::EtatInvalide(e.to_string()))?;
+        Self::verifier_genese(&etat, genese)?;
 
         let chemin_hist = self.chemin(FICHIER_HISTORIQUE);
         if !chemin_hist.exists() {
@@ -204,8 +246,38 @@ impl Donnees {
             });
         }
 
-        let hist = HistoriqueSorties::load(&chemin_hist)
+        let (hist, reprise) = HistoriqueSorties::load_fichier(&chemin_hist)
             .map_err(|e| PersistanceError::HistoriqueInvalide(e.to_string()))?;
+
+        match reprise {
+            // Dump intégral hérité : réécrit UNE FOIS au format journal (atomique,
+            // tmp + rename — le contenu est identique, seul le format change ; rien
+            // n'est perdu, et les sauvegardes suivantes deviennent des ajouts).
+            Reprise::AncienFormat => {
+                self.tranches_persistees
+                    .set(hist.save_journal(&chemin_hist, 0)?);
+            }
+            Reprise::Journal {
+                octets_valides,
+                queue_partielle,
+            } => {
+                if queue_partielle {
+                    // Un crash a interrompu un ajout : le fichier se termine par des
+                    // octets qui n'ont JAMAIS formé un enregistrement. L'ordre
+                    // historique-avant-état garantit qu'aucun état persisté ne les
+                    // couvre — les retirer n'ampute donc aucun bloc que quiconque
+                    // possédait. Ce n'est PAS la troncature « réparatrice » que le
+                    // dépôt interdit : celle-là retire des enregistrements COMPLETS.
+                    // Tronquer est même OBLIGATOIRE : ajouter après des octets morts
+                    // rendrait tout le fichier illisible au chargement suivant.
+                    let f = fs::OpenOptions::new().write(true).open(&chemin_hist)?;
+                    f.set_len(octets_valides)?;
+                    f.sync_all()?;
+                }
+                self.tranches_persistees.set(hist.nombre_de_tranches());
+            }
+        }
+
         etat.adopter_historique(hist)
             .map_err(|e| PersistanceError::HistoriqueDesaccorde(e.to_string()))?;
         Ok(etat)
@@ -218,7 +290,13 @@ impl Donnees {
     /// laisser l'archive EN AVANCE (récupérable) plutôt qu'en retard (irrécupérable).
     pub fn enregistrer_etat(&self, etat: &ProvedLedgerState) -> Result<(), PersistanceError> {
         if let Some(h) = etat.historique() {
-            h.save(&self.chemin(FICHIER_HISTORIQUE))?;
+            // JOURNAL : seules les tranches nouvelles depuis la dernière sauvegarde
+            // sont écrites. Le dump intégral réécrivait tout — des Gio par jour sous
+            // charge, toutes les 30 s.
+            let persistees = self
+                .tranches_persistees
+                .replace(h.save_journal(&self.chemin(FICHIER_HISTORIQUE), self.tranches_persistees.get())?);
+            let _ = persistees;
         }
         etat.save(&self.chemin(FICHIER_ETAT))?;
         Ok(())
@@ -508,6 +586,92 @@ mod tests {
             d.charger_ou_amorcer_archive(&genese),
             Err(PersistanceError::HistoriqueAbsent { hauteur: 1 })
         ));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// UN RÉPERTOIRE D'UNE AUTRE CHAÎNE EST REFUSÉ, avec les deux identifiants.
+    ///
+    /// C'était la dernière divergence silencieuse du démarrage : pointer `--donnees`
+    /// vers un répertoire peuplé par une autre genèse donnait un nœud d'apparence
+    /// saine qui refusait tous les blocs — indiscernable d'un nœud au repos.
+    #[test]
+    fn demarrer_sur_une_autre_genese_est_refuse() {
+        let dir = repertoire_temporaire("genese_croisee");
+        let d = Donnees::ouvrir(&dir).unwrap();
+
+        let genese_a = Bloc::genese_avec(vec![ledger::proved_wallet::emission_factice(
+            &digest(1),
+        )])
+        .unwrap();
+        let genese_b = Bloc::genese_avec(vec![ledger::proved_wallet::emission_factice(
+            &digest(2),
+        )])
+        .unwrap();
+        assert_ne!(genese_a.id(), genese_b.id());
+
+        // Amorçage et persistance sur la genèse A.
+        let etat = d.charger_ou_amorcer_etat(&genese_a).unwrap();
+        d.enregistrer_etat(&etat).unwrap();
+
+        // Rechargement sur A : accepté. Sur B : REFUSÉ, et l'erreur nomme les deux.
+        assert!(d.charger_ou_amorcer_etat(&genese_a).is_ok());
+        match d.charger_ou_amorcer_etat(&genese_b) {
+            Err(PersistanceError::GeneseDifferente { demandee, trouvee }) => {
+                assert_eq!(demandee, hex::encode(&genese_b.id()[..8]));
+                assert_eq!(trouvee, hex::encode(&genese_a.id()[..8]));
+            }
+            _ => panic!("une genèse étrangère doit être refusée nommément"),
+        }
+        // Même refus sur le chemin archivant.
+        assert!(matches!(
+            d.charger_ou_amorcer_archive(&genese_b),
+            Err(PersistanceError::GeneseDifferente { .. })
+        ));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// L'archive persiste en JOURNAL : plusieurs cycles sauvegarde/rechargement
+    /// n'écrivent que la queue et rechargent l'identique — y compris après migration
+    /// depuis un dump intégral hérité.
+    #[test]
+    fn archive_persistee_en_journal_et_migre_lancien_format() {
+        let dir = repertoire_temporaire("journal");
+        let d = Donnees::ouvrir(&dir).unwrap();
+        let genese = Bloc::genese_avec(vec![ledger::proved_wallet::emission_factice(
+            &digest(7),
+        )])
+        .unwrap();
+
+        // Amorçage archivant + première persistance (journal complet).
+        let etat = d.charger_ou_amorcer_archive(&genese).unwrap();
+        d.enregistrer_etat(&etat).unwrap();
+        let chemin_hist = dir.join("historique.bin");
+        let taille_1 = fs::metadata(&chemin_hist).unwrap().len();
+
+        // Rechargement (fixe la comptabilité), re-sauvegarde SANS rien de neuf :
+        // le fichier ne bouge pas d'un octet.
+        let d2 = Donnees::ouvrir(&dir).unwrap();
+        let etat = d2.charger_ou_amorcer_archive(&genese).unwrap();
+        d2.enregistrer_etat(&etat).unwrap();
+        assert_eq!(
+            fs::metadata(&chemin_hist).unwrap().len(),
+            taille_1,
+            "sans tranche nouvelle, une sauvegarde n'écrit RIEN"
+        );
+
+        // Migration : réécrit le fichier au FORMAT HÉRITÉ (dump 0x01), puis
+        // recharge — le contenu doit être adopté à l'identique et re-persisté en
+        // journal, sans erreur.
+        etat.historique().unwrap().save(&chemin_hist).unwrap();
+        let d3 = Donnees::ouvrir(&dir).unwrap();
+        let etat3 = d3.charger_ou_amorcer_archive(&genese).unwrap();
+        assert_eq!(
+            etat3.historique().unwrap().to_bytes(),
+            etat.historique().unwrap().to_bytes(),
+            "la migration ne change pas un octet du CONTENU"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

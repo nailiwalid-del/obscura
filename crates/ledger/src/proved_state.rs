@@ -114,7 +114,11 @@ const _: () = assert!(RECENT_ROOTS_WINDOW > crate::bloc::MAX_TX_PAR_BLOC);
 /// du champ `tete` a changé : un dump `0x01` rechargé tel quel porterait une tête que
 /// plus aucun bloc ne prolonge, et le nœud refuserait tout en silence. On le refuse
 /// donc explicitement plutôt que de le lire de travers.
-pub const VERSION_ETAT: u8 = 0x02;
+/// `0x03` : l'identifiant de GENÈSE est gravé dans le dump — sans lui, redémarrer
+/// avec une autre genèse sur un répertoire déjà peuplé passait inaperçu jusqu'au
+/// premier bloc refusé, un nœud sur la mauvaise chaîne étant indiscernable d'un nœud
+/// au repos.
+pub const VERSION_ETAT: u8 = 0x03;
 
 pub struct ProvedLedgerState {
     pub tree: MerkleFrontier,
@@ -125,6 +129,13 @@ pub struct ProvedLedgerState {
     tete: [u8; TAILLE_ID],
     /// Hauteur de cette tête (genèse = 0).
     hauteur: u64,
+    /// Identifiant du bloc de GENÈSE dont cet état descend.
+    ///
+    /// `tete` le vaut à la hauteur 0, puis avance et l'information serait perdue.
+    /// Gravé séparément parce que c'est LA question qu'un redémarrage doit pouvoir
+    /// poser : « cet état appartient-il à la chaîne qu'on me demande de suivre ? »
+    /// Sans ce champ, la réponse n'arrivait qu'au premier bloc refusé — en silence.
+    genese: [u8; TAILLE_ID],
     /// Historique des sorties — `None` par DÉFAUT.
     ///
     /// Un `Option` et pas un champ toujours présent : l'archivage est un rôle
@@ -290,6 +301,7 @@ impl ProvedLedgerState {
                 .map_err(|source| GeneseRefus::Emission { index, source })?;
         }
         etat.tete = genese.id();
+        etat.genese = genese.id();
         etat.hauteur = 0;
         // L'historique n'est écrit qu'une fois l'amorçage RÉUSSI — un amorçage refusé
         // ne laisse pas d'état du tout, donc rien à défaire. La genèse est la première
@@ -311,6 +323,7 @@ impl ProvedLedgerState {
             roots_order: VecDeque::new(),
             tete: Bloc::genese().id(),
             hauteur: 0,
+            genese: Bloc::genese().id(),
             historique: None,
         };
         let root = s.tree.root();
@@ -421,6 +434,11 @@ impl ProvedLedgerState {
     /// Hauteur de la tête de chaîne (genèse = 0).
     pub fn hauteur(&self) -> u64 {
         self.hauteur
+    }
+
+    /// Identifiant du bloc de genèse dont cet état descend.
+    pub fn genese_id(&self) -> [u8; TAILLE_ID] {
+        self.genese
     }
 
     /// Historique des sorties, si ce nœud tient le rôle d'archiviste.
@@ -624,6 +642,7 @@ impl ProvedLedgerState {
         // et resterait bloqué en silence.
         b.extend_from_slice(&self.hauteur.to_le_bytes());
         b.extend_from_slice(&self.tete);
+        b.extend_from_slice(&self.genese);
         let tree = self.tree.to_bytes();
         b.extend_from_slice(&(tree.len() as u32).to_le_bytes());
         b.extend_from_slice(&tree);
@@ -664,6 +683,9 @@ impl ProvedLedgerState {
         let tete: [u8; TAILLE_ID] = take(b, &mut pos, TAILLE_ID)?
             .try_into()
             .map_err(|_| StateDecodeError::TooShort)?;
+        let genese: [u8; TAILLE_ID] = take(b, &mut pos, TAILLE_ID)?
+            .try_into()
+            .map_err(|_| StateDecodeError::TooShort)?;
 
         let tree_len = u32::from_le_bytes(take(b, &mut pos, 4)?.try_into().unwrap()) as usize;
         let tree_bytes = take(b, &mut pos, tree_len)?;
@@ -697,6 +719,7 @@ impl ProvedLedgerState {
             roots_order,
             tete,
             hauteur,
+            genese,
             // L'historique vit dans un fichier SÉPARÉ et se rattache par
             // `adopter_historique`, qui le confronte à cet état. L'embarquer ici
             // aurait forcé TOUS les nœuds à porter un dump de plusieurs Gio pour un
@@ -1336,10 +1359,17 @@ mod tests {
     fn dump_dautre_version_refuse() {
         let etat = ProvedLedgerState::with_depth(4);
         let mut octets = etat.to_bytes();
-        octets[0] = 0x03;
+        octets[0] = 0x04; // version FUTURE
         assert!(matches!(
             ProvedLedgerState::from_bytes(&octets),
-            Err(StateDecodeError::BadVersion(0x03))
+            Err(StateDecodeError::BadVersion(0x04))
+        ));
+        // Version PRÉCÉDENTE (0x02, sans genèse gravée) : refusée aussi — la relire
+        // en 0x03 décalerait tous les champs suivants de 64 octets.
+        octets[0] = 0x02;
+        assert!(matches!(
+            ProvedLedgerState::from_bytes(&octets),
+            Err(StateDecodeError::BadVersion(0x02))
         ));
         // Et un dump de la version PRÉCÉDENTE (0x01) : refusé aussi. Son champ `tete`
         // porte l'identifiant d'une genèse calculée sur l'ancien encodage de bloc ;

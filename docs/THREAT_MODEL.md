@@ -297,11 +297,12 @@ ce qui rend l'erreur détectable.
   aura un sens, elle exigera une règle qui **borne le montant émis** — or ce montant est
   précisément ce que le chiffrement cache. C'est une brique de conception, pas un champ
   à débloquer.
-- **L'état ne mémorise pas SUR QUELLE genèse il a été amorcé.** Quand le fichier
-  `etat.bin` existe, il est chargé tel quel et le paramètre `--genese` est ignoré :
-  repartir avec une autre genèse sur un répertoire déjà peuplé ne produit aucune erreur,
-  et le désaccord n'apparaît qu'au premier bloc refusé. Fermer ce trou demanderait
-  d'ajouter l'identifiant de genèse au dump (nouvelle version de format).
+- **FERMÉ — l'état grave désormais sa genèse** (`VERSION_ETAT` 0x03) : l'identifiant du
+  bloc 0 est sérialisé dans `etat.bin` et confronté au `--genese` demandé À CHAQUE
+  démarrage. Un répertoire peuplé par une autre chaîne est refusé avec les deux
+  identifiants dans le message (`GeneseDifferente`) — avant toute confrontation
+  d'archive, pour que la cause affichée soit la vraie. C'était la dernière divergence
+  silencieuse connue du démarrage.
 - **Rien n'atteste QUI a écrit la genèse.** Le fichier n'est ni signé ni authentifié ;
   sa distribution est hors bande et à la charge des opérateurs. La comparaison
   d'identifiants détecte le désaccord, pas la substitution par un tiers qui contrôlerait
@@ -310,6 +311,23 @@ ce qui rend l'erreur détectable.
   Une genèse peut n'être faite que d'émissions factices : la chaîne est alors valide et
   sans monnaie utilisable. C'est voulu (indistinguabilité), et cela signifie qu'aucun
   contrôle automatique ne remplace la lecture des paramètres.
+
+### La persistance de l'archive est un JOURNAL en ajout (fait)
+
+`historique.bin` porte un octet de version : `0x01` = dump intégral hérité (migré une
+fois, atomiquement, à l'identique), `0x02` = journal par enregistrements de bloc. Une
+sauvegarde n'écrit que les tranches NOUVELLES puis `sync_all` — le dump intégral
+réécrivait tout, soit des Gio par jour sous charge, toutes les 30 s.
+
+Le prix du journal : l'ajout n'est pas atomique. Un crash en plein ajout laisse un
+enregistrement PARTIEL en fin de fichier, écarté et tronqué au chargement suivant. Ce
+n'est PAS la troncature « réparatrice » que ce document interdit : l'ordre d'écriture
+« historique d'abord, état ensuite » garantit qu'un enregistrement partiel correspond à
+des blocs que l'état persisté ne couvre pas encore — l'écarter ne retire rien que
+quiconque possédait, et ne PAS l'écarter rendrait le fichier entier illisible au
+redémarrage suivant. Toute autre incohérence (hauteur non contiguë, digest non
+canonique, plage non chaînée) reste une CORRUPTION : refus, jamais de troncature — là,
+les enregistrements sont complets et ont pu être relayés au réseau.
 
 ### Le noeud CONSERVE l'historique des sorties (fait) — il ne le SERT pas encore
 

@@ -1,7 +1,8 @@
 # Obscura — contexte projet pour Claude Code
 
 Monnaie numérique privée post-quantique. Prototype Rust — les phases 1 à 5 sont
-prototypées et testées : nœud fonctionnel, testnet local validé (sans persistance).
+prototypées et testées : nœud persistant, cycle complet payer → sceller → recevoir
+validé sur testnet local.
 
 ## Principe directeur (décision utilisateur, ne pas remettre en cause)
 
@@ -225,11 +226,19 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   ÉCHEC FRANC si absent/corrompu — aucun repli, un nœud mal amorcé est indiscernable
   d'un nœud neuf sain). Sans l'option : genèse VIDE par défaut, AFFICHÉE. L'identifiant
   de genèse (8 o hex) est imprimé au démarrage pour être comparé entre opérateurs.
-  `persistance::charger_ou_amorcer_etat(&genese)`. ⚠️ L'état ne mémorise PAS sa genèse :
-  sur un répertoire déjà peuplé, `--genese` est ignoré sans erreur.
+  `persistance::charger_ou_amorcer_etat(&genese)`. L'état GRAVE sa genèse (`VERSION_ETAT` 0x03) :
+  un répertoire peuplé par une AUTRE chaîne est REFUSÉ au démarrage avec les deux
+  identifiants (`GeneseDifferente`) — plus de divergence silencieuse par mauvais
+  `--donnees`.
   **Archivage des sorties** : `obscura-node --archiver` (OFF par défaut, rôle
   d'opérateur), `persistance::charger_ou_amorcer_archive` + `historique.bin` écrit AVANT
-  `etat.bin`. Une archive absente ou désaccordée fait démarrer le nœud en mode DÉGRADÉ
+  `etat.bin` — en JOURNAL EN AJOUT (`VERSION_JOURNAL` 0x02, dump 0x01 migré une fois) :
+  seules les tranches nouvelles sont écrites, puis `sync_all`. Queue partielle (crash en
+  plein ajout) écartée + tronquée au chargement — inoffensif par l'ordre
+  historique-avant-état ; corruption interne = REFUS, jamais de troncature. Le test
+  anti-régression utilise un CANARI `.tmp` en lecture seule (une mesure de taille est
+  tautologique : réécriture et ajout produisent le même delta).
+  Une archive absente ou désaccordée fait démarrer le nœud en mode DÉGRADÉ
   (sans archive), bruyamment, sans rien tronquer. Activer l'archivage TROP TARD (état
   déjà avancé, pas de fichier) est REFUSÉ : une archive partielle servirait des index
   décalés de tout le préfixe manquant sans que rien ne le dise.
