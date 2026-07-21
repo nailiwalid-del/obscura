@@ -647,7 +647,7 @@ impl winterfell::Air for MonolithAir {
 /// PAD_ZERO\*), à la ligne `seg_start`, aux colonnes `col_off..col_off+20`.
 /// Positions issues de `locate` DÉCALÉES par l'offset de colonne et la ligne de
 /// début de segment. N'asserte AUCUN témoin (payload jamais public ici).
-fn push_preamble(
+pub(crate) fn push_preamble(
     a: &mut Vec<Assertion<BaseElement>>,
     seg_start: usize,
     col_off: usize,

@@ -8,10 +8,34 @@
 
 **Tech Stack:** Rust, winterfell 0.13 (Goldilocks + extension quadratique), Rescue-Prime, `rand`/OsRng.
 
+## ⚠️ Révisions du 2026-07-21 (reprise après parking) — LIRE EN PREMIER
+
+**1. Construction CÔTE À CÔTE, pas en remplacement.** La première tentative
+remplaçait `layout.rs`/`trace.rs`/`air.rs` en place : dès T1 le crate ne compilait
+plus (trace/air référencent les offsets côte-à-côte) et **rien n'était testable
+avant la fin de T3** — big-bang qui a forcé le parking (333e4e4). Le segmenté est
+désormais développé dans de **nouveaux modules** `monolith/seg_layout.rs` (fait,
+T1 vert), puis `seg_trace.rs` (T2) et `seg_air.rs` (T3), **à côté** de l'existant :
+
+- le crate compile et les 50 tests tournent à CHAQUE étape ;
+- chaque tâche est vérifiable immédiatement et isolément ;
+- le monolithe côte-à-côte reste un **oracle de parité VIVANT** (mêmes publics
+  pour le même témoin — comparaison directe possible, pas seulement des tests
+  hérités) ;
+- la bascule de `tx.rs` vers le segmenté (T6) est un changement d'une ligne, fait
+  seulement une fois parité + soundness établies ; l'ancien module est supprimé
+  ensuite.
+
+**2. Parité en v3, pas v2.** Le spec a été écrit quand `ProvedTx` était en v2.
+Master est depuis en **v3** (`enc_notes` portés et liés dans `tx_digest` v3).
+Le contrat de parité porte donc sur **v3** — sans effet sur l'architecture (la
+refonte est interne à `monolith/` ; `tx.rs`/ledger restent inchangés), mais les
+mentions « v2 » du spec et du plan se lisent « v3 ».
+
 ## Global Constraints
 
 - Spec de référence : `docs/superpowers/specs/2026-07-20-3zc1-monolithe-empile-design.md`.
-- **Parité stricte** : `prove_tx`/`verify_tx`/`ProvedTx` v2, `ProvedInput`, `INTENT_DOMAIN`, `apply_proved_tx`, entrées publiques (root, nullifiers[2], output_commitments[2], fee), `tx_digest` v2 — TOUS inchangés. Les tests existants de `tx.rs`/ledger passent SANS modification à la fin.
+- **Parité stricte** : `prove_tx`/`verify_tx`/`ProvedTx` **v3**, `ProvedInput`, `INTENT_DOMAIN`, `apply_proved_tx`, entrées publiques (root, nullifiers[2], output_commitments[2], fee), `tx_digest` **v3** — TOUS inchangés. Les tests existants de `tx.rs`/ledger passent SANS modification à la fin.
 - **2-in/2-out FIGÉ** (schedule `[Key, Input, Input, Output, Output]`) ; NE PAS implémenter la variabilité M/N (= 3z-c2). Mais construire le schedule depuis une liste de `SegKind` (couture 3z-c2).
 - **Witness-hiding préservé** : lignes de blinding en fin, `blind_off` global, `BLIND_ROWS=40 ≥ q+4`, masquage OsRng. Le test de masquage exhaustif reste vert.
 - **Équilibre chaîné** : `S` démarre à 0 (asserté), +value par segment IN / −value par segment OUT, `S_final == fee` (asserté) ; range embarqué par segment (`< 2^60`) ; pas de wrap (≤ 4 montants < 2^60, `Σ < 2^62 < p`).
@@ -20,11 +44,12 @@
 - Code/commentaires FRANÇAIS ; commits `--author="Walid Naili <naili.walid@gmail.com>"` + trailer `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.
 - Tests : `cargo test -p circuit --release`, workspace `cargo test --workspace --release`, clippy `cargo clippy --workspace --release --all-targets` zéro warning.
 
-## Fichiers touchés (le trio monolithe uniquement — tx.rs/ledger INCHANGÉS)
+## Fichiers touchés (NOUVEAUX modules — l'existant reste intact jusqu'à T6)
 
-- `crates/circuit/src/monolith/layout.rs` — géométrie de segment + schedule `SegKind` + `trace_len`.
-- `crates/circuit/src/monolith/trace.rs` — constructeur segment-par-segment + chaînage `S` + blinding.
-- `crates/circuit/src/monolith/air.rs` — sélecteurs de type, routage des familles, `S` chaîné, assertions au schedule, blinding.
+- `crates/circuit/src/monolith/seg_layout.rs` — **FAIT (T1, e4f99f2)** : géométrie de segment + schedule `SegKind` + `trace_len`. 6 tests verts.
+- `crates/circuit/src/monolith/seg_trace.rs` — **à créer (T2)** : constructeur segment-par-segment + chaînage `S` + blinding.
+- `crates/circuit/src/monolith/seg_air.rs` — **à créer (T3)** : sélecteurs de type, routage des familles, `S` chaîné, assertions au schedule, blinding.
+- `crates/circuit/src/monolith/{layout,trace,air}.rs` — **INCHANGÉS** jusqu'à la bascule (T6), où ils sont supprimés.
 - `crates/circuit/examples/tx_bench.rs` — re-bench.
 - `docs/STARK_STATEMENT.md`, `CLAUDE.md` — entrée journal + état.
 

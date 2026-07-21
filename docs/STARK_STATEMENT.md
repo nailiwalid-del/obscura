@@ -273,14 +273,38 @@
 > `2026-07-20-state-persistence-design.md`. #7 bouclé pour la phase 3 ; ne reste que
 > le test key-privacy IK-CCA (phase 4).
 >
-> **Reste hors Phase-3-validity** : **3z-c** (généralisation M-in/N-out,
-> empilement accru des colonnes de trace — levier additionnel de réduction de
-> taille de preuve). Le witness-hiding (3z-b) est livré. Statut 3z-c : la
-> première tranche **3z-c1** (refonte segmentée à parité 2-in/2-out) a été
-> entamée puis **parquée** (commit 333e4e4) au profit des priorités protocole
-> (enc_notes, cohérence, durcissement #7) — master reste sur le monolithe
-> côte-à-côte 3z-b1 ; le design (`2026-07-20-3zc1-monolithe-empile-design.md`)
-> et le travail T1 (aa4076f, 7cceb27) restent disponibles pour reprise.
+> **3z-c1 — monolithe SEGMENTÉ livré (bascule faite)** : la trace n'est plus un
+> côte-à-côte de colonnes parallèles par entrée/sortie, mais une **suite de
+> segments séquentiels de lignes** partageant les mêmes colonnes —
+> `[KEY][IN0][IN1][OUT0][OUT1]` puis le blinding (`monolith/seg_{layout,trace,
+> air}.rs`). Les unités ne sont plus distinguées par la COLONNE mais par le
+> SEGMENT : les familles de contraintes fusionnent (éponges 4×12 → 12, chemins
+> 2×30 → 30, soit **209 slots au lieu de 263**) et chaque liaison reçoit un
+> sélecteur mono-ligne ancré à `seg_start(i) + ancre`.
+>
+> **Mesure à la profondeur consensus** (même témoin, publics assertés identiques) :
+> largeur **92 au lieu de 201**, trace 2048 au lieu de 1024, preuve **67,9 Kio au
+> lieu de 89,3 (−24 %)**, génération ×1,41, vérification ×1,46 (4,1 ms). La
+> question laissée ouverte par le design — « la largeur ÷2,2 compense-t-elle la
+> longueur ×2 ? » — est donc tranchée : **oui**. Le compromis est favorable pour
+> une monnaie, la taille étant le coût PERMANENT payé par chaque nœud qui stocke
+> et relaie chaque transaction.
+>
+> **Parité** : `prove_tx`/`verify_tx`/`ProvedTx` v3 et l'API ledger sont
+> INCHANGÉS ; tous les tests préexistants passent sans modification. Le monolithe
+> côte-à-côte est conservé pour faire tourner l'**oracle de parité** (mêmes
+> publics pour le même témoin) — non-régression contre une implémentation
+> indépendante — et sera supprimé avec 3z-c2.
+>
+> **Soundness et masquage re-vérifiés sous segments** : liaisons owner/nk/rho/cm/
+> feuille/montants, padding `PAD_ZERO*`, inertie du blinding, et une liaison
+> NOUVELLE — voir « Liaison de racine » ci-dessous. Masquage des porteuses re-testé
+> (RED vérifié : sans blinding, une ouverture FRI vaut `OWNER_C` en clair).
+>
+> **Reste hors Phase-3-validity** : **3z-c2** (variabilité M-in/N-out ≤ MAX,
+> publics variables). La couture est en place (`SegKind` + schedule) : 3z-c2 fait
+> varier la LISTE de segments sans refondre la géométrie. Deux forges du
+> côte-à-côte ne sont pas portées (`PaddingMerkle`, forme fine de `VaccInitial`).
 
 **Ce statement EST la règle de consensus d'une dépense valide.** Tout le reste du
 protocole s'organise autour de lui. Le mode transparent actuel (`apply_transparent`)
@@ -317,6 +341,31 @@ La preuve établit :
 
 La preuve est vérifiée contre `tx_digest` en entrée publique : elle est liée à CETTE
 transaction (non-malléabilité, pas de rejeu de preuve sur une autre tx).
+
+### Liaison de racine — une propriété que la segmentation a rendue NÉCESSAIRE (3z-c1)
+
+Dans le monolithe côte-à-côte, la racine `root` était assertée **publiquement sur
+CHAQUE chemin de Merkle** : deux entrées prouvant contre des racines différentes
+étaient structurellement impossibles, sans qu'aucune contrainte ait à l'interdire.
+
+La segmentation mutualise les colonnes du chemin entre les entrées, et `root`
+devient une **porteuse assertée une seule fois**. Cette économie ouvre un trou : un
+prouveur pourrait dépenser une note appartenant à un arbre **et** une note
+appartenant à un **autre** arbre dans la même transaction, chaque chemin étant
+valide isolément — de l'inflation inter-arbres.
+
+Le statement exige donc explicitement, pour chaque entrée `i` :
+
+> la racine repliée du chemin de `i` **est égale à la porteuse `ROOT_C`**, elle-même
+> assertée égale à la racine publique.
+
+C'est la contrepartie obligatoire du gain de slots. Elle est vérifiée par une forge
+dédiée dont le caractère RED est établi : liaison neutralisée, une transaction à
+deux racines distinctes est **acceptée** ; liaison rétablie, elle est rejetée.
+
+Leçon générale, à garder pour 3z-c2 : **mutualiser des colonnes peut supprimer une
+garantie que la redondance offrait gratuitement.** Chaque fusion doit être auditée
+sous cet angle, pas seulement pour son gain de taille.
 
 ## Ce que le statement supprime par rapport au mode transparent
 

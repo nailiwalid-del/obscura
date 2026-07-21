@@ -25,7 +25,17 @@
 //!
 //! ⚠️ **À générer en `--release`** (AIR du monolithe gatée, cf. `monolith::air`).
 
-use crate::monolith::air::{prove_monolith, verify_monolith, MonolithPublicInputs};
+// BASCULE 3z-c1 (T6) : `tx.rs` passe du monolithe CÔTE-À-CÔTE au monolithe
+// SEGMENTÉ. L'API publique est INCHANGÉE — c'est tout l'objet du contrat de parité
+// (mêmes publics pour le même témoin, cf. `seg_air::parite_publics_*`), et c'est
+// pourquoi la bascule tient en un import. Gain mesuré à la profondeur consensus :
+// preuve 67,4 Kio au lieu de 90,4 (−25 %), pour 1,34× en génération et 1,64× en
+// vérification (4,0 ms — négligeable). La taille est le coût PERMANENT, payé par
+// chaque nœud qui stocke et relaie chaque transaction.
+use crate::monolith::air::MonolithPublicInputs;
+use crate::monolith::seg_air::{
+    prove_seg_monolith as prove_monolith, verify_seg_monolith as verify_monolith,
+};
 use crate::monolith::trace::MonolithWitness;
 use crate::range_check::RANGE_BITS;
 use crate::spend::SpendNote;
