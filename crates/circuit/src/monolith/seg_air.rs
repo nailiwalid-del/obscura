@@ -1288,11 +1288,21 @@ mod tests {
     /// que d'une contrainte ou d'une assertion, jamais d'un public incohérent.
     #[cfg(test)]
     fn verdict_forge(forge: crate::monolith::seg_trace::SegForge) -> bool {
+        let (w, _root) = witness_de_test();
+        verdict_forge_sur(&w, forge)
+    }
+
+    /// Idem, sur un témoin QUELCONQUE — permet de rejouer les forges à la
+    /// profondeur consensus.
+    #[cfg(test)]
+    fn verdict_forge_sur(
+        w: &MonolithWitness,
+        forge: crate::monolith::seg_trace::SegForge,
+    ) -> bool {
         use crate::monolith::seg_trace::build_seg_trace_forge;
 
-        let (w, _root) = witness_de_test();
         let depth = w.inputs[0].path.len();
-        let trace = build_seg_trace_forge(&w, forge);
+        let trace = build_seg_trace_forge(w, forge);
         let pi = MonolithPublicInputs {
             root: read4(&trace, ROOT_C, 0),
             nullifiers: [
@@ -1625,7 +1635,7 @@ mod tests {
     #[test]
     #[ignore = "coûteux (profondeur 32) : lancer avec --ignored"]
     fn soundness_a_la_profondeur_consensus() {
-        use crate::monolith::seg_trace::{build_seg_trace_forge, SegForge};
+        use crate::monolith::seg_trace::SegForge;
         use crate::monolith::trace::witness_de_test_profondeur_consensus;
         use proved_hash::digest::Digest;
         use proved_hash::felt::Felt;
@@ -1643,34 +1653,36 @@ mod tests {
             "témoin honnête accepté à la profondeur consensus"
         );
 
-        // (b) forge anti-double-dépense : rejetée. On vise CmNullifier, qui
-        // n'altère pas l'arbre — le rejet est donc bien imputable à la liaison CM
-        // et non à un effet de bord de reconstruction.
+        // (b) TOUTES les forges qui n'exigent PAS de reconstruction d'arbre,
+        // rejouées à la profondeur consensus.
+        //
+        // ⚠️ Les forges à reconstruction (OwnerConsomme, RhoCommitment, CmFeuille,
+        // LeafChemin, PaddingCommitment) restent à la profondeur 2 : le helper
+        // `build_tree_from_leaves` est câblé en dur sur un arbre de profondeur 2.
+        // Les couvrir au consensus demanderait un constructeur d'arbre générique en
+        // profondeur — limite résiduelle assumée, consignée dans la PR.
         let faux = Digest(core::array::from_fn(|i| {
             Felt::from_canonical_u64(9999 + i as u64).unwrap()
         }));
-        let trace = build_seg_trace_forge(&w, SegForge::CmNullifier(0, faux));
-        let pi_f = MonolithPublicInputs {
-            root: read4(&trace, ROOT_C, 0),
-            nullifiers: [
-                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(1, depth) + NF_ROWS_END - 1),
-                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(2, depth) + NF_ROWS_END - 1),
-            ],
-            output_commitments: [
-                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(3, depth) + CM_ROWS_END - 1),
-                read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(4, depth) + CM_ROWS_END - 1),
-            ],
-            fee: w.fee,
-            depth,
-        };
-        let prover = SegMonolithProver {
-            options: crate::proof_options_hi(),
-            pi: pi_f.clone(),
-        };
-        let proof_f = ValidityProof(prover.prove(trace).expect("génération"));
+        let cas: [(&str, SegForge); 6] = [
+            ("SecretNk (double-dépense)", SegForge::SecretNk(faux)),
+            ("NkConsomme", SegForge::NkConsomme(0, faux)),
+            ("RhoNullifier", SegForge::RhoNullifier(1, faux)),
+            ("CmNullifier (anti-double-dépense)", SegForge::CmNullifier(0, faux)),
+            ("ValeurEntrees (VIN↔VACC)", SegForge::ValeurEntrees(11)),
+            ("VaccInitial (inflation)", SegForge::VaccInitial(13)),
+        ];
+        for (nom, forge) in cas {
+            assert!(
+                !verdict_forge_sur(&w, forge),
+                "forge « {nom} » doit être rejetée AUSSI à la profondeur consensus"
+            );
+        }
+
+        // (c) inertie du blinding : verdict INVERSE, la tx reste acceptée.
         assert!(
-            !verify_seg_monolith(&pi_f, depth, &proof_f),
-            "forge CmNullifier doit être rejetée AUSSI à la profondeur consensus"
+            verdict_forge_sur(&w, SegForge::BlindingAdversarial),
+            "blinding adverse : inertie aussi à la profondeur consensus"
         );
     }
 
