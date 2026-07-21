@@ -22,7 +22,13 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   stratégie d'E/S — un runtime async plus tard ne changera pas un octet sur le fil.
   ⚠️ L'identité du RÉPONDEUR reste révélée à un MitM actif (inhérent au rôle ;
   fermable par un motif Noise-IK pour les sorties) — cf. spec transport-pq.
-- `crates/ledger` : notes engagées, nullifiers, Merkle (BLAKE3, prof. 16), tx, validation — testés
+- `crates/ledger` : notes engagées, nullifiers, Merkle (BLAKE3, prof. 16), tx, validation — testés.
+  **Mempool** (phase 4, brique 3) : contrôles ordonnés du MOINS au PLUS coûteux —
+  l'asymétrie de coût (~4 ms de vérification STARK pour ~68 Kio envoyés) est LE
+  vecteur de DoS du projet, donc les 5 filtres O(1) précèdent la vérification.
+  Capacité bornée SANS éviction (une éviction permettrait de chasser les tx
+  honnêtes). `Refus::couteux()` distingue les refus gratuits de celui qui a brûlé
+  du CPU, pour pénaliser le pair en conséquence.
 - `crates/circuit` : circuit STARK **monolithe** (`monolith/`) — P1–P7 d'une tx
   2-in/2-out en UNE SEULE trace/preuve, publics minimaux (root, nullifiers,
   output_commitments, fee), `ProvedTx` **v3** — **witness-hiding (HVZK en ROM)**

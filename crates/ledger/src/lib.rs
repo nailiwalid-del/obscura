@@ -1,6 +1,7 @@
 //! Ledger privé d'Obscura : notes engagées, nullifiers, arbre de Merkle, validation.
 
 pub mod keys;
+pub mod mempool;
 pub mod proved_state;
 pub mod proved_wallet;
 

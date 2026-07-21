@@ -123,6 +123,13 @@ impl ProvedLedgerState {
         Ok(idx)
     }
 
+    /// L'ancre est-elle une racine RÉCENTE acceptable ? Contrôle O(1), destiné aux
+    /// filtres bon marché (mempool) qui doivent écarter une transaction AVANT la
+    /// vérification STARK, bien plus coûteuse.
+    pub fn anchor_connu(&self, racine: &Digest) -> bool {
+        self.recent_roots.contains(&racine.to_bytes())
+    }
+
     pub fn is_spent(&self, nullifier: &Digest) -> bool {
         self.nullifiers.contains(&nullifier.to_bytes())
     }
