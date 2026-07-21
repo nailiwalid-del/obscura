@@ -219,6 +219,162 @@ mod plan {
         (used_rows(depth) + BLIND_ROWS).next_power_of_two()
     }
 
+    // ============================================================================
+    // FORME VARIABLE (3z-c2) : M entrées / N sorties, bornées.
+    //
+    // Les constantes 2-in/2-out ci-dessus restent la source des consommateurs
+    // actuels (`seg_trace`, `seg_air`) jusqu'à leur bascule (C2-T2/T3). La forme
+    // les GÉNÉRALISE sans les toucher : `Forme::F22` doit produire exactement les
+    // mêmes valeurs — c'est ce que le test `forme_2_2_identique_aux_constantes`
+    // garantit, et c'est ce qui rend la bascule sans risque.
+    // ============================================================================
+
+    /// Bornes de forme — constantes de CONSENSUS (les changer = nouvelle version
+    /// de format, pas un patch). La soundness de l'équilibre en permettrait 8 par
+    /// côté (`8·2^60 = 2^63 < p`, cf. 3b3a) : 4 est un choix de COÛT — chaque
+    /// entrée ajoute 13 colonnes de porteuses, chaque sortie 1.
+    pub(crate) const MAX_IN: usize = 4;
+    pub(crate) const MAX_OUT: usize = 4;
+
+    /// Colonnes de porteuses par entrée : rho + cm + leaf (3 digests).
+    const PORTEUSES_PAR_ENTREE: usize = 3 * DIGEST_FELTS;
+
+    /// Forme d'une transaction : `m` entrées, `n` sorties. Construite VALIDÉE —
+    /// les bornes vivent dans le constructeur, pas dans les commentaires (règle du
+    /// dépôt : toute borne d'un décodeur existe aussi dans le constructeur).
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub(crate) struct Forme {
+        m: usize,
+        n: usize,
+    }
+
+    /// Refus d'une forme hors bornes. `m = 0` : une transaction sans entrée n'a
+    /// pas d'autorité de dépense ; `n = 0` : sans sortie, pas de destinataire
+    /// (les « frais purs » passent par une sortie de valeur 0 vers soi).
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub(crate) struct FormeInvalide {
+        pub m: usize,
+        pub n: usize,
+    }
+
+    // Consommé hors tests à partir de C2-T2 (trace paramétrée) — le même sursis
+    // annoté que `plan::*` avait connu entre T1 et T2 de 3z-c1. À retirer dès T2.
+    #[allow(dead_code)]
+    impl Forme {
+        /// La forme historique 2-in/2-out — celle des constantes ci-dessus, et la
+        /// forme par DÉFAUT du wallet (le seau d'anonymat le plus peuplé, cf. spec
+        /// 3z-c2 D3).
+        pub(crate) const F22: Forme = Forme { m: 2, n: 2 };
+
+        pub(crate) const fn new(m: usize, n: usize) -> Result<Forme, FormeInvalide> {
+            if m == 0 || m > MAX_IN || n == 0 || n > MAX_OUT {
+                return Err(FormeInvalide { m, n });
+            }
+            Ok(Forme { m, n })
+        }
+
+        pub(crate) const fn m(self) -> usize {
+            self.m
+        }
+
+        pub(crate) const fn n(self) -> usize {
+            self.n
+        }
+
+        /// Nombre de segments : 1 KEY + m IN + n OUT.
+        pub(crate) const fn n_segments(self) -> usize {
+            1 + self.m + self.n
+        }
+
+        /// Type du segment `i` du schedule `[KEY][IN×m][OUT×n]`.
+        ///
+        /// L'ORDRE est normatif : les publics sont liés position par position aux
+        /// segments (le j-ième commitment de sortie au j-ième segment OUT — cf.
+        /// spec D7.3), donc le schedule ne peut pas être réordonné sans casser la
+        /// preuve. C'est voulu.
+        pub(crate) const fn seg_kind(self, i: usize) -> SegKind {
+            if i == 0 {
+                SegKind::Key
+            } else if i <= self.m {
+                SegKind::Input
+            } else {
+                SegKind::Output
+            }
+        }
+
+        /// Ligne de début du segment `i` : somme cumulée des longueurs. Toutes les
+        /// longueurs étant des multiples de `MERKLE_LEVEL_ROWS`, chaque frontière
+        /// l'est aussi — l'invariant d'alignement de 3z-c1 tient pour TOUTE forme
+        /// (c'est précisément ce que sa garde compile-time promettait).
+        pub(crate) fn seg_start(self, i: usize, depth: usize) -> usize {
+            (0..i).map(|k| seg_len(self.seg_kind(k), depth)).sum()
+        }
+
+        /// Lignes utiles : 16 + m·in_len + n·64.
+        pub(crate) fn used_rows(self, depth: usize) -> usize {
+            KEY_LEN + self.m * in_len(depth) + self.n * OUT_LEN
+        }
+
+        /// Longueur de trace : utiles + blinding, puissance de 2 supérieure.
+        pub(crate) fn trace_len(self, depth: usize) -> usize {
+            (self.used_rows(depth) + BLIND_ROWS).next_power_of_two()
+        }
+
+        // ----------------------------------------------------------------- colonnes
+
+        /// Porteuse rho de l'entrée `i` (`i < m`).
+        ///
+        /// Disposition, identique au 2/2 pour F22 : après `ROOT_C`, un bloc de
+        /// 3 digests (rho, cm, leaf) PAR ENTRÉE, puis les scalaires vin×m, vout×n,
+        /// puis `S`. La largeur est DIMENSIONNÉE À LA FORME (spec D2) : une
+        /// transaction 1-in/2-out ne paie pas les colonnes d'une 4-in/4-out.
+        pub(crate) const fn rho_c(self, i: usize) -> usize {
+            debug_assert!(i < self.m);
+            ROOT_C + DIGEST_FELTS + i * PORTEUSES_PAR_ENTREE
+        }
+
+        pub(crate) const fn cm_c(self, i: usize) -> usize {
+            self.rho_c(i) + DIGEST_FELTS
+        }
+
+        pub(crate) const fn leaf_c(self, i: usize) -> usize {
+            self.cm_c(i) + DIGEST_FELTS
+        }
+
+        /// Scalaire vin de l'entrée `i` — après TOUS les blocs de digests.
+        pub(crate) const fn vin_c(self, i: usize) -> usize {
+            debug_assert!(i < self.m);
+            ROOT_C + DIGEST_FELTS + self.m * PORTEUSES_PAR_ENTREE + i
+        }
+
+        /// Scalaire vout de la sortie `j`.
+        pub(crate) const fn vout_c(self, j: usize) -> usize {
+            debug_assert!(j < self.n);
+            ROOT_C + DIGEST_FELTS + self.m * PORTEUSES_PAR_ENTREE + self.m + j
+        }
+
+        /// Accumulateur d'équilibre chaîné.
+        pub(crate) const fn s_col(self) -> usize {
+            ROOT_C + DIGEST_FELTS + self.m * PORTEUSES_PAR_ENTREE + self.m + self.n
+        }
+
+        /// Largeur totale de la trace pour cette forme.
+        pub(crate) const fn width(self) -> usize {
+            self.s_col() + 1
+        }
+    }
+
+    // La forme MAXIMALE tient dans le budget winterfell — garde compile-time :
+    // si un futur MAX la fait déborder, la compilation échoue, pas la production.
+    const FORME_MAX: Forme = match Forme::new(MAX_IN, MAX_OUT) {
+        Ok(f) => f,
+        Err(_) => panic!("bornes MAX invalides"),
+    };
+    const _: () = assert!(FORME_MAX.width() <= winterfell::TraceInfo::MAX_TRACE_WIDTH);
+    // Et F22 reproduit exactement la géométrie des constantes historiques.
+    const _: () = assert!(Forme::F22.width() == WIDTH);
+    const _: () = assert!(Forme::F22.s_col() == S_COL);
+
     // Garde-fous COMPILE-TIME de la géométrie (voir aussi ceux du mod tests) :
     // le plancher IN couvre la pile d'éponge, les bits du range-check, et pave
     // en blocs de Merkle entiers ; OUT couvre l'éponge de commitment et les bits.
@@ -404,6 +560,130 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// LA FORME 2/2 EST BIT-IDENTIQUE AUX CONSTANTES HISTORIQUES.
+    ///
+    /// C'est le test qui rend la bascule C2-T2/T3 sans risque : tant qu'il est
+    /// vert, remplacer une constante par l'appel de méthode équivalent ne peut pas
+    /// changer un seul offset — donc pas une seule contrainte de l'AIR 2/2.
+    #[test]
+    fn forme_2_2_identique_aux_constantes() {
+        let f = Forme::F22;
+        assert_eq!(f.width(), WIDTH);
+        assert_eq!(f.s_col(), S_COL);
+        assert_eq!(f.n_segments(), N_SEGMENTS);
+        for i in 0..2 {
+            assert_eq!(f.rho_c(i), RHO_C[i], "rho[{i}]");
+            assert_eq!(f.cm_c(i), CM_C[i], "cm[{i}]");
+            assert_eq!(f.leaf_c(i), LEAF_C[i], "leaf[{i}]");
+            assert_eq!(f.vin_c(i), VIN_C[i], "vin[{i}]");
+            assert_eq!(f.vout_c(i), VOUT_C[i], "vout[{i}]");
+        }
+        let sched = schedule_2in2out();
+        for (i, attendu) in sched.iter().enumerate() {
+            assert_eq!(f.seg_kind(i), *attendu, "segment {i}");
+        }
+        for depth in [2, 4, 32] {
+            assert_eq!(f.used_rows(depth), used_rows(depth));
+            assert_eq!(f.trace_len(depth), trace_len(depth));
+            for i in 0..N_SEGMENTS {
+                assert_eq!(f.seg_start(i, depth), seg_start(i, depth));
+            }
+        }
+    }
+
+    /// Les BORNES vivent dans le constructeur : m/n nuls ou au-delà de MAX sont
+    /// REFUSÉS. Une forme sans entrée n'a pas d'autorité de dépense ; sans sortie,
+    /// pas de destinataire.
+    #[test]
+    fn formes_hors_bornes_refusees() {
+        assert!(Forme::new(0, 1).is_err(), "m = 0 : aucune autorité");
+        assert!(Forme::new(1, 0).is_err(), "n = 0 : aucun destinataire");
+        assert!(Forme::new(MAX_IN + 1, 1).is_err());
+        assert!(Forme::new(1, MAX_OUT + 1).is_err());
+        assert!(Forme::new(1, 1).is_ok());
+        assert!(Forme::new(MAX_IN, MAX_OUT).is_ok());
+    }
+
+    /// GÉOMÉTRIE PARAMÉTRIQUE : pour LES 16 FORMES, colonnes contiguës sans trou
+    /// ni chevauchement, frontières de segments alignées sur le cycle de Merkle,
+    /// pavage exact des lignes utiles.
+    ///
+    /// C'est la généralisation des tests 2/2 ci-dessus — un trou dans une forme
+    /// rare (4/1…) ne se verrait dans aucun test à forme fixe, et une colonne
+    /// chevauchée ferait s'écraser deux porteuses en silence : la preuve resterait
+    /// VALIDE, sur un statement qui ne serait plus le bon.
+    #[test]
+    fn geometrie_parametrique_16_formes() {
+        for m in 1..=MAX_IN {
+            for n in 1..=MAX_OUT {
+                let f = Forme::new(m, n).unwrap();
+                let etiquette = format!("forme {m}/{n}");
+
+                // Colonnes : blocs par entrée contigus, puis scalaires, puis S.
+                let mut attendu = ROOT_C + DIGEST_FELTS;
+                for i in 0..m {
+                    assert_eq!(f.rho_c(i), attendu, "{etiquette} rho[{i}]");
+                    assert_eq!(f.cm_c(i), f.rho_c(i) + DIGEST_FELTS, "{etiquette}");
+                    assert_eq!(f.leaf_c(i), f.cm_c(i) + DIGEST_FELTS, "{etiquette}");
+                    attendu = f.leaf_c(i) + DIGEST_FELTS;
+                }
+                for i in 0..m {
+                    assert_eq!(f.vin_c(i), attendu, "{etiquette} vin[{i}]");
+                    attendu += 1;
+                }
+                for j in 0..n {
+                    assert_eq!(f.vout_c(j), attendu, "{etiquette} vout[{j}]");
+                    attendu += 1;
+                }
+                assert_eq!(f.s_col(), attendu, "{etiquette} S");
+                assert_eq!(f.width(), attendu + 1, "{etiquette} width");
+                assert!(
+                    f.width() <= winterfell::TraceInfo::MAX_TRACE_WIDTH,
+                    "{etiquette} déborde winterfell"
+                );
+
+                // Schedule : 1 KEY puis m IN puis n OUT, rien d'autre.
+                assert_eq!(f.seg_kind(0), SegKind::Key, "{etiquette}");
+                for i in 1..=m {
+                    assert_eq!(f.seg_kind(i), SegKind::Input, "{etiquette} seg {i}");
+                }
+                for i in (m + 1)..f.n_segments() {
+                    assert_eq!(f.seg_kind(i), SegKind::Output, "{etiquette} seg {i}");
+                }
+
+                // Lignes : pavage contigu, frontières alignées cycle Merkle.
+                for depth in [2, 4, 32] {
+                    let mut cumul = 0;
+                    for i in 0..f.n_segments() {
+                        assert_eq!(
+                            f.seg_start(i, depth),
+                            cumul,
+                            "{etiquette} depth {depth} seg {i}"
+                        );
+                        assert_eq!(
+                            cumul % MERKLE_LEVEL_ROWS,
+                            0,
+                            "{etiquette} frontière désalignée du cycle Merkle"
+                        );
+                        cumul += seg_len(f.seg_kind(i), depth);
+                    }
+                    assert_eq!(f.used_rows(depth), cumul, "{etiquette} pavage exact");
+                    let t = f.trace_len(depth);
+                    assert!(t.is_power_of_two() && t >= cumul + BLIND_ROWS);
+                }
+            }
+        }
+        // Points de repère chiffrés de la spec (D1) : pire cas au consensus.
+        let max = Forme::new(MAX_IN, MAX_OUT).unwrap();
+        assert_eq!(max.width(), 120, "spec D1 : 92 + 2·13 + 2·1");
+        assert_eq!(max.used_rows(32), 16 + 4 * 512 + 4 * 64);
+        assert_eq!(max.trace_len(32), 4096);
+        // Et la petite forme est bien MOINS large que la 2/2 : la largeur suit la
+        // forme (spec D2), elle n'est pas payée au MAX.
+        let petite = Forme::new(1, 2).unwrap();
+        assert!(petite.width() < Forme::F22.width());
     }
 
     #[test]
