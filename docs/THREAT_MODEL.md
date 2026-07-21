@@ -7,7 +7,8 @@
 | Observateur passif du réseau | Capture tout le trafic, analyse de métadonnées | Chiffrement hybride PQ de tous les liens + (phase 4) routage Dandelion++/mixnet |
 | Attaquant actif (MitM) | Injection, rejeu, modification | AEAD authentifié, transcript binding dans le KEM, signatures hybrides |
 | Analyste de chaîne | Lit tout le ledger public | Notes engagées, nullifiers non-liables, montants/destinataires jamais en clair |
-| Nœud malveillant / Sybil | Nœuds espions | Rien de sensible en clair ; la confidentialité ne dépend pas de l'honnêteté des nœuds |
+| Nœud malveillant / Sybil | Nœuds espions | Rien de sensible en clair ; la confidentialité du CONTENU ne dépend pas de l'honnêteté des nœuds |
+| **Eclipse** (adversaire contrôlant TOUS nos pairs) | Isole le nœud du reste du réseau | Sélection sortante par **groupes réseau distincts** (IPv4 /16, IPv6 /32), bannissement par score — `net::pairs`. ⚠️ Voir la nuance ci-dessous |
 | Ordinateur quantique (futur) | Casse ECC (Shor), affaiblit les hash (Grover) | Hybride PQ partout (ML-KEM, ML-DSA), hash 256-bit, STARKs (hash uniquement) |
 | Cryptanalyse d'une primitive | Casse UNE primitive (ex : Kyber ou AES) | **Défense en profondeur** : chaque fonction repose sur ≥2 primitives indépendantes |
 
@@ -30,6 +31,16 @@ Règle : la combinaison ne doit jamais être PIRE que la meilleure primitive seu
 2. **Non-liabilité expéditeur/destinataire** : adresses jamais publiées, notes à usage unique.
 3. **Anti double-dépense** : nullifiers déterministes mais non-liables sans la clé.
 4. **Confidentialité des métadonnées réseau** : phase 4 (Dandelion++ puis mixnet).
+
+⚠️ **Nuance importante sur le Sybil.** La ligne « la confidentialité ne dépend pas de
+l'honnêteté des nœuds » vaut pour le CONTENU (notes engagées, montants, destinataires
+— garantis par la cryptographie seule). Elle NE vaut PAS pour les MÉTADONNÉES dès que
+Dandelion++ est le mécanisme : un adversaire qui éclipse un nœud voit toute sa phase
+*stem* passer par lui, et apprend donc l'origine de ses transactions. La confidentialité
+réseau dépend donc bien, elle, de la diversité des pairs — d'où la sélection par groupes
+réseau distincts de `net::pairs`, qui rend l'eclipse coûteuse (il faut de l'adressage
+réparti, traçable) sans la rendre impossible (un opérateur ou un cloud multi-régions
+reste capable).
 5. **Résistance post-quantique** de bout en bout.
 
 ## Hors périmètre (assumé)
