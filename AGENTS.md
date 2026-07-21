@@ -1,7 +1,8 @@
 # Obscura — contexte projet pour Codex
 
 Monnaie numérique privée post-quantique. Prototype Rust — les phases 1 à 5 sont
-prototypées et testées : nœud fonctionnel, testnet local validé (sans persistance).
+prototypées et testées : nœud persistant, cycle complet payer → sceller → recevoir
+validé sur testnet local.
 
 ## Principe directeur (décision utilisateur, ne pas remettre en cause)
 
@@ -31,6 +32,55 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   ⚠️ L'identité du RÉPONDEUR reste révélée à un MitM actif (inhérent au rôle ;
   fermable par un motif Noise-IK pour les sorties) — cf. spec transport-pq.
 - `crates/ledger` : notes engagées, nullifiers, Merkle (BLAKE3, prof. 16), tx, validation — testés.
+  **`bloc`** (finalité) : lot ORDONNÉ chaîné au parent, id = `dual_hash` non tronqué,
+  décodage borné (MAX_TX_PAR_BLOC vérifié AVANT allocation ; `const _: () = assert!`
+  consigne à la compilation qu'un bloc plein dépasse 30× le cadre réseau).
+  **Émission (genèse seule)** : `Bloc` porte `emissions: Vec<Emission>` et la règle est
+  `hauteur > 0 ⇒ emissions.is_empty()` (`BlocRefus::EmissionHorsGenese`), contrôle O(1)
+  fait AVANT le chaînage, l'instantané et toute vérification STARK. `mint` est PRIVÉE :
+  la seule création de monnaie est `ProvedLedgerState::depuis_genese` (la genèse AMORCE,
+  elle ne s'applique pas — rien à défaire, l'atomicité d'`appliquer_bloc` reste simple).
+  ⚠️ Ce qui protégeait avant n'était pas une règle mais la DIVERGENCE (un mineur
+  clandestin obtenait une racine que personne n'avait) ; un champ `emissions` valable à
+  toute hauteur aurait rendu l'inflation diffusée et ACCEPTÉE — ne jamais l'introduire.
+  `Emission { commitment, enc_note }` — JAMAIS `Option<EncNote>` : un drapeau de
+  présence partitionnerait publiquement les feuilles et viderait le witness-hiding le
+  jour d'une coinbase. Une émission sans bénéficiaire porte une enveloppe FACTICE
+  chiffrée vers une clé KEM jetable (`proved_wallet::emission_factice`), de longueur
+  identique à une vraie. `MAX_EMISSIONS_PAR_BLOC` vérifiée au décodage ET dans
+  `Bloc::genese_avec`. `VERSION_BLOC` = 0x02 et `VERSION_ETAT` = 0x02 (l'identifiant de
+  la genèse vide change, donc un ancien dump porte une tête périmée : refusé, pas relu).
+  `ProvedLedgerState::appliquer_bloc` est ATOMIQUE — un bloc à moitié appliqué
+  placerait le nœud dans un état qu'AUCUN autre n'a, et il refuserait ensuite tout
+  pour « ancre inconnue » sans que rien ne désigne la cause. Restauration bon marché
+  grâce à la frontier (clone O(depth)). Les tx s'appliquent DANS L'ORDRE (une tx peut
+  s'ancrer sur une racine née dans le même bloc — tout valider d'abord rejetterait ce
+  cas). L'état porte tête + hauteur, sérialisées (sinon un nœud rechargé ne saurait
+  plus quel bloc attendre). ⚠️ AUCUNE réorganisation possible : l'état est append-only
+  de bout en bout ; les supporter exigerait de redessiner le ledger.
+  **Historique des sorties** (`ledger::historique`, synchronisation wallet 1/2) : les
+  sorties insérées dans l'arbre, dans l'ORDRE, découpées par BLOC — chaque `TrancheBloc`
+  porte la plage de feuilles ET la **racine de fin de bloc** (sans elle un wallet
+  s'ancrerait au milieu d'un bloc, et `ProvedTx::anchor` étant public, son ancre
+  deviendrait un pseudonyme). Une entrée = `(commitment, enc_note)`, JAMAIS d'`Option` —
+  même raison que pour `Emission`. Rôle SÉPARÉ et OPTIONNEL (`Option<HistoriqueSorties>`,
+  `None` par défaut, `obscura-node --archiver`) : l'archivage ne change **aucun octet**
+  de l'état de consensus (testé), et un nœud qui n'archive pas est valide. Écrit
+  UNIQUEMENT par `amorcer` et `appliquer_bloc` (une seule porte d'insertion) et
+  seulement APRÈS succès → atomicité structurelle, rien à défaire.
+  ⚠️ **Décision tranchée** : `racine_apres`/`fin` n'entrent PAS dans `Bloc::to_bytes`,
+  parce que le bloc engage DÉJÀ ses sorties (ses transactions entières y sont, donc
+  leurs `output_commitments` et `enc_notes` dans l'ordre) — ce sont des valeurs DÉRIVÉES,
+  les inscrire ne coûterait qu'un `VERSION_BLOC` 0x03 et un scellement spéculatif pour
+  zéro bit d'authentification. Ce qui reste ouvert est écrit : un wallet qui prend
+  historique ET identifiants de blocs au MÊME nœud n'a rien vérifié.
+  Coût chiffré : ≈1,4 Kio/sortie, ≈1,4 Mio/bloc plein, ≈12 Gio/jour sous charge ; jamais
+  élagué (le champ `debut` existe pour que l'élagage soit un changement de VALEUR, et un
+  historique élagué est REFUSÉ tant que rien ne reconstruit son préfixe).
+  Persistance : fichier SÉPARÉ (`historique.bin`), écrit AVANT `etat.bin` (un crash
+  entre les deux laisse l'archive en AVANCE, récupérable, et non en retard —
+  irrécupérable). `adopter_historique` confronte hauteur, nombre de feuilles et racine ;
+  un écart n'est JAMAIS réparé en silence (mode dégradé explicite, fichier intact).
   **Mempool** (phase 4, brique 3) : contrôles ordonnés du MOINS au PLUS coûteux —
   l'asymétrie de coût (~4 ms de vérification STARK pour ~68 Kio envoyés) est LE
   vecteur de DoS du projet, donc les 5 filtres O(1) précèdent la vérification.
@@ -61,6 +111,44 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   décidé en brique frontier). ⚠️ `observer()` doit être appelé pour CHAQUE
   commitment dans le MÊME ordre que le nœud, sinon les index divergent.
   Monnaie rendue toujours produite ET chiffrée vers soi-même.
+  **Clé d'intention NEUVE à chaque transaction** : `ProvedTx::signer` est public et
+  circule en clair — une clé stable serait un pseudonyme permanent reliant toutes
+  nos transactions, annulant montants engagés, destinataires chiffrés,
+  witness-hiding et Dandelion++ d'un seul coup. Licite car la signature d'intention
+  est une enveloppe d'anti-malléabilité, pas une autorité de propriété. Même raison
+  pour l'identité de transport du CLI, éphémère elle aussi.
+  **`adresse`** : encodage textuel `obs1‖hex(version‖owner‖kem_pk‖somme)` — la somme
+  de contrôle existe parce qu'un paiement vers une adresse abîmée est irréversible
+  et SILENCIEUX (aucun secret ne correspond au owner altéré) ; ⚠️ elle détecte
+  l'accident, PAS l'adversaire (courte, non clefée). ~2,5 Kio, prix des clés PQ.
+  **`persistance`** : `to_bytes_secret`/`charger`/`enregistrer` — le fichier le plus
+  sensible du projet (autorité de DÉPENSE). `0600` posé avant écriture, atomique,
+  empreinte `dual_hash` NON tronquée (un octet retourné dans un montant donnerait
+  sinon un solde faux sans erreur), cohérence croisée note↔arbre au chargement.
+  Aucune variante « charger ou créer » : un fichier illisible ne doit jamais devenir
+  un wallet vide. ⚠️ NON chiffré au repos.
+  `oublier_depensees(&tx)` reconnaît nos notes en RECALCULANT leurs nullifiers —
+  marche donc sur toute transaction observée, pas seulement les nôtres.
+  **`synchro`** (rejeu de l'historique, synchronisation 3/3) : `Wallet::synchroniser`
+  rejoue UN bloc donné par TOUS ses morceaux — il n'existe aucun tampon partiel, donc
+  rien de « à moitié appliqué » à persister. L'invariant d'ordre est STRUCTUREL : la
+  position (`prochaine_hauteur`) est mémorisée et un lot qui ne commence pas exactement
+  là où le wallet s'est arrêté est REFUSÉ, en hauteur ET en feuille ; un bloc déjà rejoué
+  rend `Statut::DejaApplique` (idempotent, et DIT — un `Ok` muet ferait croire à une
+  boucle qu'elle progresse). Morceaux RANGÉS par index (jamais concaténés), couverture
+  vérifiée par CUMUL (le client n'a pas à connaître la taille de morceau du serveur),
+  index rendu par l'arbre confronté à `decalage + i`. Application ATOMIQUE : racine ≠
+  `racine_apres` ⇒ `ProvedMerkleTree::tronquer` ramène l'arbre à son préfixe exact ; le
+  SCAN (une décapsulation KEM par sortie, le vrai coût) n'a lieu qu'APRÈS l'acceptation
+  de la racine. `hauteur_tete` est **absente du type rejoué** — la forme la plus forte de
+  « elle ne pilote rien ». **L'ANCRE** : `feuilles_ancrees` retient la dernière frontière
+  de bloc et `construire` refuse (`ArbreHorsFrontiereDeBloc`) de prouver contre un arbre
+  qui l'a dépassée — une ancre à mi-bloc serait un pseudonyme, et rien en aval ne pourrait
+  la distinguer d'une ancre légitime. Fichier de wallet en **0x02** (la position y entre) ;
+  un 0x01 est refusé par sa propre variante, jamais réinterprété.
+  ⚠️ Le mensonge par OMISSION reste indétectable (la racine annoncée est cohérente) ;
+  l'arbre du wallet reste en O(n). La BOUCLE de synchronisation est câblée (voir
+  `node::client` et `obscura-wallet synchroniser` sous `crates/node`).
 - `crates/node` : **câblage** des briques réseau et consensus (phase 5). `message`
   = protocole applicatif (Annonce/Demande/Transaction) : on annonce des DIGESTS
   (~64 o), jamais les transactions (~68 Kio) — envoyer spontanément la tx à chaque
@@ -80,7 +168,105 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   TIGE Dandelion++, pas en diffusion — c'est là que l'origine est protégée.
   **Binaires** : `obscura-node` (nœud autonome) et `obscura-demo` (démonstration
   locale : wallet → preuve → handshake PQ → socket → mempool, chaque étape
-  annoncée). ⚠️ Aucune persistance entre lancements — à observer, pas à utiliser.
+  annoncée). **Persistance** (`node::persistance`) : identité + état survivent aux
+  redémarrages (`--donnees`) — sans quoi les pairs ne reconnaîtraient pas le nœud
+  et un nœud malveillant se blanchirait en redémarrant. Fichier d'identité en
+  `0600` sur Unix, écriture atomique, JAMAIS régénéré en silence si corrompu.
+  ⚠️ Mempool non persisté (sans gravité : réannoncé par les pairs) ; clé NON
+  chiffrée au repos (une phrase de passe supposerait une saisie interactive).
+  **`obscura-wallet`** (3e binaire) : `creer` (REFUSE d'écraser — un wallet écrasé
+  est irrécupérable, aucune option ne force), `adresse`, `synchroniser`, `solde`,
+  `envoyer` (preuve → handshake PQ éphémère → socket → mempool ; envoie AVANT d'oublier
+  les notes, l'ordre inverse perdrait des notes jamais dépensées si l'envoi échouait).
+  Chemin couvert par `crates/node/tests/paiement_wallet.rs`, qui va de l'adresse
+  TEXTUELLE jusqu'au déchiffrement par le bénéficiaire.
+  **Boucle de synchronisation** (`node::client`) : `obscura-wallet synchroniser --noeud`
+  demande `hauteur = prochaine_hauteur()` et RIEN d'autre, rassemble tous les morceaux
+  du bloc, rejoue UNE fois par `Wallet::synchroniser`, enregistre APRÈS chaque bloc, et
+  s'arrête au premier SILENCE. `hauteur_tete` ne pilote rien (le wallet ne la voit
+  même pas) ; `DejaApplique` n'est PAS un pas (arrêt, sinon boucle sur place) ; le
+  travail est BORNÉ par invocation (`MAX_BLOCS_PAR_INVOCATION`, abandon nommé plutôt que
+  boucle sur un nœud qui sert sans fin). Débit réglé par la FRÉQUENCE des demandes,
+  jamais par un champ sur le fil. `envoyer` REFUSE si `prochaine_hauteur() == 0` (jamais
+  synchronisé) et propose `--noeud-synchro` DISTINCT de `--noeud` (avertissement quand
+  ils coïncident) : enchaîner synchro puis envoi depuis la même IP relie les deux et
+  désigne l'émetteur, alors qu'un relais Dandelion++ ne vient jamais de se synchroniser.
+  Cycle complet payer → sceller → recevoir → monnaie rendue → redépenser exercé sur de
+  vraies sockets (`crates/node/tests/cycle_wallet.rs`).
+  **Finalité câblée** : `Message::Bloc` (diffusé ENTIER — un bloc neuf n'est connu de
+  personne, l'aller-retour annonce/demande ne ferait que retarder), `Noeud::sceller`
+  (tri par `tx_digest` → deux nœuds scellant le même mempool produisent le MÊME bloc ;
+  ⚠️ grindable, à changer quand l'ordre aura de la valeur), `sur_bloc` (bloc non
+  chaîné = AUCUNE sanction — c'est le cas normal de deux scellements simultanés ou
+  d'un retard ; seule une tx invalide dans un bloc bien chaîné pénalise).
+  `obscura-node --sceller <ms>`, **OFF par défaut** : produire des blocs est une
+  décision d'opérateur. ⚠️ Aucune élection de producteur — ordre CONVENU, pas DÉFENDU.
+  **Corrections issues de la revue adversariale** (détail : docs/THREAT_MODEL.md,
+  « Défauts trouvés par revue adversariale ») : `sceller` PLAFONNE à MAX_TX_PAR_BLOC
+  (une borne de `from_bytes` doit exister aussi dans le CONSTRUCTEUR, sinon elle ne
+  protège que l'entrant) ; `RECENT_ROOTS_WINDOW` = 4 blocs pleins + assertion de
+  compilation (à 100, un bloc chargé purgeait toutes les ancres → transactions en vol
+  refusées, et censure à coût nul par un scelleur adverse) ; une VERSION inconnue ne
+  pénalise plus (sinon une mise à jour bannit les nœuds en arrière et effondre
+  l'anti-eclipse) ; échéances lecture/écriture sur chaque socket AVANT le handshake
+  (⚠️ une échéance de LECTURE = pair silencieux, PAS lien mort — la confondre couperait
+  tous les liens toutes les 20 s) ; `blocs_desaccordes` rend visible un nœud figé.
+  **Rattrapage de bloc** (`Message::DemandeBloc { hauteur }` + `node::archive`) : un
+  nœud qui manque une hauteur la REDEMANDE et rejoint la chaîne — prérequis, car un
+  nœud figé sert un historique plus court mais parfaitement COHÉRENT, donc tout wallet
+  qui s'y synchronise se croit à jour. Réponse = `Message::Bloc`, appliquée par le
+  chemin NORMAL (aucun raccourci). `ArchiveBlocs` = N derniers blocs appliqués, bornée
+  DEUX fois (64 blocs ET 64 Mio : un bloc plein pèse ~34 Mio, donc 64 blocs pleins
+  vaudraient ~2,1 Gio) et distincte de l'état consensus. Anti-boucle : une demande ne
+  naît que d'un bloc REÇU, le déclencheur est une inégalité STRICTE
+  (`recue > hauteur+1`), et un rattrapage infructueux s'arrête au premier pas — sinon
+  deux nœuds désaccordés se demanderaient des blocs à l'infini. Testé sur sockets
+  réelles (`crates/node/tests/rattrapage.rs`).
+  **Genèse explicite** : `obscura-node --genese <fichier>` (décodé par `Bloc::from_bytes`,
+  ÉCHEC FRANC si absent/corrompu — aucun repli, un nœud mal amorcé est indiscernable
+  d'un nœud neuf sain). Sans l'option : genèse VIDE par défaut, AFFICHÉE. L'identifiant
+  de genèse (8 o hex) est imprimé au démarrage pour être comparé entre opérateurs.
+  `persistance::charger_ou_amorcer_etat(&genese)`. ⚠️ L'état ne mémorise PAS sa genèse :
+  sur un répertoire déjà peuplé, `--genese` est ignoré sans erreur.
+  **Archivage des sorties** : `obscura-node --archiver` (OFF par défaut, rôle
+  d'opérateur), `persistance::charger_ou_amorcer_archive` + `historique.bin` écrit AVANT
+  `etat.bin`. Une archive absente ou désaccordée fait démarrer le nœud en mode DÉGRADÉ
+  (sans archive), bruyamment, sans rien tronquer. Activer l'archivage TROP TARD (état
+  déjà avancé, pas de fichier) est REFUSÉ : une archive partielle servirait des index
+  décalés de tout le préfixe manquant sans que rien ne le dise.
+  **Service d'historique** (synchronisation wallet 2/2, côté nœud) : `node::synchro`
+  (format de fil) + `node::etranglement` (seaux à jetons) + `Message::{DemandeHistorique,
+  Historique}`. La demande porte **la position et RIEN d'autre** (9 o, longueur exacte) :
+  un `max` ou une plage seraient une empreinte de client qui survit à l'identité de
+  transport éphémère. L'unité servie est **le BLOC** (`debut`/`fin`/`racine_apres`), pas
+  la plage de feuilles — `ProvedTx::anchor` étant public, un wallet arrêté à une feuille
+  publierait une ancre quasi unique. Le **découpage est décidé par le SERVEUR** (un bloc
+  plein ≈1,4 Mio > cadre de 1 Mio) et **canonique** : `morceaux`/`decalage`/nombre
+  d'entrées sont RECALCULÉS au décodage, ce qui ferme recouvrements, morceaux fantômes et
+  segmentation-marqueur. `MAX_SORTIES_PAR_REPONSE` (739) est **calculé** sur
+  `MAX_CADRE − crypto::aead::SURCOUT (68) − en-tête` : le cadrage borne le CHIFFRÉ.
+  **Étranglement indexé sur `GroupeReseau`, JAMAIS sur `PeerId`** (une identité est
+  gratuite, le wallet en tire une neuve à chaque commande) ; le **nombre de requêtes** est
+  facturé (`COUT_REQUETE` débité avant de savoir si on sert), recharge comptée en
+  millièmes (tronquée à l'entier, un pair bavard ne regagnerait jamais rien) ; à crédit
+  épuisé **SILENCE**, jamais de réponse courte, et **AUCUNE sanction** (le score gouverne
+  la sélection sortante). Adresse fournie par le runtime dans une table SÉPARÉE de
+  `TablePairs` (y verser les entrants leur ouvrirait nos emplacements sortants) ;
+  sans adresse connue → **fail-closed**. `hauteur_tete` est une INDICATION non vérifiable
+  qui ne pilote rien (la position n'avance que sur la tranche demandée) ; `hauteur_tete <
+  hauteur` est refusé au décodage. Testé sur sockets réelles
+  (`crates/node/tests/synchronisation.rs`).
+  ⚠️ Restent : `executer` tient le verrou pendant l'écriture ; le service de BLOCS
+  n'est **pas étranglé** (amplification 9 o → jusqu'à 34 Mio ; le seau écrit lui est
+  applicable tel quel, il n'y est pas branché) ; `ArchiveBlocs` (blocs récents,
+  rattrapage) NON persistée — à ne pas confondre avec l'historique des sorties, qui
+  l'est ; un nœud sur une chaîne DIVERGENTE ne se répare pas (état append-only) ;
+  le découpage multi-morceaux n'est testé qu'au niveau du FORMAT (une genèse plafonne à
+  512 < 739 ; l'atteindre sur socket exigerait ≈370 preuves STARK).
+  Le REJEU côté wallet est fait (`wallet::synchro`) et le pont est
+  `ReponseHistorique::pour_le_wallet` ; la BOUCLE est câblée dans `node::client`
+  (`synchroniser_par_connexion`) et exposée par `obscura-wallet synchroniser` — cf.
+  `crates/node`, « Boucle de synchronisation ».
 - `docs/PROTOCOL.md`, `docs/THREAT_MODEL.md` et `docs/STARK_STATEMENT.md` : spécification de référence
 - `cargo test --all-features --release` : suite verte (crypto/net/ledger/circuit/wallet/node)
 
@@ -102,10 +288,17 @@ sophistication crypto**. Reste :
    ⚠️ Piège identifié à ne pas rejouer : mutualiser des colonnes peut SUPPRIMER
    une garantie que la redondance offrait gratuitement (cf. « Liaison de racine »
    dans STARK_STATEMENT.md) — auditer chaque fusion sous cet angle.
-2. **Industrialiser le nœud** : PERSISTANCE entre lancements — identité du nœud
-   et état ledger (`ProvedLedgerState::{save, load}` existe côté ledger depuis
-   #7, PAS encore câblé dans `obscura-node`) — et **wallet CLI** (le crate
-   `wallet` est une bibliothèque ; seul `obscura-demo` l'exerce aujourd'hui).
+2. **SYNCHRONISATION WALLET ↔ NŒUD — CONSERVE ✅, SERT ✅, REJOUE ✅, BOUCLE ✅.**
+   `ledger::historique` conserve et persiste ; `node::{synchro, etranglement}` le SERVENT
+   sur le fil ; `wallet::synchro` le REJOUE ; `node::client` + `obscura-wallet
+   synchroniser` câblent la BOUCLE. **Le wallet REÇOIT**, monnaie rendue comprise, et le
+   cycle payer → sceller → recevoir → redépenser est exercé sur de vraies sockets
+   (`crates/node/tests/cycle_wallet.rs`). ⚠️ L'émission est RÉGLÉE (genèse seule, `mint`
+   privée) ; une coinbase reste hors périmètre. Ce qui reste ouvert (cf.
+   docs/THREAT_MODEL.md) : le nœud servant apprend IP/cadence/position et peut MENTIR PAR
+   OMISSION ; le rôle d'archiviste est coûteux ; l'arbre du wallet reste en O(n).
+3. Persistance du wallet ✅ / du nœud ✅ / CLI ✅ / genèse paramétrée ✅ (faits) ;
+   reste le chiffrement au repos du fichier de wallet (Argon2 + saisie interactive).
 
 ## Décisions v0.2 (revue intégrée — ne pas régresser)
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="L'atelier Obscura — une simulation interactive et pédagogique du cycle de vie d'une note : identité, commitments, arbre de Merkle, preuve P1–P7, nullifiers et double dépense.">
+<meta name="description" content="L'atelier Obscura — une simulation interactive et pédagogique du cycle complet d'une monnaie privée : identité, commitments, arbre de Merkle, preuve P1–P7, mempool, bloc scellé, double dépense et synchronisation du wallet.">
 <title>L'atelier Obscura — comprendre en manipulant</title>
 <style>
   /* Charte partagée avec obscura-overview.html */
@@ -63,7 +63,7 @@
   .eyebrow::before{content:""; width:26px; height:1px; background:var(--accent)}
   h1{font-family:Georgia,serif; font-weight:700; letter-spacing:-.015em; font-size:clamp(1.9rem,5vw,3.1rem); line-height:1.06; margin:0}
   h1 em{font-style:normal; color:var(--accent)}
-  .lede{color:var(--muted); max-width:64ch; margin:14px 0 0; font-size:clamp(1rem,1.9vw,1.15rem)}
+  .lede{color:var(--muted); max-width:66ch; margin:14px 0 0; font-size:clamp(1rem,1.9vw,1.15rem)}
   .toy-badge{display:inline-flex; align-items:center; gap:8px; margin-top:18px; font-family:ui-monospace,Menlo,monospace; font-size:12px;
     background:var(--secret-soft); color:var(--secret); border:1px solid color-mix(in srgb,var(--secret) 35%,var(--line)); padding:6px 13px; border-radius:20px}
 
@@ -73,7 +73,7 @@
   .step h2{font-family:Georgia,serif; font-size:1.35rem; margin:0 0 4px; display:flex; align-items:center; gap:12px; letter-spacing:-.01em}
   .step h2 .n{flex:none; width:30px; height:30px; border-radius:50%; background:var(--accent-soft); color:var(--accent-ink); display:inline-flex; align-items:center; justify-content:center; font-family:ui-monospace,Menlo,monospace; font-size:14px; border:1px solid color-mix(in srgb,var(--accent) 35%,var(--line))}
   .step.done h2 .n{background:var(--done); color:#fff; border-color:var(--done)}
-  .step .why{color:var(--muted); font-size:14.5px; margin:4px 0 16px; max-width:72ch}
+  .step .why{color:var(--muted); font-size:14.5px; margin:4px 0 16px; max-width:74ch}
 
   button{font:inherit; cursor:pointer; border-radius:10px; border:1px solid var(--line); background:var(--surface-2); color:var(--ink); padding:9px 16px; transition:transform .08s, background .15s}
   button:hover{background:color-mix(in srgb,var(--accent) 10%, var(--surface-2))}
@@ -88,8 +88,6 @@
   .kv .k{font-family:ui-monospace,Menlo,monospace; font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); white-space:nowrap}
   .hash{font-family:ui-monospace,Menlo,monospace; font-size:13.5px; word-break:break-all}
   .pill{display:inline-block; font-family:ui-monospace,Menlo,monospace; font-size:11px; padding:2px 9px; border-radius:20px; border:1px solid var(--line); background:var(--surface-2); color:var(--muted); letter-spacing:.05em; margin-left:8px; vertical-align:middle}
-  .pill.secret{color:var(--secret); background:var(--secret-soft); border-color:color-mix(in srgb,var(--secret) 40%,var(--line))}
-  .pill.pub{color:var(--accent-ink); background:var(--accent-soft); border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
 
   .secretbox{border:1px dashed color-mix(in srgb,var(--secret) 55%,var(--line)); background:var(--secret-soft); border-radius:12px; padding:14px 16px; margin:14px 0}
   .secretbox .lab{font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--secret); display:block; margin-bottom:6px}
@@ -101,11 +99,14 @@
   .note .cm{font-family:ui-monospace,Menlo,monospace; font-size:11px; color:var(--muted); margin-top:4px; word-break:break-all}
   .note.spent{opacity:.5}
   .note.spent::after{content:"dépensée ✓"; position:absolute; top:8px; right:10px; font-family:ui-monospace,Menlo,monospace; font-size:10px; color:var(--danger)}
+  .note.pending::after{content:"en attente de bloc ⏳"; position:absolute; top:8px; right:10px; font-family:ui-monospace,Menlo,monospace; font-size:10px; color:var(--secret)}
   .note.selectable{cursor:pointer}
   .note.selectable:hover{border-color:var(--accent)}
   .note.selected{border-color:var(--accent); box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 45%, transparent)}
   .note .who{font-family:ui-monospace,Menlo,monospace; font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--accent-ink)}
   .note.change{border-style:dashed}
+  .note.fresh{animation:pop .5s ease}
+  @keyframes pop{0%{transform:scale(.85); opacity:0} 100%{transform:scale(1); opacity:1}}
 
   /* Arbre de Merkle */
   .treewrap{background:var(--surface-2); border:1px solid var(--line); border-radius:14px; padding:18px 14px 10px; margin:16px 0; overflow-x:auto}
@@ -118,6 +119,18 @@
   .tnode .tl{display:block; font-size:9px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted)}
   .tnode.flash{background:var(--accent-soft); border-color:var(--accent)}
   .tnode.path{background:var(--secret-soft); border-color:var(--secret); box-shadow:0 0 0 2px color-mix(in srgb,var(--secret) 40%, transparent)}
+
+  /* Mempool et chaîne */
+  .poolwrap{border:1px dashed var(--line); border-radius:12px; padding:12px 16px; margin:14px 0; background:var(--surface-2)}
+  .poolwrap .lab{font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); display:block; margin-bottom:6px}
+  .pooltx{font-family:ui-monospace,Menlo,monospace; font-size:12.5px; padding:4px 0}
+  .pool-empty{color:var(--muted); font-style:italic; font-size:13.5px}
+  .chain{display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin:14px 0}
+  .bloc{background:var(--surface); border:1px solid var(--accent); border-radius:10px; padding:8px 13px; font-family:ui-monospace,Menlo,monospace; font-size:12px; box-shadow:var(--shadow)}
+  .bloc .bh{display:block; font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--accent-ink)}
+  .bloc.genese{border-color:var(--line); color:var(--muted)}
+  .bloc.fresh{animation:pop .5s ease}
+  .chainlink{color:var(--accent); font-weight:700}
 
   /* Formulaire de dépense */
   .spendform{display:flex; flex-wrap:wrap; gap:14px; align-items:flex-end; margin:12px 0}
@@ -144,6 +157,11 @@
   .verdict.ok{background:var(--accent-soft); color:var(--accent-ink); border:1px solid color-mix(in srgb,var(--accent) 40%,var(--line))}
   .verdict.ko{background:var(--danger-soft); color:var(--danger); border:1px solid color-mix(in srgb,var(--danger) 45%,var(--line))}
 
+  /* Journal de synchronisation */
+  .synclog{font-family:ui-monospace,Menlo,monospace; font-size:12.5px; background:var(--code-bg); border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin:10px 0; display:none}
+  .synclog.show{display:block}
+  .synclog div{padding:2px 0}
+
   /* Observateur */
   .twocol{display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px; margin:14px 0}
   .obs{border:1px solid var(--line); border-radius:14px; padding:16px 18px; background:var(--surface-2)}
@@ -169,7 +187,7 @@
   <div class="shell">
     <p class="eyebrow">L'atelier Obscura · démo interactive</p>
     <h1>Comprendre Obscura <em>en manipulant</em></h1>
-    <p class="lede">Vous êtes <strong>Alice</strong>. En cinq étapes, vous allez créer une identité, recevoir des notes, les dépenser avec une preuve, tenter une double dépense — et voir exactement ce que le réseau observe (presque rien).</p>
+    <p class="lede">Vous êtes <strong>Alice</strong>. En sept étapes, vous allez créer une identité, recevoir des notes, payer <strong>Bob</strong> avec une preuve, sceller un <strong>bloc</strong> pour rendre le paiement définitif, tenter une double dépense — puis synchroniser les wallets pour que Bob <strong>reçoive</strong>. Exactement le cycle que le vrai prototype exerce sur de vraies sockets.</p>
     <span class="toy-badge">⚠ Simulation pédagogique : hachage-jouet, pas de vraie crypto — le vrai projet utilise Rescue-Prime et BLAKE3‖SHA3</span>
   </div>
 </header>
@@ -193,14 +211,14 @@
         <span class="k">owner</span><span><span class="hash" id="v-owner"></span><span class="pill">= H_owner(secret)</span></span>
         <span class="k">nk</span><span><span class="hash" id="v-nk"></span><span class="pill">= H_nk(secret)</span></span>
       </div>
-      <p class="why">👉 <code>owner</code> identifie tes notes, <code>nk</code> servira à fabriquer les nullifiers. Les deux dérivent du même secret — et le circuit le prouvera.</p>
+      <p class="why">👉 <code>owner</code> identifie tes notes, <code>nk</code> servira à fabriquer les nullifiers. Les deux dérivent du même secret — et le circuit le prouvera. (Dans le vrai prototype, ton adresse textuelle <code>obs1…</code> porte <code>owner</code> + ta clé de chiffrement, avec une somme de contrôle.)</p>
     </div>
   </section>
 
   <!-- ÉTAPE 2 -->
   <section class="step locked" id="s2">
     <h2><span class="n">2</span> Reçois des notes</h2>
-    <p class="why">Une <strong>note</strong> = un billet numérique <code>{valeur, owner, ρ, r}</code>. Le réseau n'en voit qu'un <strong>commitment</strong> <code>cm = H(note)</code> — une enveloppe scellée — inséré comme feuille dans l'arbre de Merkle. Personne ne peut en lire la valeur ni le propriétaire.</p>
+    <p class="why">Une <strong>note</strong> = un billet numérique <code>{valeur, owner, ρ, r}</code>. Le réseau n'en voit qu'un <strong>commitment</strong> <code>cm = H(note)</code> — une enveloppe scellée — inséré comme feuille dans l'arbre de Merkle. (Dans le vrai protocole, la création de monnaie n'existe qu'à la <strong>genèse</strong> ; ici on triche pour te donner de quoi jouer.)</p>
     <div class="btnrow">
       <button data-mint="5">+ Recevoir 5 Ⓞ</button>
       <button data-mint="10">+ Recevoir 10 Ⓞ</button>
@@ -215,13 +233,13 @@
 
   <!-- ÉTAPE 3 -->
   <section class="step locked" id="s3">
-    <h2><span class="n">3</span> Dépense — avec une preuve, pas des aveux</h2>
-    <p class="why">Choisis une note, un montant pour <strong>Bob</strong> et des frais. Ton wallet fabriquera une preuve des règles P1–P7, publiera le <strong>nullifier</strong> de la note dépensée (tampon « utilisée », inreliable à sa feuille) et deux nouveaux commitments : celui de Bob et ta <strong>monnaie rendue</strong>, rechiffrée vers toi-même.</p>
+    <h2><span class="n">3</span> Paie Bob — avec une preuve, pas des aveux</h2>
+    <p class="why">Choisis une note, un montant pour <strong>Bob</strong> et des frais. Ton wallet fabrique une preuve des règles P1–P7 et une transaction : le <strong>nullifier</strong> de la note dépensée (tampon « utilisée », inreliable à sa feuille) et deux commitments de sortie — Bob, et ta <strong>monnaie rendue</strong> rechiffrée vers toi-même. Elle part au <strong>mempool</strong> : rien n'est encore définitif.</p>
     <p class="why" id="pick-hint">👇 Clique une note non dépensée pour la sélectionner.</p>
     <div class="spendform">
       <div class="field"><label>Vers Bob</label><input type="number" id="in-amount" min="0" value="7"></div>
       <div class="field"><label>Frais</label><input type="number" id="in-fee" min="0" value="1"></div>
-      <button class="primary" id="btn-prove" disabled>🧮 Prouver &amp; envoyer</button>
+      <button class="primary" id="btn-prove" disabled>🧮 Prouver &amp; soumettre</button>
     </div>
     <div class="balance" id="balance">Sélectionne une note…</div>
     <ul class="checklist" id="checklist">
@@ -232,28 +250,51 @@
       <li data-p="P5"><span class="st">·</span><span><b>P5</b> équilibre : entrées = sorties + frais</span></li>
       <li data-p="P6"><span class="st">·</span><span><b>P6</b> montants dans les bornes (&lt; 2⁶⁰)</span></li>
       <li data-p="P7"><span class="st">·</span><span><b>P7</b> les commitments de sortie sont corrects</span></li>
-      <li data-p="NF"><span class="st">·</span><span><b>nf</b> nullifier jamais vu par le réseau ?</span></li>
+      <li data-p="NF"><span class="st">·</span><span><b>nf</b> nullifier jamais vu ?</span></li>
     </ul>
     <div class="verdict" id="verdict"></div>
+    <div class="poolwrap"><span class="lab">⏳ Mempool — transactions en attente d'un bloc</span><div id="mempool"><div class="pool-empty">vide</div></div></div>
   </section>
 
   <!-- ÉTAPE 4 -->
   <section class="step locked" id="s4">
-    <h2><span class="n">4</span> Tente la double dépense 😈</h2>
-    <p class="why">Ta note est dépensée… mais son enveloppe est toujours dans l'arbre (on n'efface jamais rien). Essaie de la re-dépenser : la preuve P1–P7 passera — c'est le <strong>nullifier</strong>, déjà publié, qui te trahira. Un tampon unique par note, sans révéler laquelle.</p>
-    <div class="btnrow"><button class="danger" id="btn-double">😈 Rejouer la même note</button></div>
-    <div class="verdict" id="verdict2"></div>
+    <h2><span class="n">4</span> Scelle un bloc — la finalité</h2>
+    <p class="why">Une transaction au mempool n'a rien changé à l'état : si chaque nœud appliquait dans son coin, les arbres divergeraient. Un nœud <strong>scelle</strong> donc un <strong>bloc</strong> : un lot <em>ordonné</em> (tri par digest — deux nœuds honnêtes produisent le MÊME bloc), <em>chaîné</em> à son parent, appliqué <em>atomiquement</em>. C'est là que le nullifier devient public et que les sorties entrent dans l'arbre. (Vrai prototype : <code>obscura-node --sceller</code>.)</p>
+    <div class="btnrow"><button class="primary" id="btn-seal">⛏ Sceller le bloc</button></div>
+    <div class="chain" id="chain" aria-label="Chaîne de blocs"></div>
+    <div class="verdict" id="verdict-seal"></div>
   </section>
 
   <!-- ÉTAPE 5 -->
   <section class="step locked" id="s5">
-    <h2><span class="n">5</span> L'œil de l'observateur</h2>
+    <h2><span class="n">5</span> Tente la double dépense 😈</h2>
+    <p class="why">Ta note est dépensée… mais son enveloppe est toujours dans l'arbre (on n'efface jamais rien). Essaie de la re-dépenser : la preuve P1–P7 passera — c'est le <strong>nullifier</strong>, publié par le bloc, qui te trahira. Un tampon unique par note, sans révéler laquelle.</p>
+    <div class="btnrow"><button class="danger" id="btn-double">😈 Rejouer la même note</button></div>
+    <div class="verdict" id="verdict2"></div>
+  </section>
+
+  <!-- ÉTAPE 6 -->
+  <section class="step locked" id="s6">
+    <h2><span class="n">6</span> Synchronise — Bob reçoit (enfin)</h2>
+    <p class="why">Surprise : Bob ne sait toujours pas qu'il a été payé — et toi, tu ne « vois » pas ta monnaie rendue. Un wallet ne peut PAS le deviner : les sorties sont des enveloppes chiffrées. Il doit <strong>rejouer les blocs</strong> servis par un nœud, dans l'ordre, et tenter de déchiffrer chaque sortie. C'est la synchronisation. (Vrai prototype : <code>obscura-wallet synchroniser --noeud</code>.)</p>
+    <div class="btnrow"><button class="primary" id="btn-sync">🔄 Synchroniser les wallets</button></div>
+    <div class="synclog" id="synclog"></div>
+    <div class="verdict" id="verdict-sync"></div>
+    <div id="bob-panel" hidden>
+      <p class="why" style="margin-top:14px">🎉 <strong>Le wallet de Bob</strong> — il vient de découvrir sa note en rejouant le bloc :</p>
+      <div class="notes" id="bob-notes"></div>
+    </div>
+  </section>
+
+  <!-- ÉTAPE 7 -->
+  <section class="step locked" id="s7">
+    <h2><span class="n">7</span> L'œil de l'observateur</h2>
     <p class="why">Compare : tout ce que le réseau a appris pendant tes manipulations, contre ce que ton wallet sait. C'est toute la promesse d'Obscura — la validité est publique, le contenu ne l'est pas.</p>
     <div class="twocol">
       <div class="obs network">
         <h3>🌐 Ce que voit le réseau</h3>
         <ul>
-          <li>la <strong>racine</strong> de l'arbre : <span class="hash" id="obs-root"></span></li>
+          <li>la <strong>chaîne</strong> : <span id="obs-h">0</span> bloc(s) scellé(s), racine <span class="hash" id="obs-root"></span></li>
           <li><span id="obs-cm-count">0</span> commitments — des enveloppes scellées, indistinguables</li>
           <li><span id="obs-nf-count">0</span> nullifiers — « une note a été dépensée », sans savoir laquelle</li>
           <li>les <strong>frais</strong> de chaque transaction</li>
@@ -268,7 +309,7 @@
         </ul>
       </div>
     </div>
-    <div class="callout"><span class="lab">Et sur le réseau ?</span>Cette page s'arrête à la transaction. Dans le vrai prototype, elle voyage ensuite sur des <strong>liens chiffrés post-quantiques</strong> et son origine est brouillée par <strong>Dandelion++</strong> — voir la <a href="obscura-overview.html">note de conception</a>.</div>
+    <div class="callout"><span class="lab">Et sur le réseau ?</span>Cette page s'arrête au consensus. Dans le vrai prototype, transactions et blocs voyagent sur des <strong>liens chiffrés post-quantiques</strong>, l'origine d'une transaction est brouillée par <strong>Dandelion++</strong>, et le wallet qui se synchronise ne dit au nœud QUE sa position — voir la <a href="obscura-overview.html">note de conception</a>.</div>
   </section>
 
   <div class="btnrow" style="margin-top:28px"><button id="btn-reset">↺ Recommencer l'atelier</button></div>
@@ -278,7 +319,7 @@
 
 <footer class="footer">
   <div class="shell">
-    <p>L'atelier Obscura — simulation pédagogique (hachage-jouet FNV, arbre profondeur 3). Le protocole réel : <a href="obscura-overview.html">note de conception</a> · <code>docs/PROTOCOL.md</code> · <code>docs/STARK_STATEMENT.md</code>. Prototype non audité.</p>
+    <p>L'atelier Obscura — simulation pédagogique (hachage-jouet FNV, arbre profondeur 3, un scelleur unique). Le protocole réel : <a href="obscura-overview.html">note de conception</a> · <code>docs/PROTOCOL.md</code> · <code>docs/STARK_STATEMENT.md</code>. Le cycle joué ici (payer → sceller → recevoir) est celui que <code>crates/node/tests/cycle_wallet.rs</code> exerce sur de vraies sockets. Prototype non audité.</p>
   </div>
 </footer>
 
@@ -287,12 +328,13 @@
 /* ============================================================
    L'atelier Obscura — simulation pédagogique.
    AUCUNE vraie crypto ici : un hachage-jouet (FNV-1a) suffit à
-   montrer les CONCEPTS (commitment, arbre, nullifier, équilibre).
+   montrer les CONCEPTS (commitment, arbre, nullifier, équilibre,
+   bloc scellé, synchronisation par rejeu).
    ============================================================ */
 
 // --- Hachage-jouet : FNV-1a 32 bits, deux passes salées → 10 hex.
 function toyHash(domaine, ...morceaux){
-  const s = domaine + " " + morceaux.join(" ");
+  const s = domaine + " " + morceaux.join(" ");
   let h1 = 0x811c9dc5, h2 = 0x01000193;
   for (let i = 0; i < s.length; i++){
     h1 = Math.imul(h1 ^ s.charCodeAt(i), 0x01000193) >>> 0;
@@ -311,10 +353,12 @@ const FEUILLES = 8; // arbre de profondeur 3
 const etat = {
   secret:null, owner:null, nk:null,
   bobOwner:null,
-  notes:[],            // {id, valeur, rho, r, cm, feuille, depensee, qui}
+  notes:[],            // {id, valeur, rho, r, cm, feuille, depensee, enAttente, qui, rendue, connue}
   feuilles:Array(FEUILLES).fill(null),
   nullifiers:new Set(),
-  derniereDepense:null, // {note, montant, frais} pour l'étape 4
+  mempool:[],          // {digest, note, montant, frais, nf}
+  chaine:[],           // {h, id, parent, nbTx}
+  derniereDepense:null,
   occupe:false,
 };
 
@@ -335,11 +379,11 @@ function merkle(){
   }
   return niveaux; // [ [racine], [2], [4], [8 feuilles] ]
 }
-function cheminDe(feuille){ // indices {niveau, i} du chemin feuille→racine (pour surligner P1)
-  const sel = [];
+function cheminDe(feuille){ // clés "niveau:index" du chemin feuille→racine (surligné pendant P1)
+  const sel = new Set();
   let i = feuille;
-  for (let niveau = 3; niveau >= 0; niveau--){ sel.push(niveau + ":" + i); i = Math.floor(i/2); }
-  return new Set(sel);
+  for (let niveau = 3; niveau >= 0; niveau--){ sel.add(niveau + ":" + i); i = Math.floor(i/2); }
+  return sel;
 }
 function dessinerArbre(surligne){
   const niveaux = merkle();
@@ -359,16 +403,51 @@ function dessinerArbre(surligne){
   $("obs-root").textContent = niveaux[0][0];
 }
 
-// --- Rendu du wallet et de l'observateur.
+// --- Rendu wallets, mempool, chaîne, observateur.
 function dessinerNotes(){
   const cont = $("wallet-notes"); cont.innerHTML = "";
-  etat.notes.filter(n => n.qui === "alice").forEach(n => {
+  etat.notes.filter(n => n.qui === "alice" && n.connue).forEach(n => {
     const d = document.createElement("div");
-    d.className = "note" + (n.depensee ? " spent" : " selectable") + (n.rendue ? " change" : "") + (n === noteChoisie ? " selected" : "");
+    d.className = "note"
+      + (n.depensee ? " spent" : n.enAttente ? " pending" : " selectable")
+      + (n.rendue ? " change" : "")
+      + (n === noteChoisie ? " selected" : "");
     d.innerHTML = '<span class="who">' + (n.rendue ? "monnaie rendue" : "note") + '</span><br><b>' + n.valeur + ' Ⓞ</b><div class="cm">cm ' + n.cm + '</div>';
-    if (!n.depensee) d.onclick = () => { noteChoisie = (noteChoisie === n ? null : n); dessinerNotes(); majEquilibre(); };
+    if (!n.depensee && !n.enAttente) d.onclick = () => { noteChoisie = (noteChoisie === n ? null : n); dessinerNotes(); majEquilibre(); };
     cont.appendChild(d);
   });
+}
+function dessinerBob(){
+  const cont = $("bob-notes"); cont.innerHTML = "";
+  etat.notes.filter(n => n.qui === "bob" && n.connue).forEach(n => {
+    const d = document.createElement("div");
+    d.className = "note fresh";
+    d.innerHTML = '<span class="who">note de Bob</span><br><b>' + n.valeur + ' Ⓞ</b><div class="cm">cm ' + n.cm + '</div>';
+    cont.appendChild(d);
+  });
+}
+function dessinerMempool(){
+  const cont = $("mempool"); cont.innerHTML = "";
+  if (!etat.mempool.length){ cont.innerHTML = '<div class="pool-empty">vide</div>'; return; }
+  etat.mempool.forEach(tx => {
+    const d = document.createElement("div"); d.className = "pooltx";
+    d.textContent = "tx " + tx.digest + " — 1 nullifier, 2 commitments, frais " + tx.frais;
+    cont.appendChild(d);
+  });
+}
+function dessinerChaine(neuf){
+  const cont = $("chain"); cont.innerHTML = "";
+  const g = document.createElement("div"); g.className = "bloc genese";
+  g.innerHTML = '<span class="bh">genèse</span>' + toyHash("obscura-jouet/genese").slice(0,8);
+  cont.appendChild(g);
+  etat.chaine.forEach((b, i) => {
+    const fl = document.createElement("span"); fl.className = "chainlink"; fl.textContent = "←"; cont.appendChild(fl);
+    const d = document.createElement("div");
+    d.className = "bloc" + (neuf && i === etat.chaine.length - 1 ? " fresh" : "");
+    d.innerHTML = '<span class="bh">bloc #' + b.h + ' · ' + b.nbTx + ' tx</span>' + b.id.slice(0,8);
+    cont.appendChild(d);
+  });
+  $("obs-h").textContent = etat.chaine.length;
 }
 function journal(msg){
   const j = $("journal");
@@ -378,19 +457,19 @@ function journal(msg){
 }
 function dessinerAlice(){
   const ul = $("obs-alice"); ul.innerHTML = "";
-  const mien = etat.notes.filter(n => n.qui === "alice");
+  const mien = etat.notes.filter(n => n.qui === "alice" && n.connue);
   if (!mien.length){ ul.innerHTML = '<li class="none">Rien encore…</li>'; return; }
-  const solde = mien.filter(n => !n.depensee).reduce((s,n) => s + n.valeur, 0);
+  const solde = mien.filter(n => !n.depensee && !n.enAttente).reduce((s,n) => s + n.valeur, 0);
   const li = t => { const e = document.createElement("li"); e.innerHTML = t; ul.appendChild(e); };
   li("solde dépensable : <strong>" + solde + " Ⓞ</strong>");
-  mien.forEach(n => li((n.rendue ? "monnaie rendue " : "note ") + n.valeur + " Ⓞ — feuille #" + n.feuille + (n.depensee ? " (dépensée)" : "")));
+  mien.forEach(n => li((n.rendue ? "monnaie rendue " : "note ") + n.valeur + " Ⓞ — feuille #" + n.feuille + (n.depensee ? " (dépensée)" : n.enAttente ? " (en attente)" : "")));
   if (etat.derniereDepense) li("→ payé <strong>" + etat.derniereDepense.montant + " Ⓞ</strong> à Bob (+" + etat.derniereDepense.frais + " de frais)");
 }
 function majCompteurs(){
   $("obs-cm-count").textContent = etat.feuilles.filter(Boolean).length;
   $("obs-nf-count").textContent = etat.nullifiers.size;
 }
-function deverrouiller(id){ const s = $(id); s.classList.remove("locked"); }
+function deverrouiller(id){ $(id).classList.remove("locked"); }
 function marquerFait(id){ $(id).classList.add("done"); }
 
 // --- Étape 1 : identité.
@@ -404,19 +483,22 @@ $("btn-gen").onclick = () => {
   $("v-nk").textContent = etat.nk;
   $("identity").hidden = false;
   $("btn-gen").textContent = "🎲 Régénérer (nouveau wallet)";
-  marquerFait("s1"); deverrouiller("s2"); deverrouiller("s5");
+  marquerFait("s1"); deverrouiller("s2"); deverrouiller("s7");
   dessinerArbre(); dessinerAlice();
 };
 
 // --- Étape 2 : frapper des notes.
 let idNote = 0;
-function frapper(valeur, qui, rendue){
+// `connue` : un wallet ne « voit » une sortie qu'après l'avoir déchiffrée
+// (à la synchronisation) — sauf les notes de départ, données pour jouer.
+function frapper(valeur, qui, opts){
+  const { rendue = false, connue = true } = opts || {};
   const libre = etat.feuilles.findIndex(f => f === null);
   if (libre < 0){ alert("Arbre-jouet plein (8 feuilles) — recommence l'atelier !"); return null; }
   const rho = alea(), r = alea();
   const owner = qui === "alice" ? etat.owner : etat.bobOwner;
   const cm = toyHash("obscura-jouet/note", String(valeur), owner, rho, r);
-  const n = { id:++idNote, valeur, rho, r, cm, feuille:libre, depensee:false, qui, rendue:!!rendue };
+  const n = { id:++idNote, valeur, rho, r, cm, feuille:libre, depensee:false, enAttente:false, qui, rendue, connue };
   etat.feuilles[libre] = cm;
   etat.notes.push(n);
   journal("+ cm " + cm + "  (feuille #" + libre + ")");
@@ -426,14 +508,12 @@ document.querySelectorAll("[data-mint]").forEach(b => b.onclick = async () => {
   const n = frapper(parseInt(b.dataset.mint, 10), "alice");
   if (!n) return;
   dessinerNotes(); dessinerArbre(); dessinerAlice(); majCompteurs();
-  // petit flash sur la feuille insérée
-  const rows = $("tree").children;
-  const cel = rows[3].children[n.feuille];
+  const cel = $("tree").children[3].children[n.feuille];
   cel.classList.add("flash"); await attendre(700); cel.classList.remove("flash");
   marquerFait("s2"); deverrouiller("s3");
 });
 
-// --- Étape 3 : dépense prouvée.
+// --- Étape 3 : payer (preuve → mempool).
 let noteChoisie = null;
 function majEquilibre(){
   const bal = $("balance");
@@ -466,11 +546,12 @@ async function passe(p, ok){
   return ok;
 }
 
-async function prouverEtEnvoyer(note, montant, frais, rejouer){
+// Vérifie P1–P7 en animation, puis le nullifier. En cas de succès la tx
+// va au MEMPOOL — l'état public ne change qu'au scellement (étape 4).
+async function prouverEtSoumettre(note, montant, frais, rejouer){
   etat.occupe = true; $("btn-prove").disabled = true; $("btn-double").disabled = true;
   razChecklist();
-  // P1 : surligner le chemin de Merkle de la feuille dépensée
-  dessinerArbre(cheminDe(note.feuille));
+  dessinerArbre(cheminDe(note.feuille));   // P1 : le chemin s'illumine
   await passe("P1", true);
   dessinerArbre();
   await passe("P2", true);
@@ -480,28 +561,25 @@ async function prouverEtEnvoyer(note, montant, frais, rejouer){
   await passe("P5", true);
   await passe("P6", true);
   await passe("P7", true);
-  const dejaVu = etat.nullifiers.has(nf);
+  const dejaVu = etat.nullifiers.has(nf) || etat.mempool.some(t => t.nf === nf);
   await passe("NF", !dejaVu);
   const verdict = rejouer ? $("verdict2") : $("verdict");
   if (dejaVu){
     verdict.className = "verdict ko show";
-    verdict.textContent = "✗ REJET — nullifier " + nf + " déjà publié. La preuve était pourtant valide : c'est le tampon anti-double-dépense qui protège le réseau.";
+    verdict.textContent = "✗ REJET — nullifier " + nf + " déjà vu. La preuve était pourtant valide : c'est le tampon anti-double-dépense qui protège le réseau.";
     journal("✗ tx refusée : nf " + nf + " déjà vu");
   } else {
-    etat.nullifiers.add(nf);
-    note.depensee = true;
-    const rendu = note.valeur - montant - frais;
-    journal("+ nf " + nf + "  (quelle feuille ? mystère)");
-    frapper(montant, "bob");
-    if (rendu > 0) frapper(rendu, "alice", true);
-    journal("· frais " + frais + " — tx acceptée ✓");
+    const digest = toyHash("obscura-jouet/tx", nf, String(montant), String(frais), alea());
+    etat.mempool.push({ digest, note, montant, frais, nf });
+    note.enAttente = true;
     etat.derniereDepense = { note, montant, frais };
+    journal("+ tx " + digest + " admise au mempool (rien d'appliqué)");
     verdict.className = "verdict ok show";
-    verdict.textContent = "✓ Transaction acceptée — 1 preuve (~68 Kio dans le vrai prototype), 1 nullifier, 2 commitments. Personne ne sait laquelle des feuilles vient d'être dépensée.";
+    verdict.textContent = "✓ Preuve vérifiée (~4 ms pour ~68 Kio dans le vrai prototype) — transaction admise au MEMPOOL. L'arbre n'a pas bougé : il faut un bloc pour rendre cela définitif.";
     noteChoisie = null;
-    marquerFait("s3"); deverrouiller("s4"); marquerFait("s5");
+    marquerFait("s3"); deverrouiller("s4");
   }
-  dessinerNotes(); dessinerArbre(); dessinerAlice(); majCompteurs();
+  dessinerNotes(); dessinerMempool(); dessinerAlice(); majCompteurs();
   etat.occupe = false; $("btn-double").disabled = false; majEquilibre();
 }
 
@@ -509,22 +587,91 @@ $("btn-prove").onclick = () => {
   if (!noteChoisie) return;
   const montant = parseInt($("in-amount").value || "0", 10);
   const frais = parseInt($("in-fee").value || "0", 10);
-  prouverEtEnvoyer(noteChoisie, montant, frais, false);
+  prouverEtSoumettre(noteChoisie, montant, frais, false);
 };
 
-// --- Étape 4 : double dépense.
+// --- Étape 4 : sceller un bloc.
+$("btn-seal").onclick = async () => {
+  if (!etat.mempool.length || etat.occupe) return;
+  etat.occupe = true; $("btn-seal").disabled = true;
+  const v = $("verdict-seal");
+  v.className = "verdict ok show";
+  v.textContent = "⛏ tri des transactions par digest… chaînage au parent… application atomique…";
+  await attendre(900);
+  const txs = etat.mempool.splice(0).sort((a,b) => a.digest < b.digest ? -1 : 1);
+  const nouvellesFeuilles = [];
+  txs.forEach(tx => {
+    etat.nullifiers.add(tx.nf);
+    tx.note.depensee = true; tx.note.enAttente = false;
+    journal("+ nf " + tx.nf + "  (quelle feuille ? mystère)");
+    const nb = frapper(tx.montant, "bob", { connue:false });
+    if (nb) nouvellesFeuilles.push(nb.feuille);
+    const rendu = tx.note.valeur - tx.montant - tx.frais;
+    if (rendu > 0){
+      const nr = frapper(rendu, "alice", { rendue:true, connue:false });
+      if (nr) nouvellesFeuilles.push(nr.feuille);
+    }
+  });
+  const parent = etat.chaine.length ? etat.chaine[etat.chaine.length-1].id : toyHash("obscura-jouet/genese");
+  const h = etat.chaine.length + 1;
+  const id = toyHash("obscura-jouet/bloc", String(h), parent, ...txs.map(t => t.digest));
+  etat.chaine.push({ h, id, parent, nbTx: txs.length });
+  journal("⛏ bloc #" + h + " scellé : " + id + " (parent " + parent.slice(0,8) + "…)");
+  dessinerNotes(); dessinerMempool(); dessinerArbre(); dessinerChaine(true); dessinerAlice(); majCompteurs();
+  for (const f of nouvellesFeuilles){
+    const cel = $("tree").children[3].children[f];
+    cel.classList.add("flash");
+  }
+  await attendre(900);
+  dessinerArbre();
+  v.textContent = "✓ Bloc #" + h + " scellé et appliqué ATOMIQUEMENT : nullifier publié, sorties insérées, nouvelle racine. Deux nœuds honnêtes scellant ce mempool produisent EXACTEMENT ce bloc — ils convergent.";
+  marquerFait("s4"); deverrouiller("s5"); deverrouiller("s6");
+  etat.occupe = false; $("btn-seal").disabled = false;
+};
+
+// --- Étape 5 : double dépense.
 $("btn-double").onclick = () => {
-  if (!etat.derniereDepense){ return; }
+  if (!etat.derniereDepense || etat.occupe) return;
   const { note, montant, frais } = etat.derniereDepense;
-  document.getElementById("s3").scrollIntoView({ behavior:"smooth", block:"center" });
-  prouverEtEnvoyer(note, montant, frais, true).then(() => marquerFait("s4"));
+  $("s3").scrollIntoView({ behavior:"smooth", block:"center" });
+  prouverEtSoumettre(note, montant, frais, true).then(() => marquerFait("s5"));
+};
+
+// --- Étape 6 : synchronisation (Bob reçoit, Alice retrouve sa monnaie).
+$("btn-sync").onclick = async () => {
+  if (etat.occupe) return;
+  etat.occupe = true; $("btn-sync").disabled = true;
+  const log = $("synclog"); log.className = "synclog show"; log.innerHTML = "";
+  const ligne = async (t, ms) => { const d = document.createElement("div"); d.textContent = t; log.appendChild(d); await attendre(ms ?? 550); };
+  const h = etat.chaine.length;
+  await ligne("→ demande : « je suis à la hauteur 0, donnez-moi le bloc suivant » (et RIEN d'autre)");
+  for (let b = 1; b <= h; b++){
+    await ligne("← bloc #" + b + " : sorties dans l'ordre + racine de fin de bloc");
+    await ligne("  racine vérifiée contre l'arbre rejoué ✓ (sinon : tout est annulé, rien d'à moitié appliqué)");
+  }
+  const aScanner = etat.notes.filter(n => !n.connue);
+  await ligne("  scan : une tentative de déchiffrement par sortie…", 700);
+  let bobRecu = 0, aliceRecu = 0;
+  aScanner.forEach(n => {
+    n.connue = true;
+    if (n.qui === "bob") bobRecu += n.valeur; else aliceRecu += n.valeur;
+  });
+  await ligne("  ✓ Bob déchiffre 1 sortie : " + bobRecu + " Ⓞ — les autres enveloppes restent muettes pour lui");
+  if (aliceRecu > 0) await ligne("  ✓ Alice déchiffre 1 sortie : sa monnaie rendue de " + aliceRecu + " Ⓞ");
+  $("bob-panel").hidden = false;
+  dessinerBob(); dessinerNotes(); dessinerAlice();
+  const v = $("verdict-sync");
+  v.className = "verdict ok show";
+  v.textContent = "✓ Le cycle est fermé : payer → sceller → RECEVOIR. La monnaie rendue est de nouveau dépensable — retourne à l'étape 3 pour la faire circuler !";
+  marquerFait("s6"); marquerFait("s7");
+  etat.occupe = false; $("btn-sync").disabled = false;
 };
 
 // --- Reset.
 $("btn-reset").onclick = () => location.reload();
 
 // Premier rendu (arbre vide, avant même l'étape 1 — donne envie).
-dessinerArbre();
+dessinerArbre(); dessinerChaine(false);
 </script>
 
 </body>

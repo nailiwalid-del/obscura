@@ -4,7 +4,7 @@
 
 | Adversaire | Capacités | Contre-mesure |
 |---|---|---|
-| Observateur passif du réseau | Capture tout le trafic, analyse de métadonnées | Chiffrement hybride PQ de tous les liens + (phase 4) routage Dandelion++/mixnet |
+| Observateur passif du réseau | Capture tout le trafic, analyse de métadonnées | Chiffrement hybride PQ de tous les liens + routage **Dandelion++** (`net::dandelion`, livré). Mixnet : non fait |
 | Attaquant actif (MitM) | Injection, rejeu, modification | AEAD authentifié, transcript binding dans le KEM, signatures hybrides |
 | Analyste de chaîne | Lit tout le ledger public | Notes engagées, nullifiers non-liables, montants/destinataires jamais en clair |
 | Nœud malveillant / Sybil | Nœuds espions | Rien de sensible en clair ; la confidentialité du CONTENU ne dépend pas de l'honnêteté des nœuds |
@@ -27,10 +27,10 @@ Règle : la combinaison ne doit jamais être PIRE que la meilleure primitive seu
 
 ## Garanties visées
 
-1. **Confidentialité des montants** : jamais en clair on-chain (phase 3 : prouvés par STARK).
+1. **Confidentialité des montants** : jamais en clair on-chain — **prouvés par STARK (phase 3 livrée)**.
 2. **Non-liabilité expéditeur/destinataire** : adresses jamais publiées, notes à usage unique.
 3. **Anti double-dépense** : nullifiers déterministes mais non-liables sans la clé.
-4. **Confidentialité des métadonnées réseau** : phase 4 (Dandelion++ puis mixnet).
+4. **Confidentialité des métadonnées réseau** : **Dandelion++ livré** (phase 4) ; mixnet non fait.
 
 ⚠️ **Nuance importante sur le Sybil.** La ligne « la confidentialité ne dépend pas de
 l'honnêteté des nœuds » vaut pour le CONTENU (notes engagées, montants, destinataires
@@ -49,14 +49,16 @@ reste capable).
 - Canaux auxiliaires des implémentations (prototype).
 - Économie/gouvernance du consensus (PoS simplifié).
 
-## Limitations du mode transparent (dev) — v0.2
+## Le mode transparent (dev) — historique, remplacé
 
-Le mode transparent actuel N'EST PAS le protocole : c'est un échafaudage.
-Il ne peut pas vérifier la liaison nullifier↔note, l'autorité de dépense réelle,
-ni l'équilibre des montants, et il révèle commitment dépensé, chemin de Merkle et
-clé publique (dépenses reliables). La règle de consensus réelle est le statement
-STARK (docs/STARK_STATEMENT.md) — P1 à P7. Aucun déploiement, même testnet public,
-avant la phase 3.
+Le mode transparent était un échafaudage : il ne vérifiait ni la liaison nullifier↔note,
+ni l'autorité de dépense, ni l'équilibre, et révélait commitment, chemin de Merkle et
+clé publique (dépenses reliables). **Il n'est plus la voie de consensus.** La règle de
+consensus est le statement STARK (docs/STARK_STATEMENT.md, P1–P7), appliquée par
+`ProvedLedgerState::appliquer_bloc` ; le witness-hiding (phase 3z) et la variabilité de
+forme (3z-c2) sont livrés. Ce qui interdit encore un déploiement public n'est plus la
+preuve mais la **gouvernance** : aucune élection de producteur (voir « Personne n'a
+autorité pour sceller »). **Testnet local uniquement.**
 
 ## Garanties additionnelles exigées (v0.2)
 

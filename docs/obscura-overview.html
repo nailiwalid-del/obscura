@@ -193,8 +193,8 @@
     <p class="lede">Un prototype qui vise deux objectifs : payer sans être surveillé, avec une sécurité qui tiendrait face à un ordinateur quantique. Ce document explique le projet pour tous, puis en détaille l'architecture — en distinguant soigneusement ce qui est <strong>déjà prouvé</strong> de ce qui reste <strong>à venir</strong>.</p>
     <div class="stat-row">
       <div class="stat"><b>7</b><span>crates Rust</span></div>
-      <div class="stat"><b>29&nbsp;518</b><span>lignes de code</span></div>
-      <div class="stat"><b>436</b><span>tests</span></div>
+      <div class="stat"><b>31&nbsp;147</b><span>lignes de code</span></div>
+      <div class="stat"><b>463</b><span>tests</span></div>
       <div class="stat"><b>P1–P7</b><span>prouvés en circuit</span></div>
       <div class="stat"><b>≈68<small> Kio</small></b><span>preuve d'une tx</span></div>
     </div>
@@ -362,11 +362,11 @@
       <tbody>
         <tr><td><code>crypto</code></td><td>Primitives à défense en profondeur : hachage dual, échange de clés hybride, signatures hybrides, chiffrement en cascade.</td><td>790</td></tr>
         <tr><td><code>proved-hash</code></td><td>Le monde « prouvé » : corps de Goldilocks (<code>Felt</code>), hachage Rescue-Prime, arbre de Merkle Rescue incrémental + <em>frontier</em> append-only à mémoire bornée. Sans prouveur.</td><td>1&nbsp;470</td></tr>
-        <tr><td><code>circuit</code></td><td>Le cœur : les circuits AIR pour winterfell, le monolithe segmenté witness-hiding à FORME VARIABLE (m-in/n-out ≤ 4, 3z-c2), et <code>ProvedTx</code> v4.</td><td>10&nbsp;691</td></tr>
-        <tr><td><code>ledger</code></td><td>Notes, arbre des commitments, nullifiers, application des transactions prouvées, enveloppes chiffrées (scan), mempool anti-DoS, <strong>blocs</strong> (lot ordonné chaîné, émission en genèse seule, <code>appliquer_bloc</code> atomique), historique des sorties pour la synchronisation, persistance disque.</td><td>4&nbsp;726</td></tr>
+        <tr><td><code>circuit</code></td><td>Le cœur : les circuits AIR pour winterfell, le monolithe segmenté witness-hiding à FORME VARIABLE (m-in/n-out ≤ 4, 3z-c2), et <code>ProvedTx</code> v4.</td><td>11&nbsp;917</td></tr>
+        <tr><td><code>ledger</code></td><td>Notes, arbre des commitments, nullifiers, application des transactions prouvées, enveloppes chiffrées (scan), mempool anti-DoS, <strong>blocs</strong> (lot ordonné chaîné, émission en genèse seule, <code>appliquer_bloc</code> atomique), historique des sorties pour la synchronisation, persistance disque.</td><td>5&nbsp;250</td></tr>
         <tr><td><code>net</code></td><td>Transport chiffré post-quantique (handshake hybride 3 passes, forward secrecy), cadrage anti-DoS, table de pairs anti-eclipse, Dandelion++.</td><td>1&nbsp;979</td></tr>
-        <tr><td><code>wallet</code></td><td>Détention des notes, scan des sorties chiffrées, construction de transactions prouvées (arbre de Merkle propre au wallet), encodage d'adresse à somme de contrôle, rejeu des blocs (<code>synchro</code> : ordre structurel, idempotence, ancre en frontière de bloc), fichier de wallet chiffré… non : <em>en clair</em>, aux permissions restreintes.</td><td>2&nbsp;272</td></tr>
-        <tr><td><code>node</code></td><td>Le câblage : protocole applicatif (annonces par digest), orchestration en fonction pure, runtime sockets, scellement de blocs, service d'historique étranglé, rattrapage de bloc, persistance, binaires <code>obscura-node</code> / <code>obscura-demo</code> / <code>obscura-wallet</code>.</td><td>7&nbsp;109</td></tr>
+        <tr><td><code>wallet</code></td><td>Détention des notes, scan des sorties chiffrées, construction de transactions prouvées (arbre de Merkle propre au wallet), encodage d'adresse à somme de contrôle, rejeu des blocs (<code>synchro</code> : ordre structurel, idempotence, ancre en frontière de bloc), fichier de wallet chiffré… non : <em>en clair</em>, aux permissions restreintes.</td><td>2&nbsp;417</td></tr>
+        <tr><td><code>node</code></td><td>Le câblage : protocole applicatif (annonces par digest), orchestration en fonction pure, runtime sockets, scellement de blocs, service d'historique étranglé, rattrapage de bloc, persistance, binaires <code>obscura-node</code> / <code>obscura-demo</code> / <code>obscura-wallet</code>.</td><td>7&nbsp;324</td></tr>
       </tbody>
     </table>
   </div>

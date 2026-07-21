@@ -49,7 +49,27 @@ précédente n'est pas faite (pédagogie par progression).
 - Pas de simulation réseau/Dandelion (une phrase de renvoi vers l'overview).
 - Arité 1-in/2-out pour rester lisible (le vrai circuit est 2-in/2-out).
 
-## 4. Intégration
+## 4. Extension (même jour) — finalité et synchronisation
+
+Le protocole ayant gagné la finalité (blocs scellés) et la synchronisation
+wallet ↔ nœud (commit dfa541a), l'atelier passe de 5 à **7 étapes** pour jouer le
+MÊME cycle que `crates/node/tests/cycle_wallet.rs` :
+
+1–2. inchangées (identité, réception) ;
+3. la dépense prouvée va au **MEMPOOL** — l'arbre ne bouge pas, la note passe
+   « en attente de bloc » (l'ancien atelier appliquait instantanément, ce qui
+   contredisait désormais le protocole) ;
+4. **Sceller un bloc** : tri par digest (deux nœuds honnêtes → même bloc),
+   chaînage au parent, application atomique — nullifier publié, sorties
+   insérées, chaîne de blocs affichée. Moment pédagogique clé : Alice ne voit
+   PAS encore sa monnaie rendue (`connue:false`) ;
+5. double dépense (rejet par nullifier, inchangé sur le fond) ;
+6. **Synchroniser** : journal animé du rejeu (« position et rien d'autre »,
+   racine de fin de bloc vérifiée, un essai de déchiffrement par sortie) —
+   Bob découvre sa note, Alice sa monnaie rendue, le cycle est fermé ;
+7. observateur (ajout de la hauteur de chaîne).
+
+## 5. Intégration
 
 - Lien croisé : un encart « 🕹️ Envie de manipuler ? » dans la partie I de
   `obscura-overview.html` (après le cycle de vie), pointant vers l'atelier ;
