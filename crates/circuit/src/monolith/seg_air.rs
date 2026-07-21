@@ -293,7 +293,8 @@ pub(crate) struct PeriodicIdx {
     pub s0_out: [usize; 2],
     /// Ligne `RANGE_BITS` du j-ème segment de sortie : consommation VACC.
     pub vacc_out: [usize; 2],
-    /// Nombre total de colonnes périodiques.
+    /// Nombre total de colonnes périodiques (vérifié par les tests d'inventaire).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub total: usize,
 }
 

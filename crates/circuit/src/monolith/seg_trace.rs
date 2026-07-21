@@ -78,6 +78,10 @@ fn set_carrier_scalar(rows: &mut [[BaseElement; WIDTH]], col: usize, v: u64) {
 /// altèrent le commitment ou la feuille changent la racine, ce qui ferait mordre
 /// la liaison `root_in` au lieu de la liaison visée — il faut alors rebâtir
 /// l'arbre pour que les deux entrées restent sur la MÊME racine. Reste à porter.
+// Machinerie de forge : utilisée UNIQUEMENT par les tests de soundness, mais le
+// type doit exister hors tests car il paramètre `build_seg_trace_interne` (chemin
+// de code UNIQUE pour l'honnête et le forgé — cf. doc ci-dessus).
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub(crate) enum SegForge {
     /// Trace honnête.
@@ -145,6 +149,7 @@ pub(crate) enum SegForge {
     PaddingCommitment(u64),
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 impl SegForge {
     /// `true` si la forge change une feuille injectée dans l'arbre : il faut alors
     /// rebâtir l'arbre pour que les deux entrées gardent la MÊME racine.
@@ -238,6 +243,7 @@ fn lignes_commitment(
 /// Commitment tel qu'il apparaîtra RÉELLEMENT dans la trace pour l'entrée `i`
 /// (forges comprises) — y compris la forge de padding, dont le digest ne peut pas
 /// se recalculer via `rescue::note_commitment`.
+#[cfg_attr(not(test), allow(dead_code))]
 fn commitment_injecte(w: &MonolithWitness, i: usize, forge: SegForge) -> Digest {
     let note = &w.inputs[i].note;
     let owner = forge.owner_commit(i, note.owner);
@@ -249,6 +255,7 @@ fn commitment_injecte(w: &MonolithWitness, i: usize, forge: SegForge) -> Digest 
 
 /// Feuille qui sera réellement injectée dans l'arbre pour l'entrée `i`, forges
 /// comprises. Utilisé par la pré-passe de reconstruction d'arbre.
+#[cfg_attr(not(test), allow(dead_code))]
 fn feuille_injectee(w: &MonolithWitness, i: usize, forge: SegForge) -> Digest {
     let cm = commitment_injecte(w, i, forge);
     let cm_leaf = forge.cm_feuille(i, cm);
@@ -264,6 +271,7 @@ pub(crate) fn build_seg_trace(w: &MonolithWitness) -> TraceTable<BaseElement> {
 
 /// Trace segmentée FORGÉE (tests de soundness) : aléa de production, mais une
 /// liaison sabotée.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn build_seg_trace_forge(
     w: &MonolithWitness,
     forge: SegForge,
