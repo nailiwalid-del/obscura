@@ -119,6 +119,9 @@ avant sophistication crypto**. Reste :
   décodage → admission (5 filtres O(1) puis STARK) → mempool.
   `Noeud::soumettre` = point d'entrée d'une transaction LOCALE (wallet) : part en
   TIGE Dandelion++, pas en diffusion — c'est là que l'origine est protégée.
+  **Binaires** : `obscura-node` (nœud autonome) et `obscura-demo` (démonstration
+  locale : wallet → preuve → handshake PQ → socket → mempool, chaque étape
+  annoncée). ⚠️ Aucune persistance entre lancements — à observer, pas à utiliser.
 
 **Phase 4 : les 4 briques sont livrées** (key-privacy, transport PQ + cadrage,
 pairs anti-eclipse, mempool ordonné par coût, Dandelion++). Reste à les CÂBLER

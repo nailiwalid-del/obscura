@@ -135,4 +135,7 @@ attendant le circuit. Fonctions suffixées `_transparent` dans le code.
    protocole applicatif, orchestration en fonction pure, runtime sockets+threads).
    Testnet local validé : une transaction PROUVÉE se propage entre nœuds réels sur
    de vraies sockets, y compris à travers un intermédiaire. Restent le **wallet CLI**
-   et un binaire de nœud autonome.
+   et un binaire de nœud autonome. **Binaires livrés** : `obscura-node` (nœud
+   autonome : écoute, connexion aux pairs, boucle d'événements, rotation d'époque
+   Dandelion++) et `obscura-demo` (démonstration locale de bout en bout).
+   ⚠️ Aucune PERSISTANCE : identité, état et mempool sont neufs à chaque lancement.

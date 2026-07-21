@@ -493,7 +493,9 @@ dependencies = [
  "ledger",
  "net",
  "proved-hash",
+ "rand_core 0.6.4",
  "thiserror",
+ "wallet",
 ]
 
 [[package]]

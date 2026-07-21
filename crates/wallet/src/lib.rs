@@ -143,6 +143,16 @@ impl Wallet {
         self.arbre.root()
     }
 
+    /// Crédite directement une note possédée (émission/faucet du prototype).
+    ///
+    /// Réservé aux démonstrations et à l'amorçage : en fonctionnement normal, les
+    /// notes arrivent par `scanner`, qui vérifie qu'elles nous sont bien destinées.
+    pub fn crediter_pour_demo(&mut self, note: SpendNote, commitment: &Digest) -> u64 {
+        let index = self.observer(commitment);
+        self.notes.push(NoteDetenue { note, index });
+        index
+    }
+
     /// Tente de reconnaître une sortie comme nous étant destinée, et la retient.
     /// Retourne `true` si la note nous appartient.
     pub fn scanner(&mut self, commitment: &Digest, enc: &EncNote, index: u64) -> bool {

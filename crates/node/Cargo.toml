@@ -10,4 +10,6 @@ crypto = { path = "../crypto" }
 ledger = { path = "../ledger" }
 net = { path = "../net" }
 proved-hash = { path = "../proved-hash" }
+wallet = { path = "../wallet" }
 thiserror.workspace = true
+rand_core.workspace = true
