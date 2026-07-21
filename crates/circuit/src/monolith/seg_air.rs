@@ -991,8 +991,8 @@ pub(crate) fn prove_seg_monolith(w: &MonolithWitness) -> (MonolithPublicInputs, 
         // La racine est lue sur la PORTEUSE (constante) — les liaisons `root_in`
         // garantissent qu'elle égale la racine repliée de chaque entrée.
         root: read4(&trace, ROOT_C, 0),
-        nullifiers: [nf(0), nf(1)],
-        output_commitments: [oc(0), oc(1)],
+        nullifiers: vec![nf(0), nf(1)],
+        output_commitments: vec![oc(0), oc(1)],
         fee: w.fee,
         depth,
     };
@@ -1189,11 +1189,11 @@ mod tests {
         // Publics relus de la trace forgée (self-consistants).
         let pi = MonolithPublicInputs {
             root: read4(&trace, ROOT_C, 0),
-            nullifiers: [
+            nullifiers: vec![
                 read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(1, depth) + NF_ROWS_END - 1),
                 read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(2, depth) + NF_ROWS_END - 1),
             ],
-            output_commitments: [
+            output_commitments: vec![
                 read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(3, depth) + CM_ROWS_END - 1),
                 read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(4, depth) + CM_ROWS_END - 1),
             ],
@@ -1305,11 +1305,11 @@ mod tests {
         let trace = build_seg_trace_forge(w, forge);
         let pi = MonolithPublicInputs {
             root: read4(&trace, ROOT_C, 0),
-            nullifiers: [
+            nullifiers: vec![
                 read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(1, depth) + NF_ROWS_END - 1),
                 read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(2, depth) + NF_ROWS_END - 1),
             ],
-            output_commitments: [
+            output_commitments: vec![
                 read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(3, depth) + CM_ROWS_END - 1),
                 read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(4, depth) + CM_ROWS_END - 1),
             ],
@@ -1501,11 +1501,11 @@ mod tests {
         let trace = build_seg_trace_seeded(w, &mut StdRng::seed_from_u64(seed));
         let pi = MonolithPublicInputs {
             root: read4(&trace, ROOT_C, 0),
-            nullifiers: [
+            nullifiers: vec![
                 read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(1, depth) + NF_ROWS_END - 1),
                 read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(2, depth) + NF_ROWS_END - 1),
             ],
-            output_commitments: [
+            output_commitments: vec![
                 read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(3, depth) + CM_ROWS_END - 1),
                 read4(&trace, SEG_SPONGE_OFF + RATE_START, seg_start(4, depth) + CM_ROWS_END - 1),
             ],

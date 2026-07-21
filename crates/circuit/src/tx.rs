@@ -246,11 +246,11 @@ pub fn verify_tx(root: &Digest, depth: usize, tx: &ProvedTx) -> bool {
     }
     let pi = MonolithPublicInputs {
         root: digest_to_felts(root),
-        nullifiers: [
+        nullifiers: vec![
             digest_to_felts(&tx.nullifiers[0]),
             digest_to_felts(&tx.nullifiers[1]),
         ],
-        output_commitments: [
+        output_commitments: vec![
             digest_to_felts(&tx.output_commitments[0]),
             digest_to_felts(&tx.output_commitments[1]),
         ],
@@ -590,8 +590,8 @@ mod tests {
         // La preuve STARK est valide (S ≡ fee mod p) : le trou est bien réel...
         let pi = MonolithPublicInputs {
             root: digest_to_felts(&root),
-            nullifiers: [digest_to_felts(&tx.nullifiers[0]), digest_to_felts(&tx.nullifiers[1])],
-            output_commitments: [
+            nullifiers: vec![digest_to_felts(&tx.nullifiers[0]), digest_to_felts(&tx.nullifiers[1])],
+            output_commitments: vec![
                 digest_to_felts(&tx.output_commitments[0]),
                 digest_to_felts(&tx.output_commitments[1]),
             ],

@@ -91,22 +91,48 @@ const BAL_VACC: usize = 2;
 // ENTRÉES PUBLIQUES
 // ================================================================================================
 
-/// Publics du monolithe : racine partagée, les 2 nullifiers, les 2 commitments de
-/// sortie, les frais. `depth` (profondeur des chemins de Merkle) est engagé pour que
-/// l'AIR connaisse la ligne de racine et le nombre de blocs assertés (comme
-/// `MerklePathPublicInputs.depth`). Aucun témoin (owner/nk/valeurs/rho/cm/secret) ici.
+/// Publics du monolithe : racine partagée, un nullifier PAR ENTRÉE, un commitment
+/// PAR SORTIE, les frais. `depth` (profondeur des chemins de Merkle) est engagé pour
+/// que l'AIR connaisse la ligne de racine et le nombre de blocs assertés. Aucun
+/// témoin (owner/nk/valeurs/rho/cm/secret) ici.
+///
+/// # La FORME (m, n) est portée par les LONGUEURS (3z-c2)
+///
+/// `nullifiers.len()` = m, `output_commitments.len()` = n : c'est ce que le
+/// statement prévoyait (« nullifiers[] : un par note dépensée »), et c'est CE QUI
+/// EST HACHÉ par Fiat-Shamir — `to_elements` préfixe les deux comptes, sinon deux
+/// découpages différents des mêmes digests produiraient la même graine de
+/// challenge, et une preuve pour (m=1, n=3) pourrait se rejouer comme (m=2, n=2).
+/// L'AIR côte-à-côte reste figée 2/2 (oracle de parité) ; l'AIR segmentée dérive
+/// son schedule de ces longueurs (C2-T3).
 #[derive(Clone)]
 pub(crate) struct MonolithPublicInputs {
     pub root: [BaseElement; DIGEST_FELTS],
-    pub nullifiers: [[BaseElement; DIGEST_FELTS]; 2],
-    pub output_commitments: [[BaseElement; DIGEST_FELTS]; 2],
+    pub nullifiers: Vec<[BaseElement; DIGEST_FELTS]>,
+    pub output_commitments: Vec<[BaseElement; DIGEST_FELTS]>,
     pub fee: u64,
     pub depth: usize,
 }
 
+impl MonolithPublicInputs {
+    /// Nombre d'entrées de la forme déclarée.
+    pub(crate) fn m(&self) -> usize {
+        self.nullifiers.len()
+    }
+
+    /// Nombre de sorties de la forme déclarée.
+    pub(crate) fn n(&self) -> usize {
+        self.output_commitments.len()
+    }
+}
+
 impl winterfell::math::ToElements<BaseElement> for MonolithPublicInputs {
     fn to_elements(&self) -> Vec<BaseElement> {
-        let mut v = Vec::with_capacity(5 * DIGEST_FELTS + 2);
+        let mut v =
+            Vec::with_capacity((1 + self.m() + self.n()) * DIGEST_FELTS + 4);
+        // Les COMPTES d'abord : la forme fait partie de ce que la preuve engage.
+        v.push(BaseElement::new(self.m() as u64));
+        v.push(BaseElement::new(self.n() as u64));
         v.extend_from_slice(&self.root);
         for nf in &self.nullifiers {
             v.extend_from_slice(nf);
@@ -836,11 +862,11 @@ pub(crate) fn prove_monolith(w: &MonolithWitness) -> (MonolithPublicInputs, Vali
     let last_m = 16 * depth - 1;
     let pi = MonolithPublicInputs {
         root: read4(&trace, M0_OFF + RATE_START, last_m),
-        nullifiers: [
+        nullifiers: vec![
             read4(&trace, U0_OFF + RATE_START, NF_ROWS_END - 1),
             read4(&trace, U1_OFF + RATE_START, NF_ROWS_END - 1),
         ],
-        output_commitments: [
+        output_commitments: vec![
             read4(&trace, O0_OFF + RATE_START, CM_ROWS_END - 1),
             read4(&trace, O1_OFF + RATE_START, CM_ROWS_END - 1),
         ],
@@ -902,11 +928,11 @@ mod tests {
         let last_m = 16 * depth - 1;
         let pi = MonolithPublicInputs {
             root: read4(&trace, M0_OFF + RATE_START, last_m),
-            nullifiers: [
+            nullifiers: vec![
                 read4(&trace, U0_OFF + RATE_START, NF_ROWS_END - 1),
                 read4(&trace, U1_OFF + RATE_START, NF_ROWS_END - 1),
             ],
-            output_commitments: [
+            output_commitments: vec![
                 read4(&trace, O0_OFF + RATE_START, CM_ROWS_END - 1),
                 read4(&trace, O1_OFF + RATE_START, CM_ROWS_END - 1),
             ],
@@ -934,11 +960,11 @@ mod tests {
         let last_m = 16 * depth - 1;
         let pi = MonolithPublicInputs {
             root: read4(&trace, M0_OFF + RATE_START, last_m),
-            nullifiers: [
+            nullifiers: vec![
                 read4(&trace, U0_OFF + RATE_START, NF_ROWS_END - 1),
                 read4(&trace, U1_OFF + RATE_START, NF_ROWS_END - 1),
             ],
-            output_commitments: [
+            output_commitments: vec![
                 read4(&trace, O0_OFF + RATE_START, CM_ROWS_END - 1),
                 read4(&trace, O1_OFF + RATE_START, CM_ROWS_END - 1),
             ],
