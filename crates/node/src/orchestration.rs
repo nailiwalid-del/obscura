@@ -458,11 +458,10 @@ impl Noeud {
     /// L'archive ne contient que des blocs que NOUS avons appliqués : servir depuis
     /// elle ne peut pas propager une chaîne que nous ne suivons pas.
     ///
-    /// ⚠️ Servir un bloc de ~34 Kio à ~34 Mio pour une demande de 9 octets est une
-    /// asymétrie d'AMPLIFICATION. Elle est bornée par pair (le seul contrôle de
-    /// débit aujourd'hui est le score et l'échéance d'écriture) ; l'étranglement par
-    /// `GroupeReseau` exigé par docs/THREAT_MODEL.md pour le service d'historique
-    /// n'est PAS encore écrit ici. Limite consignée, pas fermée.
+    /// ⚠️ Servir un bloc de ~34 Kio à ~1 Mio pour une demande de 9 octets est une
+    /// asymétrie d'AMPLIFICATION. Elle est ÉTRANGLÉE par le même seau à jetons,
+    /// indexé sur `GroupeReseau`, que le service d'historique — voir le corps de la
+    /// fonction et docs/THREAT_MODEL.md.
     fn sur_demande_bloc(&mut self, de: PeerId, hauteur: u64, maintenant_ms: u64) -> Vec<Action> {
         // MÊME étranglement que le service d'historique, même seau : une DemandeBloc
         // de 9 octets fait renvoyer jusqu'à ~1 Mio — c'était la seule amplification
@@ -825,9 +824,12 @@ mod tests {
     }
 
     /// INVARIANT DE DIFFUSION : un bloc que NOUS scellons doit tenir dans un cadre
-    /// réseau, tel qu'il partira sur le fil (`Message::Bloc`, tag applicatif compris).
-    /// Sans le plafond d'octets, un mempool chargé produirait un bloc localement
-    /// valide que personne ne pourrait recevoir — partition définitive.
+    /// réseau, tel qu'il partira sur le fil — `Message::Bloc` (tag applicatif) PUIS
+    /// chiffré (le cadre borne le CHIFFRÉ, cf. `crypto::aead::SURCOUT`). Sans le
+    /// plafond d'octets, un mempool chargé produirait un bloc localement valide que
+    /// personne ne pourrait recevoir — partition définitive. La première version de
+    /// ce test mesurait le message EN CLAIR : à la borne, les 68 octets de la
+    /// cascade suffisaient à rendre le bloc indiffusable sans qu'aucun test rougisse.
     #[test]
     #[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
     fn un_bloc_scelle_tient_toujours_dans_un_cadre_reseau() {
@@ -836,9 +838,9 @@ mod tests {
         let (bloc, _) = n.sceller().expect("un bloc à sceller");
         let sur_le_fil = crate::message::Message::Bloc(Box::new(bloc)).to_bytes();
         assert!(
-            sur_le_fil.len() <= net::MAX_CADRE,
-            "bloc de {} o sur le fil : au-delà du cadre de {} o",
-            sur_le_fil.len(),
+            sur_le_fil.len() + crypto::aead::SURCOUT <= net::MAX_CADRE,
+            "bloc de {} o chiffrés sur le fil : au-delà du cadre de {} o",
+            sur_le_fil.len() + crypto::aead::SURCOUT,
             net::MAX_CADRE
         );
     }

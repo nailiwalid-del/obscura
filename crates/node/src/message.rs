@@ -45,6 +45,17 @@ const TAG_DEMANDE_BLOC: u8 = 5;
 const TAG_DEMANDE_HISTORIQUE: u8 = 6;
 const TAG_HISTORIQUE: u8 = 7;
 
+/// CONSIGNÉ À LA COMPILATION : un bloc scellé au plafond, enveloppé (`TAG_BLOC`)
+/// puis CHIFFRÉ (le cadre borne le chiffré, pas le clair), tient dans un cadre.
+///
+/// C'est ici que la relation entre les trois crates est vérifiable : `ledger` fixe
+/// le plafond, `crypto` le surcoût de la cascade, `net` le cadre. Tout ajustement
+/// de l'un des trois qui rendrait un bloc plein indiffusable casse la compilation
+/// au lieu de produire une partition découverte sur le fil.
+const _: () = assert!(
+    ledger::bloc::MAX_OCTETS_BLOC + 1 + crypto::aead::SURCOUT <= net::MAX_CADRE
+);
+
 /// Erreur de décodage d'un message applicatif.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum MessageError {

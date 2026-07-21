@@ -137,7 +137,13 @@ const MARGE_MESSAGE: usize = 64;
 /// serait localement valide, applicable par son producteur… et refusé par tous les
 /// autres faute de pouvoir seulement le recevoir — partition définitive, l'état étant
 /// append-only. C'est le défaut n°1 de la revue adversariale dans sa variante OCTETS.
-pub const MAX_OCTETS_BLOC: usize = CADRE_NET - MARGE_MESSAGE;
+///
+/// Ce que le cadre borne est la quantité CHIFFRÉE (cf. `crypto::aead::SURCOUT`, dont
+/// la doc décrit exactement ce piège) : le budget du bloc soustrait donc le surcoût
+/// de la cascade EN PLUS de la marge applicative. Sans cette soustraction, un bloc
+/// scellé à la borne passait le constructeur puis était refusé par `ecrire_cadre`
+/// une fois chiffré — 5 octets au-dessus du cadre, indiffusable.
+pub const MAX_OCTETS_BLOC: usize = CADRE_NET - crypto::aead::SURCOUT - MARGE_MESSAGE;
 
 const _: () = assert!(MAX_OCTETS_BLOC < CADRE_NET);
 const _: () = assert!(SURCOUT_BLOC_VIDE < MAX_OCTETS_BLOC);
@@ -565,7 +571,8 @@ mod tests {
     /// fige le chiffre — s'il bouge, c'est que le format de transaction a changé.
     #[test]
     fn le_plafond_doctets_borne_a_une_quinzaine_de_transactions() {
-        assert!(MAX_OCTETS_BLOC < CADRE_NET, "un bloc doit tenir dans un cadre");
+        // `MAX_OCTETS_BLOC < CADRE_NET` est garanti par l'assertion de COMPILATION
+        // en tête de module — pas besoin de le re-tester ici.
         let pour = |n: usize| SURCOUT_BLOC_VIDE + n * cout_transaction(TAILLE_TX_INDICATIVE);
         assert!(pour(15) <= MAX_OCTETS_BLOC, "15 transactions doivent tenir");
         assert!(
