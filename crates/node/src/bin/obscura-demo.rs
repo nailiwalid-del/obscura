@@ -78,7 +78,7 @@ fn main() {
             &alice.adresse().kem,
             &cm,
             &note,
-        ));
+        ).expect("clé de démo fraîche : contributive par construction"));
     }
     let genese = ledger::bloc::Bloc::genese_avec(emissions).expect("genèse bornée");
     let octets_genese = genese.to_bytes();

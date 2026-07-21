@@ -521,7 +521,8 @@ mod tests {
         let vrai_cm =
             proved_hash::rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
 
-        let reelle = crate::proved_wallet::emission_vers(&beneficiaire.public, &vrai_cm, &note);
+        let reelle =
+            crate::proved_wallet::emission_vers(&beneficiaire.public, &vrai_cm, &note).unwrap();
         let factice = crate::proved_wallet::emission_factice(&cm(999));
 
         assert_eq!(

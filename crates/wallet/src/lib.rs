@@ -112,6 +112,11 @@ pub enum WalletError {
          prouver ici publierait une ancre quasi unique"
     )]
     ArbreHorsFrontiereDeBloc { feuilles: u64, ancre: u64 },
+    /// L'adresse du destinataire porte un point X25519 d'ordre faible : chiffrer vers
+    /// elle ferait reposer la note sur Kyber seul. On refuse de payer plutôt que de
+    /// dégrader silencieusement la protection du bénéficiaire.
+    #[error("adresse de destinataire invalide (KEM non contributif)")]
+    DestinataireInvalide,
 }
 
 /// Une note possédée, avec sa position dans l'arbre (indispensable au chemin).
@@ -366,14 +371,15 @@ impl Wallet {
             })
             .collect();
 
-        let (notes_out, enc): (Vec<SpendNote>, Vec<EncNote>) = sorties
-            .into_iter()
-            .map(|(note, kem)| {
-                let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
-                let e = encrypt_note(&kem, &cm, &note);
-                (note, e)
-            })
-            .unzip();
+        let mut notes_out: Vec<SpendNote> = Vec::with_capacity(sorties.len());
+        let mut enc: Vec<EncNote> = Vec::with_capacity(sorties.len());
+        for (note, kem) in sorties {
+            let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
+            let e = encrypt_note(&kem, &cm, &note)
+                .map_err(|_| WalletError::DestinataireInvalide)?;
+            notes_out.push(note);
+            enc.push(e);
+        }
 
         // Clé d'intention FRAÎCHE à chaque transaction — cf. « Le signataire est
         // public » en tête de module.
@@ -475,7 +481,7 @@ pub(crate) mod tests_communs {
                     r: w.alea(),
                 };
                 let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
-                ledger::proved_wallet::emission_vers(&w.adresse().kem, &cm, &note)
+                ledger::proved_wallet::emission_vers(&w.adresse().kem, &cm, &note).unwrap()
             })
             .collect();
         let genese = Bloc::genese_avec(emissions).expect("genèse bornée");
@@ -853,11 +859,9 @@ mod tests {
                 r: w.alea(),
             };
             let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
-            emissions.push(ledger::proved_wallet::emission_vers(
-                &w.adresse().kem,
-                &cm,
-                &note,
-            ));
+            emissions.push(
+                ledger::proved_wallet::emission_vers(&w.adresse().kem, &cm, &note).unwrap(),
+            );
         }
         let genese = ledger::bloc::Bloc::genese_avec(emissions).expect("genèse bornée");
         let etat = ledger::proved_state::ProvedLedgerState::depuis_genese_depth_archivant(

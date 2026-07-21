@@ -72,8 +72,8 @@ fn etat_partage_et_transaction() -> (ProvedLedgerState, circuit::ProvedTx) {
         crypto::kem::KemKeypair::generate(),
     );
     let enc = [
-        encrypt_note(&r0.public, &oc0, &o0),
-        encrypt_note(&r1.public, &oc1, &o1),
+        encrypt_note(&r0.public, &oc0, &o0).unwrap(),
+        encrypt_note(&r1.public, &oc1, &o1).unwrap(),
     ];
     let inputs = [
         ProvedInput { note: n0, path: arbre.path(i0).unwrap(), index: i0 },

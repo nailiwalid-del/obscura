@@ -121,7 +121,8 @@ impl Initiateur {
         }
 
         // ss₁ : le répondeur a encapsulé vers NOTRE éphémère.
-        let ss1 = kem::decapsulate(&self.ephemere, &ct_r);
+        let ss1 = kem::decapsulate(&self.ephemere, &ct_r)
+            .map_err(|_| NetError::KemNonContributif)?;
 
         // Le transcript signé par le répondeur couvre la passe 1 ET les parties
         // publiques de la passe 2 (éphémère + ciphertext), donc tout ce qui précède
@@ -137,7 +138,8 @@ impl Initiateur {
         self.transcript.absorber(scelle);
 
         // ss₂ : nous encapsulons vers l'éphémère du répondeur (contribution mutuelle).
-        let (ct_i, ss2) = kem::encapsulate(&eph_r);
+        let (ct_i, ss2) =
+            kem::encapsulate(&eph_r).map_err(|_| NetError::KemNonContributif)?;
         let mut entete3 = Vec::new();
         ecrire_champ(&mut entete3, &ct_i.to_bytes());
         self.transcript.absorber(&entete3);
@@ -197,7 +199,8 @@ impl Repondeur {
         transcript.absorber(passe1);
 
         let ephemere = KemKeypair::generate();
-        let (ct_r, ss1) = kem::encapsulate(&eph_i);
+        let (ct_r, ss1) =
+            kem::encapsulate(&eph_i).map_err(|_| NetError::KemNonContributif)?;
 
         let mut entete2 = Vec::new();
         ecrire_champ(&mut entete2, &ephemere.public.to_bytes());
@@ -225,7 +228,8 @@ impl Repondeur {
             return Err(NetError::OctetsResiduels);
         }
 
-        let ss2 = kem::decapsulate(&self.ephemere, &ct_i);
+        let ss2 = kem::decapsulate(&self.ephemere, &ct_i)
+            .map_err(|_| NetError::KemNonContributif)?;
         let mut entete3 = Vec::new();
         ecrire_champ(&mut entete3, &ct_i.to_bytes());
         self.transcript.absorber(&entete3);

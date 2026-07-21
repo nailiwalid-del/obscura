@@ -31,10 +31,10 @@ pub fn encrypt_note(
     recipient_kem_pk: &kem::KemPublicKey,
     commitment: &Digest,
     note: &SpendNote,
-) -> EncNote {
-    let (kem_ct, ss) = kem::encapsulate(recipient_kem_pk);
+) -> Result<EncNote, crypto::CryptoError> {
+    let (kem_ct, ss) = kem::encapsulate(recipient_kem_pk)?;
     let enc_note = aead::encrypt(&ss, &commitment.to_bytes(), &note.to_bytes());
-    EncNote { kem_ct: kem_ct.to_bytes(), enc_note }
+    Ok(EncNote { kem_ct: kem_ct.to_bytes(), enc_note })
 }
 
 /// Scanne une sortie prouvée : tente de déchiffrer `e` avec la paire KEM `receive`, et
@@ -49,7 +49,7 @@ pub fn scan_proved_output(
     e: &EncNote,
 ) -> Option<SpendNote> {
     let ct = kem::KemCiphertext::from_bytes(&e.kem_ct).ok()?;
-    let ss = kem::decapsulate(receive, &ct);
+    let ss = kem::decapsulate(receive, &ct).ok()?;
     let pt = aead::decrypt(&ss, &commitment.to_bytes(), &e.enc_note).ok()?;
     let note = SpendNote::from_bytes(&pt)?;
     let recomputed = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
@@ -65,11 +65,11 @@ pub fn emission_vers(
     beneficiaire_kem_pk: &kem::KemPublicKey,
     commitment: &Digest,
     note: &SpendNote,
-) -> Emission {
-    Emission {
+) -> Result<Emission, crypto::CryptoError> {
+    Ok(Emission {
         commitment: *commitment,
-        enc_note: encrypt_note(beneficiaire_kem_pk, commitment, note),
-    }
+        enc_note: encrypt_note(beneficiaire_kem_pk, commitment, note)?,
+    })
 }
 
 /// Émission SANS bénéficiaire : enveloppe **factice**, indistinguable d'une vraie.
@@ -100,7 +100,10 @@ pub fn emission_factice(commitment: &Digest) -> Emission {
     };
     Emission {
         commitment: *commitment,
-        enc_note: encrypt_note(&jetable.public, commitment, &note),
+        // `jetable` vient d'être générée par nos soins : sa moitié X25519 est
+        // contributive par construction, l'encapsulation ne peut pas échouer ici.
+        enc_note: encrypt_note(&jetable.public, commitment, &note)
+            .expect("clé jetable fraîche : contributive par construction"),
     }
 }
 
@@ -165,7 +168,9 @@ mod tests {
             r: digest(30),
         };
         let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
-        (0..n).map(|_| encrypt_note(dest, &cm, &note)).collect()
+        (0..n)
+            .map(|_| encrypt_note(dest, &cm, &note).unwrap())
+            .collect()
     }
 
     /// (1) INVARIANCE DE LONGUEUR : une longueur qui dépendrait du destinataire
@@ -273,7 +278,7 @@ mod tests {
         let note = SpendNote { value: 1_000, owner: owner_alice, rho: digest(20), r: digest(30) };
         let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
 
-        let e = encrypt_note(&alice.public, &cm, &note);
+        let e = encrypt_note(&alice.public, &cm, &note).unwrap();
         // Alice, avec son owner prouvé, retrouve la note.
         assert_eq!(scan_proved_output(&alice, &owner_alice, &cm, &e), Some(note.clone()));
         // Bob (autre clé KEM) échoue à déchiffrer.
@@ -290,7 +295,7 @@ mod tests {
         let owner = digest(777);
         let note = SpendNote { value: 1_000, owner, rho: digest(20), r: digest(30) };
         let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
-        let e = encrypt_note(&alice.public, &cm, &note);
+        let e = encrypt_note(&alice.public, &cm, &note).unwrap();
         // Scanner avec un mauvais commitment public.
         assert_eq!(scan_proved_output(&alice, &owner, &digest(999), &e), None);
     }

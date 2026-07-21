@@ -68,7 +68,8 @@ fn main() {
     let intent = crypto::sig::SigKeypair::generate();
     let enc_note_reel = |cm: &proved_hash::digest::Digest, note: &SpendNote| {
         let recipient = crypto::kem::KemKeypair::generate();
-        let (kem_ct, ss) = crypto::kem::encapsulate(&recipient.public);
+        let (kem_ct, ss) = crypto::kem::encapsulate(&recipient.public)
+            .expect("clé de bench fraîche : contributive");
         let enc_note = crypto::aead::encrypt(&ss, &cm.to_bytes(), &note.to_bytes());
         circuit::EncNote { kem_ct: kem_ct.to_bytes(), enc_note }
     };

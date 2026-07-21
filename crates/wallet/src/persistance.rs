@@ -383,7 +383,7 @@ mod tests {
             r: rescue::hash(proved_hash::domain::Domain::Nk, &[Felt::ONE; 4]),
         };
         let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
-        let enc = ledger::proved_wallet::encrypt_note(&w.adresse().kem, &cm, &note);
+        let enc = ledger::proved_wallet::encrypt_note(&w.adresse().kem, &cm, &note).unwrap();
         assert_eq!(
             ledger::proved_wallet::scan_proved_output(&r.reception, &r.owner, &cm, &enc)
                 .map(|n| n.value),

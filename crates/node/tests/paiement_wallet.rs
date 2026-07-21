@@ -70,7 +70,7 @@ fn genese_pour(w: &Wallet) -> Bloc {
                 ),
             };
             let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
-            ledger::proved_wallet::emission_vers(&w.adresse().kem, &cm, &note)
+            ledger::proved_wallet::emission_vers(&w.adresse().kem, &cm, &note).unwrap()
         })
         .collect();
     Bloc::genese_avec(emissions).expect("genèse bornée")

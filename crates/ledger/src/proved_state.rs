@@ -836,8 +836,8 @@ mod tests {
         // tx_digest v3 est ainsi exercé sur de vrais ciphertexts.
         let (r0, r1) = (crypto::kem::KemKeypair::generate(), crypto::kem::KemKeypair::generate());
         let enc_notes = [
-            crate::proved_wallet::encrypt_note(&r0.public, &oc0, &o0),
-            crate::proved_wallet::encrypt_note(&r1.public, &oc1, &o1),
+            crate::proved_wallet::encrypt_note(&r0.public, &oc0, &o0).unwrap(),
+            crate::proved_wallet::encrypt_note(&r1.public, &oc1, &o1).unwrap(),
         ];
         let (_root, tx) = prove_tx(&secret, inputs, [o0, o1], 20, &intent, enc_notes);
         (state, tx)
@@ -893,8 +893,8 @@ mod tests {
             ProvedInput { note: n1, path: path1, index: i1 },
         ];
         let enc_notes = [
-            crate::proved_wallet::encrypt_note(&alice.public, &oc0, &o0),
-            crate::proved_wallet::encrypt_note(&bob.public, &oc1, &o1),
+            crate::proved_wallet::encrypt_note(&alice.public, &oc0, &o0).unwrap(),
+            crate::proved_wallet::encrypt_note(&bob.public, &oc1, &o1).unwrap(),
         ];
         let intent = crypto::sig::SigKeypair::generate();
         let (_root, tx) = prove_tx(&secret, inputs, [o0.clone(), o1.clone()], 20, &intent, enc_notes);

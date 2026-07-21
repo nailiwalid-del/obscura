@@ -77,12 +77,19 @@ fn combine(ss1: &[u8], ss2: &[u8], eph_pk: &[u8], kyber_ct: &[u8], pk: &KemPubli
 }
 
 /// Encapsule vers `pk` : retourne (ciphertext, secret partagé 32 o).
-pub fn encapsulate(pk: &KemPublicKey) -> (KemCiphertext, [u8; 32]) {
+///
+/// **Rejette un `pk` X25519 d'ordre faible** (`CryptoError::NonContributif`) : sans ce
+/// contrôle, le DH rendrait un secret nul et la moitié courbes du KEM disparaîtrait en
+/// silence, laissant Kyber porter seul la sécurité. Voir `NonContributif`.
+pub fn encapsulate(pk: &KemPublicKey) -> Result<(KemCiphertext, [u8; 32]), CryptoError> {
     let mut eb = [0u8; 32];
     OsRng.fill_bytes(&mut eb);
     let esk = StaticSecret::from(eb);
     let epk = XPublicKey::from(&esk);
     let ss1 = esk.diffie_hellman(&XPublicKey::from(pk.x25519));
+    if !ss1.was_contributory() {
+        return Err(CryptoError::NonContributif);
+    }
     let (ss2, ct2) = kyber768::encapsulate(&pk.kyber);
     let ss = combine(
         ss1.as_bytes(),
@@ -91,29 +98,37 @@ pub fn encapsulate(pk: &KemPublicKey) -> (KemCiphertext, [u8; 32]) {
         ct2.as_bytes(),
         pk,
     );
-    (
+    Ok((
         KemCiphertext {
             x25519_eph: *epk.as_bytes(),
             kyber_ct: ct2,
         },
         ss,
-    )
+    ))
 }
 
 /// Décapsule avec la paire de clés du destinataire.
-pub fn decapsulate(kp: &KemKeypair, ct: &KemCiphertext) -> [u8; 32] {
+///
+/// **Rejette un éphémère X25519 d'ordre faible** : c'est le sens ADVERSE du même
+/// contrôle. Un expéditeur hostile qui place un point d'ordre faible dans `ct` force un
+/// secret nul côté receveur — le chiffrement des notes reposerait alors sur Kyber seul,
+/// à l'insu du receveur.
+pub fn decapsulate(kp: &KemKeypair, ct: &KemCiphertext) -> Result<[u8; 32], CryptoError> {
     let ss1 = kp
         .secret
         .x25519
         .diffie_hellman(&XPublicKey::from(ct.x25519_eph));
+    if !ss1.was_contributory() {
+        return Err(CryptoError::NonContributif);
+    }
     let ss2 = kyber768::decapsulate(&ct.kyber_ct, &kp.secret.kyber);
-    combine(
+    Ok(combine(
         ss1.as_bytes(),
         ss2.as_bytes(),
         &ct.x25519_eph,
         ct.kyber_ct.as_bytes(),
         &kp.public,
-    )
+    ))
 }
 
 impl KemKeypair {
@@ -216,11 +231,68 @@ impl KemCiphertext {
 mod tests {
     use super::*;
 
+    /// Points d'ordre faible de X25519 (RFC 7748 §6.1) : tout DH avec eux rend un
+    /// secret NUL. `u = 0` et `u = 1` suffisent à couvrir le cas.
+    const ORDRE_FAIBLE: [[u8; 32]; 2] = [[0u8; 32], {
+        let mut u = [0u8; 32];
+        u[0] = 1;
+        u
+    }];
+
+    /// ADVERSE — un destinataire dont la moitié X25519 est d'ordre faible doit être
+    /// REFUSÉ : sinon on chiffrerait vers lui en ne reposant que sur Kyber, sans que
+    /// rien ne le signale.
+    #[test]
+    fn encapsuler_vers_un_point_dordre_faible_est_rejete() {
+        let bob = KemKeypair::generate();
+        for u in ORDRE_FAIBLE {
+            let hostile = KemPublicKey {
+                x25519: u,
+                kyber: bob.public.kyber.clone(),
+            };
+            assert!(
+                matches!(encapsulate(&hostile), Err(CryptoError::NonContributif)),
+                "un pk d'ordre faible doit être rejeté (u = {:?})",
+                &u[..4]
+            );
+        }
+    }
+
+    /// ADVERSE — le sens qui compte vraiment : un EXPÉDITEUR hostile place un éphémère
+    /// d'ordre faible dans le ciphertext pour annuler la moitié courbes chez le
+    /// receveur. Le receveur doit refuser.
+    #[test]
+    fn decapsuler_un_ephemere_dordre_faible_est_rejete() {
+        let bob = KemKeypair::generate();
+        let (ct, _) = encapsulate(&bob.public).unwrap();
+        for u in ORDRE_FAIBLE {
+            let hostile = KemCiphertext {
+                x25519_eph: u,
+                kyber_ct: ct.kyber_ct.clone(),
+            };
+            assert!(
+                matches!(decapsulate(&bob, &hostile), Err(CryptoError::NonContributif)),
+                "un éphémère d'ordre faible doit être rejeté (u = {:?})",
+                &u[..4]
+            );
+        }
+    }
+
+    /// NON-RÉGRESSION : le rejet ne doit pas mordre sur des clés honnêtes.
+    #[test]
+    fn les_cles_honnetes_restent_acceptees() {
+        for _ in 0..8 {
+            let kp = KemKeypair::generate();
+            let (ct, a) = encapsulate(&kp.public).expect("clé générée = contributive");
+            assert_eq!(a, decapsulate(&kp, &ct).expect("éphémère honnête"));
+        }
+    }
+
     #[test]
     fn roundtrip() {
         let kp = KemKeypair::generate();
-        let (ct, ss_a) = encapsulate(&kp.public);
-        let ss_b = decapsulate(&kp, &ct);
+        let (ct, ss_a) = encapsulate(&kp.public).unwrap();
+        let ss_b = decapsulate(&kp, &ct).unwrap();
         assert_eq!(ss_a, ss_b);
     }
 
@@ -228,21 +300,22 @@ mod tests {
     fn mauvaise_cle_donne_secret_different() {
         let kp1 = KemKeypair::generate();
         let kp2 = KemKeypair::generate();
-        let (ct, ss_a) = encapsulate(&kp1.public);
+        let (ct, ss_a) = encapsulate(&kp1.public).unwrap();
         let ss_mauvais = decapsulate(
             &kp2,
             &KemCiphertext {
                 x25519_eph: ct.x25519_eph,
                 kyber_ct: ct.kyber_ct,
             },
-        );
+        )
+        .unwrap();
         assert_ne!(ss_a, ss_mauvais);
     }
 
     #[test]
     fn serialisation() {
         let kp = KemKeypair::generate();
-        let (ct, _) = encapsulate(&kp.public);
+        let (ct, _) = encapsulate(&kp.public).unwrap();
         let pk2 = KemPublicKey::from_bytes(&kp.public.to_bytes()).unwrap();
         let ct2 = KemCiphertext::from_bytes(&ct.to_bytes()).unwrap();
         assert_eq!(pk2.x25519, kp.public.x25519);
@@ -257,11 +330,11 @@ mod tests {
     #[test]
     fn secret_restaure_dechiffre_ce_qui_etait_chiffre_vers_lorigine() {
         let kp = KemKeypair::generate();
-        let (ct, ss) = encapsulate(&kp.public);
+        let (ct, ss) = encapsulate(&kp.public).unwrap();
 
         let restaure = KemKeypair::from_bytes_secret(&kp.to_bytes_secret()).unwrap();
         assert_eq!(
-            decapsulate(&restaure, &ct),
+            decapsulate(&restaure, &ct).unwrap(),
             ss,
             "la paire rechargée doit décapsuler ce qui visait l'originale"
         );

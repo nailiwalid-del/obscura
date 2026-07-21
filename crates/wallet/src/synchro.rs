@@ -642,7 +642,7 @@ mod tests {
         let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
         let sortie = ledger::historique::Sortie {
             commitment: cm,
-            enc_note: ledger::proved_wallet::encrypt_note(&w.adresse().kem, &cm, &note),
+            enc_note: ledger::proved_wallet::encrypt_note(&w.adresse().kem, &cm, &note).unwrap(),
         };
         let trop = MorceauHistorique::bloc_entier(1, 2, w.racine(), vec![sortie]);
         assert!(matches!(

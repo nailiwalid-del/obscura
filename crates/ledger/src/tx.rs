@@ -125,7 +125,8 @@ pub fn build_transparent_transaction(
     for (addr, value) in recipients {
         let note = Note::new(*value, addr.owner);
         let commitment = note.commitment();
-        let (kem_ct, ss) = kem::encapsulate(&addr.kem_pk);
+        let (kem_ct, ss) =
+            kem::encapsulate(&addr.kem_pk).map_err(|_| LedgerError::Encoding)?;
         let enc_note = aead::encrypt(&ss, &commitment.to_bytes(), &note.to_bytes());
         outputs.push(TxOutput {
             commitment,
@@ -151,7 +152,7 @@ pub fn build_transparent_transaction(
 /// Retourne la note si elle lui est destinée (et vérifie le commitment).
 pub fn scan_output(wallet: &WalletKeys, out: &TxOutput) -> Option<Note> {
     let ct = kem::KemCiphertext::from_bytes(&out.kem_ct).ok()?;
-    let ss = kem::decapsulate(&wallet.receive, &ct);
+    let ss = kem::decapsulate(&wallet.receive, &ct).ok()?;
     let pt = aead::decrypt(&ss, &out.commitment.to_bytes(), &out.enc_note).ok()?;
     let note = Note::from_bytes(&pt).ok()?;
     if note.commitment() == out.commitment && note.owner == wallet.address().owner {

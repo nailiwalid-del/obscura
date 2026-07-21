@@ -246,7 +246,10 @@ mod tests {
         let oc0 = rescue::note_commitment(o0.value, &o0.owner, &o0.rho, &o0.r);
         let oc1 = rescue::note_commitment(o1.value, &o1.owner, &o1.rho, &o1.r);
         let (r0, r1) = (crypto::kem::KemKeypair::generate(), crypto::kem::KemKeypair::generate());
-        let enc = [encrypt_note(&r0.public, &oc0, &o0), encrypt_note(&r1.public, &oc1, &o1)];
+        let enc = [
+            encrypt_note(&r0.public, &oc0, &o0).unwrap(),
+            encrypt_note(&r1.public, &oc1, &o1).unwrap(),
+        ];
 
         let inputs = [
             ProvedInput { note: n0, path: arbre.path(i0).unwrap(), index: i0 },

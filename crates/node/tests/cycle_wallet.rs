@@ -60,7 +60,7 @@ fn emission_pour(w: &Wallet, valeur: u64, sel: u64) -> ledger::bloc::Emission {
         r: rescue::hash(Domain::Nk, &[Felt::from_canonical_u64(sel + 7).unwrap(); 4]),
     };
     let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
-    ledger::proved_wallet::emission_vers(&w.adresse().kem, &cm, &note)
+    ledger::proved_wallet::emission_vers(&w.adresse().kem, &cm, &note).unwrap()
 }
 
 /// Se connecte comme un WALLET : transport chiffré éphémère, échéance de lecture courte

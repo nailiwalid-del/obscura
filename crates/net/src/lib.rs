@@ -86,6 +86,12 @@ pub enum NetError {
     EncodageInvalide,
     #[error("compteur de séquence épuisé : session à renouveler")]
     SessionEpuisee,
+    /// Le pair a présenté un point X25519 d'ordre faible : le DH aurait rendu un secret
+    /// nul et la moitié courbes du KEM hybride serait tombée en silence. Un pair honnête
+    /// ne produit jamais ce cas — c'est donc soit une implémentation cassée, soit une
+    /// tentative de dégrader la défense en profondeur.
+    #[error("KEM non contributif : le pair a présenté un point d'ordre faible")]
+    KemNonContributif,
     /// Erreur d'E/S sous-jacente. On ne conserve que le `ErrorKind` : cela garde
     /// `NetError` comparable (tests lisibles) et suffit à distinguer une fermeture
     /// propre (`UnexpectedEof` sur l'en-tête) d'une anomalie.
