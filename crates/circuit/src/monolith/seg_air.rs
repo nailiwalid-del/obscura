@@ -1803,6 +1803,151 @@ mod tests {
         table.rows().map(|row| row[col]).collect()
     }
 
+    /// Preuve blindée d'un SegWitness (forme variable), graine déterministe.
+    fn preuve_seedee_forme(
+        w: &crate::monolith::seg_trace::SegWitness,
+        seed: u64,
+    ) -> (MonolithPublicInputs, ValidityProof) {
+        use crate::monolith::seg_trace::build_seg_trace_forme_seeded;
+        use rand::{rngs::StdRng, SeedableRng};
+
+        let f = w.forme();
+        let depth = w.inputs[0].path.len();
+        let trace = build_seg_trace_forme_seeded(w, &mut StdRng::seed_from_u64(seed));
+        let pi = publics_de_forme(f, &trace, w.fee, depth);
+        let prover = SegMonolithProver {
+            options: crate::proof_options_hi(),
+            pi: pi.clone(),
+        };
+        (pi.clone(), ValidityProof(prover.prove(trace).expect("génération")))
+    }
+
+    /// Ouvertures FRI d'une colonne, à la LARGEUR DE LA FORME (le parse a besoin de la
+    /// vraie largeur de trace, pas de `WIDTH` figé).
+    fn ouvertures_colonne_forme(
+        proof: &ValidityProof,
+        col: usize,
+        largeur: usize,
+    ) -> Vec<BaseElement> {
+        let queries = proof.0.trace_queries[0].clone();
+        let (_op, table) = queries
+            .parse::<BaseElement, Blake3, MerkleTree<Blake3>>(
+                proof.0.lde_domain_size(),
+                proof.0.num_unique_queries as usize,
+                largeur,
+            )
+            .expect("parse des trace queries");
+        table.rows().map(|row| row[col]).collect()
+    }
+
+    /// MASQUAGE SOUS FORMES VARIABLES (1/1 et 4/4) — C2-T5.
+    ///
+    /// # Ce que ce test verrouille structurellement
+    ///
+    /// Le gating `blind_off` est un gate de LIGNE (transition dans `[used, len)`),
+    /// pas une liste de colonnes ; et le constructeur de trace remplit d'aléa TOUTE
+    /// cellule de `[used, len)` sur `0..width()`. Toute porteuse NOUVELLE d'une forme
+    /// large (`f.vout_c(3)`, qui n'existe pas en 2/2) est donc masquée sans qu'aucune
+    /// liste n'ait à la mentionner. Ce test le PROUVE : il éprouve, sur 1/1 et 4/4,
+    /// CHAQUE porteuse de la forme — y compris celles qu'aucun test 2/2 n'atteint.
+    ///
+    /// Détecteur DUR : sans blinding, une porteuse constante rendrait un polynôme
+    /// constant et chaque ouverture FRI vaudrait le témoin EN CLAIR. Pour chacune :
+    /// (a) aucune ouverture ne vaut le témoin (reconstruit HORS-CIRCUIT) ; (b) les
+    /// ouvertures ne sont pas toutes égales ; (c) deux graines → ouvertures
+    /// disjointes (randomisé, pas déterministe).
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "AIR gatée : générer en --release")]
+    fn masquage_sous_formes_variables() {
+        use crate::monolith::seg_trace::tests::witness_forme;
+        use proved_hash::rescue;
+
+        for (m, n) in [(1usize, 1usize), (4, 4)] {
+            let w = witness_forme(m, n);
+            let f = w.forme();
+            let depth = w.inputs[0].path.len();
+            let (pi1, p1) = preuve_seedee_forme(&w, 51);
+            let (pi2, p2) = preuve_seedee_forme(&w, 52);
+            assert!(verify_seg_monolith(&pi1, depth, &p1), "forme {m}/{n} preuve 1");
+            assert!(verify_seg_monolith(&pi2, depth, &p2), "forme {m}/{n} preuve 2");
+
+            // Témoins reconstruits hors-circuit.
+            let owner = rescue::hash(Domain::Owner, w.secret.as_felts());
+            let nk = rescue::hash(Domain::Nk, w.secret.as_felts());
+
+            // Une cible par famille, POUR CHAQUE entrée et CHAQUE sortie de la forme —
+            // dont les porteuses (rho/cm/leaf/vin/vout) des indices > 1, absents du 2/2.
+            let mut cibles: Vec<(usize, BaseElement)> = vec![
+                (OWNER_C, owner.0[0].to_winter()),
+                (NK_C, nk.0[0].to_winter()),
+            ];
+            for i in 0..f.m() {
+                let note = &w.inputs[i].note;
+                let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
+                let leaf = proved_hash::merkle::leaf(&cm);
+                cibles.push((f.rho_c(i), note.rho.0[0].to_winter()));
+                cibles.push((f.cm_c(i), cm.0[0].to_winter()));
+                cibles.push((f.leaf_c(i), leaf.0[0].to_winter()));
+                cibles.push((f.vin_c(i), BaseElement::new(note.value)));
+            }
+            for j in 0..f.n() {
+                cibles.push((f.vout_c(j), BaseElement::new(w.outputs[j].value)));
+            }
+
+            for (col, temoin) in cibles {
+                let o1 = ouvertures_colonne_forme(&p1, col, f.width());
+                let o2 = ouvertures_colonne_forme(&p2, col, f.width());
+                assert!(!o1.is_empty(), "forme {m}/{n} : ouvertures non vides @col {col}");
+                assert!(
+                    !o1.contains(&temoin),
+                    "FUITE forme {m}/{n} : ouverture FRI = témoin en clair @col {col}"
+                );
+                assert!(!o2.contains(&temoin), "FUITE (preuve 2) forme {m}/{n} @col {col}");
+                assert!(
+                    o1.iter().any(|v| *v != o1[0]),
+                    "forme {m}/{n} : porteuse non masquée @col {col}"
+                );
+                assert!(
+                    o1.iter().zip(o2.iter()).any(|(a, b)| a != b),
+                    "forme {m}/{n} : masquage déterministe @col {col}"
+                );
+            }
+
+            // Contrôle structurel : la DERNIÈRE colonne de la forme (juste avant S)
+            // est blindée — la plus récente, celle qu'aucune liste manuelle ne
+            // couvrirait. Sur 4/4 c'est vout_c(3), inexistante en 2/2.
+            let derniere_porteuse = f.s_col() - 1;
+            let od = ouvertures_colonne_forme(&p1, derniere_porteuse, f.width());
+            assert!(
+                od.iter().any(|v| *v != od[0]),
+                "forme {m}/{n} : la dernière porteuse (@{derniere_porteuse}) doit être blindée"
+            );
+        }
+    }
+
+    /// INERTIE DU BLINDING sous forme variable : une région de blinding ADVERSE (au
+    /// lieu d'aléa) ne change RIEN — aucune contrainte ni assertion ne la lit, sur
+    /// 1/1 comme sur 4/4. C'est le pendant « acceptée » du détecteur de fuite.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
+    fn inertie_du_blinding_sous_formes_variables() {
+        use crate::monolith::seg_trace::{
+            build_seg_trace_forme_forge, tests::witness_forme, SegForge,
+        };
+        for (m, n) in [(1usize, 1usize), (4, 4)] {
+            let w = witness_forme(m, n);
+            let f = w.forme();
+            let depth = w.inputs[0].path.len();
+            let trace = build_seg_trace_forme_forge(&w, SegForge::BlindingAdversarial);
+            let pi = publics_de_forme(f, &trace, w.fee, depth);
+            let proof = prouver_trace(trace, &pi);
+            assert!(
+                verify_seg_monolith(&pi, depth, &proof),
+                "forme {m}/{n} : blinding adverse doit rester ACCEPTÉ (rien ne le lit)"
+            );
+        }
+    }
+
     /// MASQUAGE (witness-hiding) sous la disposition SEGMENTÉE — T5.
     ///
     /// Les colonnes PORTEUSES sont CONSTANTES sur `[0, used)`. Sans blinding, leur
