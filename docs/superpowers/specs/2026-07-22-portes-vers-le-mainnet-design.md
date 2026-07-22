@@ -540,6 +540,13 @@ qu'on ne rattrape pas.
 
 ## Ordre recommandé
 
+> ⚠️ **RÉVISION DU 2026-07-22 (ADR J1 accepté).** L'ordre ci-dessous plaçait T5
+> avant J1. **J1 passe devant le GEL DE GENÈSE de T5** : le certificat de quorum
+> n'entre pas dans `TAILLE_SCELLEMENT_MAX`, donc J1 impose `VERSION_BLOC 0x04`,
+> donc une nouvelle chaîne. Graver la genèse avant J1 obligerait chaque
+> participant à re-transmettre son adresse. Le reste de T5 (documents, décisions,
+> release) est fait et reste devant. Voir `2026-07-22-j1-consensus-adr.md`.
+
 ```
   1. AUD  ── ACVP ciblés (decap/sigVer) · FIXTURE de conformité
        │     · docs source normative · CLAUDE+AGENTS assainis

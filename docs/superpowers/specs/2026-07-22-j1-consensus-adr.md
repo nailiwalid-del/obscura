@@ -1,6 +1,7 @@
 # ADR-001 (J1) : modèle de consensus d'Obscura
 
-**Statut :** **Proposé** — à accepter ou rejeter par l'utilisateur.
+**Statut :** **ACCEPTÉ** le 2026-07-22, avec la recommandation de calendrier
+(J1 **avant** le gel de genèse de T5).
 **Date :** 2026-07-22
 **Décideur :** l'auteur du projet.
 **Jalon :** J1 de `2026-07-22-portes-vers-le-mainnet-design.md`.
@@ -260,9 +261,10 @@ transformer une décision assumée en surprise pour les participants.
 
 ## Actions
 
-1. [ ] **Accepter ou rejeter cet ADR** — décision de l'utilisateur.
-2. [ ] Si accepté : trancher l'ordre — J1 avant T5 (recommandé) ou T5 d'abord
-       avec reset annoncé d'avance.
+1. [x] **ADR accepté** (2026-07-22).
+2. [x] **Ordre tranché : J1 AVANT le gel de genèse de T5.** Le réordonnancement
+       ne coûte rien aujourd'hui — la genèse n'est pas gravée — et éviterait
+       sinon de faire re-transmettre son adresse à chaque participant.
 3. [ ] Écrire le plan d'implémentation (format `0x04` + certificat + vue +
        changement d'ensemble).
 4. [ ] Étendre `chaos_producteur.rs` : `f` absents, partition, changement de vue.
