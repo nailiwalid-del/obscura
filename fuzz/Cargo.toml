@@ -1,7 +1,13 @@
-# Cibles de fuzzing (plan Testnet 0, T0.3) — anneau 1 : les quatre décodeurs
-# atteignables par un INCONNU sur le réseau. Propriété vérifiée : JAMAIS de
+# Cibles de fuzzing (plan Testnet 0, T0.3), en DEUX anneaux.
+#
+# Anneau 1 — les quatre décodeurs atteignables par un INCONNU sur le réseau. Propriété vérifiée : JAMAIS de
 # panique (les bornes anti-DoS tiennent l'allocation, libFuzzer surveille la
 # mémoire). Tout crash est reversé en test de non-régression du crate concerné.
+#
+# Anneau 2 — les cinq décodeurs de DISQUE. L'entrée ne vient pas d'un inconnu,
+# mais un fichier corrompu (panne de courant, disque défaillant) ne doit jamais
+# faire paniquer un nœud ou un wallet au démarrage : il doit REFUSER, bruyamment.
+# `wallet_fichier` compte double — il porte l'autorité de dépense.
 #
 # Hors workspace (cf. `exclude` à la racine) : cargo-fuzz exige nightly et des
 # profils propres, il ne doit pas peser sur le build de consensus.
@@ -20,6 +26,8 @@ libfuzzer-sys = "0.4"
 node = { path = "../crates/node" }
 ledger = { path = "../crates/ledger" }
 circuit = { path = "../crates/circuit" }
+wallet = { path = "../crates/wallet" }
+proved-hash = { path = "../crates/proved-hash" }
 
 [[bin]]
 name = "message"
@@ -45,6 +53,41 @@ bench = false
 [[bin]]
 name = "reponse_historique"
 path = "fuzz_targets/reponse_historique.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "etat"
+path = "fuzz_targets/etat.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "historique"
+path = "fuzz_targets/historique.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "wallet_fichier"
+path = "fuzz_targets/wallet_fichier.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "merkle_tree"
+path = "fuzz_targets/merkle_tree.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "merkle_frontier"
+path = "fuzz_targets/merkle_frontier.rs"
 test = false
 doc = false
 bench = false
