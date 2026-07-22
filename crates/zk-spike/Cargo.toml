@@ -3,6 +3,7 @@ name = "zk-spike"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish = false
 
 # Crate JETABLE — spike de faisabilité E2 (phase 3z-b, witness-hiding).

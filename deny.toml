@@ -31,7 +31,8 @@ ignore = [
 version = 2
 # Nos crates ne sont PAS publiés (publish = false) et n'ont pas encore de champ
 # `license` : en choisir une est une décision de l'utilisateur, pas de la CI.
-private = { ignore = true }
+# Nos crates declarent desormais « MIT OR Apache-2.0 » : plus besoin d ignorer
+# les crates prives, deny verifie la licence comme pour les dependances.
 allow = [
     "MIT",
     "Apache-2.0",
