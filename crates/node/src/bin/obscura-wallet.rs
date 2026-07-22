@@ -5,7 +5,7 @@
 //! obscura-wallet adresse      --fichier mon.wallet
 //! obscura-wallet synchroniser --fichier mon.wallet --noeud 127.0.0.1:9333
 //! obscura-wallet solde        --fichier mon.wallet
-//! obscura-wallet envoyer      --fichier mon.wallet --a obs1… --montant 300 --frais 20 \
+//! obscura-wallet envoyer      --fichier mon.wallet --a obs1… --montant 300 \
 //!                             --noeud 127.0.0.1:9333 [--noeud-synchro 127.0.0.1:9444]
 //! ```
 //!
@@ -128,7 +128,8 @@ fn usage() -> ! {
     eprintln!("  solde        --fichier <f>                   affiche le solde connu");
     eprintln!("  consolider   --fichier <f> --noeud <ip:port>  regroupe ses notes en une seule");
     eprintln!("  envoyer      --fichier <f> --a <adresse> \\");
-    eprintln!("               --montant <n> [--frais <n>] --noeud <ip:port> \\");
+    eprintln!("               --montant <n> [--frais 0] --noeud <ip:port> \\");
+    eprintln!("               (--frais : seul 0 est accepté sur ce testnet — `fee` est PUBLIC)");
     eprintln!("               [--noeud-synchro <ip:port>]");
     std::process::exit(2)
 }
@@ -138,6 +139,37 @@ fn usage() -> ! {
 fn abandon(message: &str) -> ! {
     eprintln!("erreur : {message}");
     std::process::exit(1)
+}
+
+/// Politique de frais du TESTNET : seul `0` est accepté.
+///
+/// Ce n'est **pas** une règle de protocole — `fee` reste dans le format, et un
+/// marché de frais existera un jour. C'est une protection de confidentialité,
+/// et elle est temporaire par nature.
+///
+/// Raison : `fee` est un champ PUBLIC de `ProvedTx` **et** une entrée publique du
+/// STARK. Or les frais sont aujourd'hui BRÛLÉS — aucun producteur ne les collecte,
+/// donc personne n'a la moindre raison d'en payer. Quiconque en met porterait donc
+/// un marqueur quasi unique sur le fil, **sans aucune contrepartie** : la valeur
+/// choisie survivrait à l'identité de transport éphémère, au chiffrement des
+/// destinataires et au witness-hiding, et relierait entre elles toutes les
+/// transactions du même payeur.
+///
+/// Tant que rien ne dépense les frais, le champ ne doit porter AUCUN bit.
+fn verifier_frais_testnet(frais: u64) {
+    if frais != 0 {
+        abandon(
+            "frais non nuls REFUSÉS sur ce testnet.\n\
+             \n\
+             `fee` est public (champ de ProvedTx et entrée du STARK) et les frais sont\n\
+             BRÛLÉS : aucun producteur ne les collecte, donc en payer n'achète rien et\n\
+             vous marque durablement — la valeur relie entre elles toutes vos\n\
+             transactions, par-dessus l'identité de transport éphémère et le\n\
+             chiffrement des destinataires.\n\
+             \n\
+             Utilisez --frais 0, ou omettez l'option.",
+        )
+    }
 }
 
 struct Options {
@@ -178,7 +210,8 @@ fn lire_options(args: &[String]) -> Options {
             "--frais" => {
                 o.frais = valeur
                     .parse()
-                    .unwrap_or_else(|_| abandon(&format!("frais invalides : {valeur}")))
+                    .unwrap_or_else(|_| abandon(&format!("frais invalides : {valeur}")));
+                verifier_frais_testnet(o.frais);
             }
             "--noeud" => {
                 o.noeud =

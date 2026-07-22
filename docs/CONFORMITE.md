@@ -76,6 +76,7 @@ défaut n'expose que la surface de consensus, et c'est un invariant vérifié en
 | Post-quantique : thèse et quantification | [`POST_QUANTIQUE.md`](POST_QUANTIQUE.md) |
 | Dette de backend PQ et critères de re-test | [`BACKEND_PQ.md`](BACKEND_PQ.md) |
 | Exploitation d'un nœud | [`OPERATEUR.md`](OPERATEUR.md) |
+| Limites du testnet, reset, réaction à la valeur | [`TESTNET.md`](TESTNET.md) |
 
 ⚠️ **`CLAUDE.md` et `AGENTS.md` ne font pas autorité.** Ce sont des notes de
 travail destinées à des agents. En cas de divergence avec `docs/`, **`docs/` a
