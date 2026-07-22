@@ -649,6 +649,37 @@ commitments + tx_digest, non une contrainte uniforme sur tout hachage consensus.
 ## Candidat d'implémentation
 
 `winterfell` (STARK, Rust) : prouveur/vérifieur génériques, Rescue-Prime fourni,
-pas de trusted setup, sécurité 100+ bits configurables, hash-based (post-quantique).
+pas de trusted setup, hash-based (post-quantique). ⚠️ La formule « sécurité 100+ bits
+configurables » qui figurait ici était trompeuse : elle vaut pour la sécurité
+CONJECTURÉE — voir la section « Soundness » ci-dessous, qui donne les deux chiffres.
 Alternative si blocage : `miden-crypto`/RPO. À benchmarker : taille de preuve et temps
 de génération pour 2 entrées / 2 sorties, profondeur 32.
+
+
+## Soundness : conjecturée vs PROUVÉE (mesurée, T3)
+
+Chiffres **annoncés par winterfell** sur une preuve réelle (2/2, profondeur 32),
+pas estimés — `cargo test -p circuit --release --lib niveau_de_securite --
+--ignored --nocapture` :
+
+```
+paramètres : 32 requêtes, blowup 16, grinding 0, extension quadratique
+CONJECTURÉE (conjecture 1, eprint 2021/582) : 127 bits
+PROUVÉE — décodage par liste :  62 bits | décodage unique : 29 bits
+```
+
+La sécurité *conjecturée* suppose vraie une conjecture de la littérature FRI qui
+n'est pas démontrée ; la *prouvée* est ce qui tient sans elle. Cette borne est
+celle de la SOUNDNESS : la difficulté de forger une preuve invalide — donc, au
+pire, de créer de la monnaie.
+
+**62 bits n'est pas un niveau de production pour une monnaie.** Le remède est
+paramétrique et connu (la sécurité prouvée demande 2× à 3× plus de requêtes que la
+conjecturée à niveau égal) : augmenter `num_queries` — 32 aujourd'hui dans
+`proof_options_hi` — au prix direct de la taille de preuve, qui est le coût
+permanent payé par chaque nœud. **Arbitrage OUVERT, à trancher avant que la chaîne
+ait de la valeur.**
+
+⚠️ Ce chiffre ne dépend pas du quantique : il vaut déjà contre un adversaire
+classique. Il est écrit parce qu'annoncer 127 bits sans nommer la conjecture serait
+un mensonge par omission. Argument complet : docs/POST_QUANTIQUE.md §5.
