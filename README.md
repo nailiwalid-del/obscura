@@ -100,3 +100,17 @@ possible**. L'état est append-only de bout en bout ; supporter les réorganisat
 exigerait de redessiner le ledger, pas d'ajouter une fonction.
 
 **Prototype pédagogique — pas d'audit de sécurité, ne pas utiliser en production.**
+
+## Licence
+
+Double licence, au choix de l'utilisateur :
+
+- MIT ([LICENSE-MIT](LICENSE-MIT))
+- Apache-2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+
+C'est le double standard de l'écosystème Rust : le MIT est le plus permissif, et
+l'Apache-2.0 ajoute une **concession de brevets** explicite que le MIT n'a pas —
+utile pour un projet cryptographique, où le risque de brevet n'est pas théorique.
+
+Sauf mention contraire, toute contribution soumise à ce dépôt sera double-licenciée
+de la même façon, sans condition supplémentaire.
