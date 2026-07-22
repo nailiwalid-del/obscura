@@ -554,9 +554,17 @@ impl Bloc {
     /// ni le scellement ni le certificat. Ajouter un vote ne change donc pas l'`id`,
     /// et les votes des autres restent valides.
     pub fn signer_vote(&mut self, index: usize, identite: &SigKeypair) {
-        debug_assert!(index < MAX_AUTORITES, "index de votant hors borne");
         let id = self.id();
-        let sig = identite.sign(DOMAINE_VOTE, &id);
+        self.poser_vote(index, identite.sign(DOMAINE_VOTE, &id));
+    }
+
+    /// Pose un vote DÉJÀ SIGNÉ au certificat, à sa place dans l'ordre croissant.
+    ///
+    /// C'est la moitié utilisée par le collecteur : il reçoit les signatures des
+    /// autres autorités et les assemble, sans jamais détenir leurs clés.
+    /// [`Bloc::signer_vote`] n'est que « signer soi-même puis poser ».
+    pub fn poser_vote(&mut self, index: usize, sig: HybridSignature) {
+        debug_assert!(index < MAX_AUTORITES, "index de votant hors borne");
         let mut c = self.certificat.take().unwrap_or(Certificat {
             masque: 0,
             signatures: Vec::new(),

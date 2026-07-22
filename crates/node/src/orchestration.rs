@@ -28,8 +28,9 @@
 
 use crate::archive::ArchiveBlocs;
 use crate::etranglement::Etrangleur;
-use crate::message::Message;
+use crate::message::{Message, Vote};
 use crate::synchro::ReponseHistorique;
+use crate::votes::RegistreVotes;
 use circuit::ProvedTx;
 use crypto::sig::SigKeypair;
 use ledger::bloc::Bloc;
@@ -62,6 +63,14 @@ pub enum Action {
     Envoyer(PeerId, Message),
     /// Diffuser à tous les pairs (phase floraison, ou embargo expiré).
     Diffuser(Message),
+    /// PERSISTER le registre de votes, **avant** les actions qui suivent.
+    ///
+    /// L'orchestration est une fonction PURE : elle ne fait aucune E/S. Mais un vote
+    /// doit être écrit sur disque AVANT d'être émis, sinon un nœud redémarré peut
+    /// promettre autre chose (cf. [`crate::votes`]). L'ordre des actions porte donc
+    /// la garantie, et l'exécuteur doit **abandonner les actions suivantes** si
+    /// l'écriture échoue — sans quoi on aurait dit sans avoir promis.
+    PersisterVotes(Box<RegistreVotes>),
 }
 
 /// Un nœud : état de consensus + réserve + vue du réseau.
@@ -111,6 +120,25 @@ pub struct Noeud {
     adresses: HashMap<PeerId, SocketAddr>,
     /// Seaux à jetons du service d'historique, indexés sur le GROUPE RÉSEAU.
     etrangleur: Etrangleur,
+    /// Dernier vote émis — la règle de sûreté du consensus (cf. [`crate::votes`]).
+    ///
+    /// Chargé depuis le disque au démarrage : un registre neuf après redémarrage
+    /// autoriserait l'équivocation.
+    votes: RegistreVotes,
+    /// Votes reçus pour une proposition, indexés par identifiant de bloc puis par
+    /// index de votant.
+    ///
+    /// Le second niveau est une table indexée : recevoir deux fois le vote de la même
+    /// autorité ne la compte qu'une fois, sans déduplication explicite.
+    ///
+    /// ⚠️ Vidée à chaque bloc appliqué : garder les votes des hauteurs passées ne
+    /// sert à rien et offrirait une croissance mémoire non bornée à un pair bavard.
+    votes_recus: HashMap<[u8; 64], HashMap<u16, crypto::sig::HybridSignature>>,
+    /// La proposition que NOUS avons émise et pour laquelle nous collectons.
+    ///
+    /// `None` si nous ne sommes pas le producteur du tour, ou si le bloc est déjà
+    /// certifié. Conservée entière parce que le certificat s'assemble dessus.
+    proposition_en_cours: Option<Bloc>,
 }
 
 /// Nombre maximal d'adresses de pairs mémorisées.
@@ -135,7 +163,24 @@ impl Noeud {
             hauteur_max_vue,
             adresses: HashMap::new(),
             etrangleur: Etrangleur::new(),
+            votes: RegistreVotes::neuf(),
+            votes_recus: HashMap::new(),
+            proposition_en_cours: None,
         }
+    }
+
+    /// Installe le registre de votes chargé depuis le disque.
+    ///
+    /// ⚠️ À appeler AVANT toute participation au consensus. Sans cela, le nœud part
+    /// d'un registre vierge et peut voter une seconde fois à une position déjà
+    /// promise — exactement la faute que la persistance existe pour empêcher.
+    pub fn adopter_votes(&mut self, votes: RegistreVotes) {
+        self.votes = votes;
+    }
+
+    /// Position du dernier vote émis — pour le journal d'exploitation.
+    pub fn position_de_vote(&self) -> (u64, u32) {
+        self.votes.position()
     }
 
     /// Mémorise l'adresse OBSERVÉE d'un pair connecté (entrant comme sortant).
@@ -214,7 +259,8 @@ impl Noeud {
             // qui les émet parle une version PLUS RÉCENTE du protocole, pas une
             // version fautive — le sanctionner partitionnerait le réseau à la
             // première mise à jour.
-            Message::Proposition(_) | Message::Vote(_) => Vec::new(),
+            Message::Proposition(bloc) => self.sur_proposition(de, *bloc),
+            Message::Vote(v) => self.sur_vote(de, *v),
             Message::DemandeBloc { hauteur } => self.sur_demande_bloc(de, hauteur, maintenant_ms),
             Message::DemandeHistorique { hauteur } => {
                 self.sur_demande_historique(de, hauteur, maintenant_ms)
@@ -368,6 +414,146 @@ impl Noeud {
                 None
             }
         }
+    }
+    /// Reçoit une PROPOSITION : vérifie, puis vote — ou se tait.
+    ///
+    /// # Ordre de coût, et ce qu'on ne fait PAS
+    ///
+    /// Les contrôles O(1) (chaînage, hauteur, producteur légitime) précèdent la
+    /// consultation du registre, qui précède l'écriture disque. **Aucune preuve
+    /// STARK n'est vérifiée** : le certificat prouve l'accord sur QUEL bloc, pas sur
+    /// sa validité.
+    ///
+    /// C'est délibéré et il faut le lire comme tel : **on vote pour un bloc dont on
+    /// n'a pas vérifié les transactions.** Les vérifier avant de voter offrirait
+    /// `~4 ms × n_tx` de notre CPU à quiconque envoie une proposition — le vecteur de
+    /// DoS que tout le reste du nœud combat. Un producteur qui propose un bloc
+    /// invalide gaspille son tour : le bloc certifié sera refusé par tous à
+    /// l'application, y compris par lui.
+    fn sur_proposition(&mut self, de: PeerId, bloc: Bloc) -> Vec<Action> {
+        self.hauteur_max_vue = self.hauteur_max_vue.max(bloc.hauteur);
+
+        // Chaîne OUVERTE : aucun vote n'y a de sens.
+        if self.etat.autorites().is_empty() {
+            return Vec::new();
+        }
+        // Le bloc doit s'enchaîner sur NOTRE tête, à la hauteur suivante. Sinon on
+        // n'est pas en mesure d'en juger — et ce n'est pas une faute du proposeur,
+        // c'est peut-être nous qui sommes en retard.
+        if bloc.parent != self.etat.tete() || bloc.hauteur != self.etat.hauteur() + 1 {
+            return Vec::new();
+        }
+        // Le proposeur doit être le producteur légitime de (hauteur, vue).
+        let legitime = match self.etat.producteur_attendu(bloc.hauteur, bloc.vue) {
+            Some(pk) => pk.clone(),
+            None => return Vec::new(),
+        };
+        if !bloc.verifier_scellement(&legitime) {
+            // Une proposition mal scellée est une faute : elle nous a fait vérifier
+            // une signature pour rien.
+            self.pairs.ajuster_score(&de, PENALITE_BLOC_INVALIDE);
+            return Vec::new();
+        }
+
+        // Sommes-nous une autorité, et laquelle ?
+        let Some(notre_index) = self.notre_index() else {
+            return Vec::new();
+        };
+
+        let id = bloc.id();
+        // LA RÈGLE DE SÛRETÉ. Un refus ici n'est pas une faute du proposeur : c'est
+        // nous qui avons déjà promis ailleurs.
+        if !self.votes.peut_voter(bloc.hauteur, bloc.vue, &id) {
+            return Vec::new();
+        }
+        self.votes.enregistrer(bloc.hauteur, bloc.vue, id);
+
+        // PERSISTER D'ABORD, ÉMETTRE ENSUITE. L'ordre des actions porte la garantie ;
+        // l'exécuteur abandonne la suite si l'écriture échoue.
+        vec![
+            Action::PersisterVotes(Box::new(self.votes.clone())),
+            Action::Envoyer(
+                de,
+                Message::Vote(Box::new(Vote {
+                    id,
+                    index: notre_index,
+                    signature: self.identite.sign(ledger::bloc::DOMAINE_VOTE, &id),
+                })),
+            ),
+        ]
+    }
+
+    /// Reçoit un VOTE : l'accumule, et diffuse le bloc certifié au quorum.
+    fn sur_vote(&mut self, de: PeerId, vote: Vote) -> Vec<Action> {
+        // Nous ne collectons que pour NOTRE proposition en cours. Un vote pour autre
+        // chose est ignoré sans pénalité : il peut viser un autre producteur.
+        let Some(proposition) = self.proposition_en_cours.as_ref() else {
+            return Vec::new();
+        };
+        if proposition.id() != vote.id {
+            return Vec::new();
+        }
+        let Some(pk) = self.etat.autorites().get(vote.index as usize) else {
+            // Un index hors liste : le pair nous a fait chercher pour rien.
+            self.pairs.ajuster_score(&de, PENALITE_BLOC_INVALIDE);
+            return Vec::new();
+        };
+        let pk = pk.clone();
+        if !crypto::sig::verify(&pk, ledger::bloc::DOMAINE_VOTE, &vote.id, &vote.signature) {
+            // Vérification imposée pour rien : c'est une faute.
+            self.pairs.ajuster_score(&de, PENALITE_BLOC_INVALIDE);
+            return Vec::new();
+        }
+
+        // Table indexée : recevoir deux fois le même votant ne le compte qu'une fois.
+        let recus = self.votes_recus.entry(vote.id).or_default();
+        recus.insert(vote.index, vote.signature);
+        if recus.len() < self.etat.quorum_requis() {
+            return Vec::new();
+        }
+
+        // QUORUM ATTEINT — on assemble et on diffuse le bloc CERTIFIÉ.
+        let mut bloc = match Bloc::from_bytes(&proposition.to_bytes()) {
+            Ok(b) => b,
+            Err(_) => return Vec::new(),
+        };
+        let mut votants: Vec<u16> = recus.keys().copied().collect();
+        votants.sort_unstable();
+        for index in votants {
+            if let Some(sig) = recus.get(&index) {
+                bloc.poser_vote(index as usize, sig.clone());
+            }
+        }
+        self.proposition_en_cours = None;
+        self.votes_recus.clear();
+
+        // On l'applique chez nous d'abord : diffuser un bloc qu'on n'a pas su
+        // appliquer soi-même reviendrait à demander aux autres de nous croire.
+        match self.etat.appliquer_bloc(&bloc) {
+            Ok(_) => {
+                for tx in &bloc.transactions {
+                    self.mempool.retirer(&tx.tx_digest);
+                }
+                self.mempool.purger(&self.etat);
+                self.archive.conserver(&bloc);
+                self.hauteur_max_vue = self.hauteur_max_vue.max(bloc.hauteur);
+                match Bloc::from_bytes(&bloc.to_bytes()) {
+                    Ok(copie) => vec![Action::Diffuser(Message::Bloc(Box::new(copie)))],
+                    Err(_) => Vec::new(),
+                }
+            }
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// Notre index dans la liste d'autorités, si nous en sommes une.
+    fn notre_index(&self) -> Option<u16> {
+        let notre = self.identite.public.to_bytes();
+        self.etat
+            .autorites()
+            .iter()
+            .position(|pk| pk.to_bytes() == notre)
+            .map(|i| i as u16)
     }
 
     /// Un bloc arrive : on l'applique s'il prolonge NOTRE chaîne.
@@ -1019,6 +1205,215 @@ mod tests {
         signe.signer_scellement(&SigKeypair::generate());
         assert!(n.traiter(p, Message::Bloc(Box::new(signe)), 0).is_empty());
         assert_eq!(n.pairs.get(&p).unwrap().score, PENALITE_BLOC_INVALIDE);
+    }
+
+    /// Genèse à quatre autorités (f = 1, quorum 3).
+    #[cfg(test)]
+    fn noeud_a_quatre_autorites() -> (Noeud, Vec<SigKeypair>) {
+        let cles: Vec<SigKeypair> = (0..4).map(|_| SigKeypair::generate()).collect();
+        let genese = ledger::bloc::Bloc::genese_avec_autorites(
+            Vec::new(),
+            cles.iter().map(|k| k.public.clone()).collect(),
+        )
+        .expect("genèse");
+        let etat = ProvedLedgerState::depuis_genese_depth(&genese, 4).expect("amorçage");
+        let n = Noeud::new(
+            SigKeypair::from_bytes_secret(&cles[0].to_bytes_secret()).expect("clé 0"),
+            etat,
+            [7u8; 32],
+        );
+        (n, cles)
+    }
+
+    /// Proposition VIDE, scellée par `producteur`.
+    #[cfg(test)]
+    fn proposition_de(n: &Noeud, producteur: &SigKeypair) -> ledger::bloc::Bloc {
+        let mut b =
+            ledger::bloc::Bloc::sceller(&n.etat.tete(), n.etat.hauteur() + 1, Vec::new()).unwrap();
+        b.signer_scellement(producteur);
+        b
+    }
+
+    /// Une proposition du producteur LÉGITIME reçoit notre vote — et la persistance
+    /// est demandée AVANT l'envoi. L'ordre des deux actions EST la garantie.
+    #[test]
+    fn proposition_legitime_recoit_un_vote() {
+        let (mut n, cles) = noeud_a_quatre_autorites();
+        n.identite = SigKeypair::from_bytes_secret(&cles[1].to_bytes_secret()).unwrap();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+
+        let bloc = proposition_de(&n, &cles[0]);
+        let actions = n.traiter(p, Message::Proposition(Box::new(bloc)), 0);
+        match actions.as_slice() {
+            [Action::PersisterVotes(_), Action::Envoyer(vers, Message::Vote(v))] => {
+                assert_eq!(*vers, p, "le vote revient au proposeur");
+                assert_eq!(v.index, 1, "nous sommes l'autorité 1");
+            }
+            autres => panic!(
+                "persistance PUIS vote attendus, reçu {} actions",
+                autres.len()
+            ),
+        }
+    }
+
+    /// Une proposition d'un IMPOSTEUR : aucun vote, et une sanction — elle nous a
+    /// fait vérifier une signature pour rien.
+    #[test]
+    fn proposition_dun_imposteur_ne_recoit_pas_de_vote() {
+        let (mut n, cles) = noeud_a_quatre_autorites();
+        n.identite = SigKeypair::from_bytes_secret(&cles[1].to_bytes_secret()).unwrap();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+
+        // L'autorité 2 propose alors que la hauteur 1 revient à l'autorité 0.
+        let bloc = proposition_de(&n, &cles[2]);
+        assert!(n
+            .traiter(p, Message::Proposition(Box::new(bloc)), 0)
+            .is_empty());
+        assert_eq!(n.pairs.get(&p).unwrap().score, PENALITE_BLOC_INVALIDE);
+    }
+
+    /// LA RÈGLE DE SÛRETÉ, vue depuis l'orchestration : avoir déjà promis à cette
+    /// position pour un AUTRE bloc interdit de voter.
+    ///
+    /// ⚠️ On force l'état du registre plutôt que de fabriquer deux propositions
+    /// concurrentes : deux blocs VIDES à la même position ont le MÊME identifiant —
+    /// c'est la canonicité, et c'est voulu. Obtenir deux identifiants distincts à
+    /// position égale exige deux CONTENUS distincts, ce que ce test n'a pas besoin
+    /// de construire pour éprouver la règle.
+    #[test]
+    fn vote_refuse_a_une_position_deja_promise() {
+        let (mut n, cles) = noeud_a_quatre_autorites();
+        n.identite = SigKeypair::from_bytes_secret(&cles[1].to_bytes_secret()).unwrap();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+
+        // On a déjà promis, à la hauteur 1 vue 0, pour un AUTRE bloc.
+        let mut registre = crate::votes::RegistreVotes::neuf();
+        registre.enregistrer(1, 0, [0xAB; 64]);
+        n.adopter_votes(registre);
+
+        let bloc = proposition_de(&n, &cles[0]);
+        assert!(
+            n.traiter(p, Message::Proposition(Box::new(bloc)), 0)
+                .is_empty(),
+            "on ne vote pas deux fois différemment à la même position"
+        );
+        assert_eq!(
+            n.pairs.get(&p).unwrap().score,
+            0,
+            "et ce n'est PAS une faute du proposeur : c'est nous qui avons promis ailleurs"
+        );
+    }
+
+    /// Re-voter pour le MÊME bloc reste permis : idempotent, et nécessaire puisqu'un
+    /// vote peut se perdre sur le réseau.
+    #[test]
+    fn revoter_pour_le_meme_bloc_est_permis() {
+        let (mut n, cles) = noeud_a_quatre_autorites();
+        n.identite = SigKeypair::from_bytes_secret(&cles[1].to_bytes_secret()).unwrap();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+
+        let bloc = proposition_de(&n, &cles[0]);
+        let copie = ledger::bloc::Bloc::from_bytes(&bloc.to_bytes()).unwrap();
+        assert_eq!(
+            n.traiter(p, Message::Proposition(Box::new(bloc)), 0).len(),
+            2
+        );
+        assert_eq!(
+            n.traiter(p, Message::Proposition(Box::new(copie)), 0).len(),
+            2,
+            "le même bloc peut être revoté"
+        );
+    }
+
+    /// Un vote dont la signature ne correspond pas à `autorites[index]` : ignoré ET
+    /// pénalisé — il nous a imposé une vérification pour rien.
+    #[test]
+    fn vote_invalide_penalise() {
+        let (mut n, cles) = noeud_a_quatre_autorites();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+
+        let bloc = proposition_de(&n, &cles[0]);
+        let id = bloc.id();
+        n.proposition_en_cours = Some(bloc);
+
+        let imposteur = SigKeypair::generate();
+        let v = Vote {
+            id,
+            index: 2,
+            signature: imposteur.sign(ledger::bloc::DOMAINE_VOTE, &id),
+        };
+        assert!(n.traiter(p, Message::Vote(Box::new(v)), 0).is_empty());
+        assert_eq!(n.pairs.get(&p).unwrap().score, PENALITE_BLOC_INVALIDE);
+    }
+
+    /// Un vote pour un bloc que nous ne proposons PAS : ignoré SANS sanction — il
+    /// peut viser un autre producteur, ce n'est pas une faute.
+    #[test]
+    fn vote_hors_sujet_ignore_sans_sanction() {
+        let (mut n, cles) = noeud_a_quatre_autorites();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+        let id = [9u8; 64];
+        let v = Vote {
+            id,
+            index: 1,
+            signature: cles[1].sign(ledger::bloc::DOMAINE_VOTE, &id),
+        };
+        assert!(n.traiter(p, Message::Vote(Box::new(v)), 0).is_empty());
+        assert_eq!(n.pairs.get(&p).unwrap().score, 0, "aucune sanction");
+    }
+
+    /// AU QUORUM : le collecteur assemble, applique, et diffuse le bloc CERTIFIÉ.
+    #[test]
+    fn au_quorum_le_bloc_certifie_est_diffuse() {
+        let (mut n, cles) = noeud_a_quatre_autorites();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+
+        let mut bloc = proposition_de(&n, &cles[0]);
+        let id = bloc.id();
+        bloc.signer_vote(0, &cles[0]);
+        n.proposition_en_cours = Some(bloc);
+        n.votes_recus
+            .entry(id)
+            .or_default()
+            .insert(0, cles[0].sign(ledger::bloc::DOMAINE_VOTE, &id));
+
+        // Deuxième vote : pas encore le quorum (il en faut 3).
+        let v1 = Vote {
+            id,
+            index: 1,
+            signature: cles[1].sign(ledger::bloc::DOMAINE_VOTE, &id),
+        };
+        assert!(n.traiter(p, Message::Vote(Box::new(v1)), 0).is_empty());
+        assert_eq!(n.etat.hauteur(), 0, "rien n'est appliqué sans quorum");
+
+        // Troisième vote : QUORUM.
+        let v2 = Vote {
+            id,
+            index: 2,
+            signature: cles[2].sign(ledger::bloc::DOMAINE_VOTE, &id),
+        };
+        let actions = n.traiter(p, Message::Vote(Box::new(v2)), 0);
+        assert_eq!(n.etat.hauteur(), 1, "le bloc est appliqué chez nous");
+        match actions.as_slice() {
+            [Action::Diffuser(Message::Bloc(b))] => {
+                let cert = b.certificat.as_ref().expect("le bloc diffusé est CERTIFIÉ");
+                assert!(
+                    cert.nombre_de_votants() >= 3,
+                    "au moins 2f+1 votants distincts"
+                );
+            }
+            autres => panic!(
+                "diffusion d'un bloc certifié attendue, reçu {}",
+                autres.len()
+            ),
+        }
     }
 
     /// ÉLECTION : hors de son tour, `sceller` ne produit RIEN — pas même un octet

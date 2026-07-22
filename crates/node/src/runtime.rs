@@ -59,6 +59,14 @@ pub struct Runtime {
     liens: Liens,
     evenements: Receiver<Evenement>,
     emetteur_evenements: Sender<Evenement>,
+    /// Où persister le registre de votes.
+    ///
+    /// `None` par défaut. ⚠️ **Fail-closed** : sans dépôt, une action
+    /// [`Action::PersisterVotes`] échoue et les actions SUIVANTES sont abandonnées —
+    /// donc le vote n'est pas émis. Un nœud incapable d'écrire sa promesse ne doit
+    /// pas la faire : c'est exactement le cas où un redémarrage lui ferait promettre
+    /// autre chose.
+    donnees: Option<crate::persistance::Donnees>,
 }
 
 impl Runtime {
@@ -69,7 +77,16 @@ impl Runtime {
             liens: Arc::new(Mutex::new(HashMap::new())),
             evenements: rx,
             emetteur_evenements: tx,
+            donnees: None,
         }
+    }
+
+    /// Branche le dépôt où persister le registre de votes.
+    ///
+    /// Sans lui, le nœud ne vote pas (cf. le champ `donnees`).
+    pub fn avec_donnees(mut self, donnees: crate::persistance::Donnees) -> Self {
+        self.donnees = Some(donnees);
+        self
     }
 
     pub fn noeud(&self) -> &Noeud {
@@ -263,6 +280,23 @@ impl Runtime {
                         if file.try_send(octets).is_err() {
                             liens.remove(&vers);
                         }
+                    }
+                }
+                Action::PersisterVotes(registre) => {
+                    // La promesse AVANT la parole. Si l'écriture échoue — ou si
+                    // aucun dépôt n'est branché — on abandonne TOUTES les actions
+                    // suivantes, dont l'envoi du vote lui-même. Continuer
+                    // reviendrait à dire sans avoir promis, et un redémarrage
+                    // pourrait alors promettre autre chose.
+                    let ecrit = match &self.donnees {
+                        Some(d) => d.enregistrer_votes(&registre).is_ok(),
+                        None => false,
+                    };
+                    if !ecrit {
+                        eprintln!(
+                            "erreur : registre de votes NON persisté — le vote n'est pas                              émis. Un vote dit mais non écrit autoriserait l'équivocation                              au redémarrage."
+                        );
+                        return;
                     }
                 }
                 Action::Diffuser(message) => {
