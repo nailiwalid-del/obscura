@@ -179,6 +179,20 @@ pub enum BlocRefus {
     /// prouver qu'il est le producteur du tour.
     #[error("bloc de hauteur {hauteur} sans scellement : cette chaîne a des autorités")]
     ScellementManquant { hauteur: u64 },
+    /// Le certificat de quorum ne réunit pas `2f + 1` votes valides.
+    #[error("quorum insuffisant : {obtenu} votes sur {requis} requis")]
+    QuorumInsuffisant { obtenu: usize, requis: usize },
+    /// Une signature du certificat ne vérifie pas contre l'autorité que le masque
+    /// désigne. **Coûteux** : ce refus a consommé des vérifications.
+    #[error("vote invalide de l'autorité d'index {index}")]
+    VoteInvalide { index: usize },
+    /// Le masque désigne un index qui n'existe pas dans la liste d'autorités.
+    #[error("votant inconnu : index {index} hors de la liste d'autorités")]
+    VotantInconnu { index: usize },
+    /// Un certificat sur une chaîne OUVERTE : aucun quorum n'y a de sens, et
+    /// l'accepter donnerait deux encodages valides du même bloc.
+    #[error("certificat inattendu sur une chaîne ouverte")]
+    CertificatInattendu,
     /// Signature absente de la BONNE clé : soit un producteur hors de son tour, soit
     /// un tiers, soit une signature altérée. Faute non équivoque dans tous les cas.
     #[error("scellement invalide à la hauteur {hauteur} (producteur attendu : n° {attendu})")]
@@ -481,12 +495,27 @@ impl ProvedLedgerState {
     /// Producteur LÉGITIME de la hauteur `hauteur` : tour de rôle
     /// `autorites[(hauteur − 1) mod n]`. `None` sur une chaîne ouverte, ou pour la
     /// hauteur 0 (la genèse n'a pas de producteur, elle amorce).
-    pub fn producteur_attendu(&self, hauteur: u64) -> Option<&crypto::sig::SigPublicKey> {
+    pub fn producteur_attendu(&self, hauteur: u64, vue: u32) -> Option<&crypto::sig::SigPublicKey> {
         if self.autorites.is_empty() || hauteur == 0 {
             return None;
         }
-        let i = ((hauteur - 1) % self.autorites.len() as u64) as usize;
+        let n = self.autorites.len() as u64;
+        let i = ((hauteur - 1 + vue as u64) % n) as usize;
         Some(&self.autorites[i])
+    }
+
+    /// Quorum requis : `2f + 1`, avec `n = 3f + 1` donc `f = (n − 1) / 3`.
+    ///
+    /// À `n = 1` (autorité unique), `f = 0` et le quorum vaut 1 : la seule autorité
+    /// se certifie elle-même. Ce n'est pas une faiblesse du calcul — c'est ce que
+    /// « tolérer zéro faute » signifie, et c'est la configuration d'un testnet à un
+    /// seul opérateur.
+    pub fn quorum_requis(&self) -> usize {
+        let n = self.autorites.len();
+        if n == 0 {
+            return 0;
+        }
+        2 * ((n - 1) / 3) + 1
     }
 
     /// Historique des sorties, si ce nœud tient le rôle d'archiviste.
@@ -628,7 +657,7 @@ impl ProvedLedgerState {
         // un scellement n'y a aucun sens et l'accepter donnerait deux encodages
         // valides du même bloc. Chaîne À AUTORITÉS : signature du producteur du TOUR
         // exigée — c'est ce qui fait de « qui scelle » une règle et non une course.
-        match self.producteur_attendu(bloc.hauteur) {
+        match self.producteur_attendu(bloc.hauteur, bloc.vue) {
             None => {
                 if bloc.scellement.is_some() {
                     return Err(BlocRefus::ScellementInattendu);
@@ -641,12 +670,50 @@ impl ProvedLedgerState {
                     });
                 }
                 if !bloc.verifier_scellement(attendu) {
-                    let attendu = ((bloc.hauteur - 1) % self.autorites.len() as u64) as usize;
+                    let attendu = ((bloc.hauteur - 1 + bloc.vue as u64)
+                        % self.autorites.len() as u64) as usize;
                     return Err(BlocRefus::ScellementInvalide {
                         hauteur: bloc.hauteur,
                         attendu,
                     });
                 }
+            }
+        }
+
+        // CERTIFICAT DE QUORUM (ADR J1) — placé APRÈS le chaînage (un bloc d'une
+        // autre chaîne tombe en `ParentInattendu` sans rien coûter) et AVANT tout
+        // STARK. L'ordre importe : le certificat coûte jusqu'à `2f+1` vérifications
+        // hybrides, la preuve en coûte davantage. L'inverser offrirait à un pair
+        // hostile de déclencher la vérification de preuves avec un certificat bidon.
+        if self.autorites.is_empty() {
+            // Chaîne OUVERTE : aucun quorum n'y a de sens. L'accepter donnerait deux
+            // encodages valides du même bloc — même raison que `ScellementInattendu`.
+            if bloc.certificat.is_some() {
+                return Err(BlocRefus::CertificatInattendu);
+            }
+        } else {
+            let requis = self.quorum_requis();
+            let Some(cert) = bloc.certificat.as_ref() else {
+                return Err(BlocRefus::QuorumInsuffisant { obtenu: 0, requis });
+            };
+            let id = bloc.id();
+            let mut obtenu = 0usize;
+            // `votants()` est croissant et sans doublon PAR CONSTRUCTION (un bit est
+            // mis ou non) : c'est ce qui rend ce comptage sûr sans déduplication.
+            for (rang, index) in cert.votants().enumerate() {
+                let Some(pk) = self.autorites.get(index) else {
+                    return Err(BlocRefus::VotantInconnu { index });
+                };
+                let Some(sig) = cert.signatures.get(rang) else {
+                    return Err(BlocRefus::VoteInvalide { index });
+                };
+                if !crypto::sig::verify(pk, crate::bloc::DOMAINE_VOTE, &id, sig) {
+                    return Err(BlocRefus::VoteInvalide { index });
+                }
+                obtenu += 1;
+            }
+            if obtenu < requis {
+                return Err(BlocRefus::QuorumInsuffisant { obtenu, requis });
             }
         }
 
@@ -879,6 +946,139 @@ impl Default for ProvedLedgerState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Chaîne à `n` autorités, l'état amorcé dessus, et les clés correspondantes.
+    fn chaine_a(n: usize) -> (ProvedLedgerState, Vec<crypto::sig::SigKeypair>) {
+        let cles: Vec<_> = (0..n)
+            .map(|_| crypto::sig::SigKeypair::generate())
+            .collect();
+        let genese = crate::bloc::Bloc::genese_avec_autorites(
+            Vec::new(),
+            cles.iter().map(|k| k.public.clone()).collect(),
+        )
+        .expect("genèse");
+        let etat = ProvedLedgerState::depuis_genese_depth(&genese, 4).expect("amorçage");
+        (etat, cles)
+    }
+
+    /// Bloc VIDE de hauteur 1, scellé par le producteur du tour (vue 0 → index 0).
+    fn bloc_h1(etat: &ProvedLedgerState, cles: &[crypto::sig::SigKeypair]) -> crate::bloc::Bloc {
+        let mut b = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new()).expect("scellement");
+        b.signer_scellement(&cles[0]);
+        b
+    }
+
+    /// `2f+1` sur `n = 3f+1`. À n=4, f=1, il faut 3 votes.
+    #[test]
+    fn quorum_requis_suit_3f_plus_1() {
+        for (n, attendu) in [(1, 1), (2, 1), (3, 1), (4, 3), (7, 5), (10, 7), (64, 43)] {
+            let (etat, _) = chaine_a(n);
+            assert_eq!(etat.quorum_requis(), attendu, "n = {n}");
+        }
+    }
+
+    #[test]
+    fn quorum_insuffisant_refuse() {
+        let (mut etat, cles) = chaine_a(4);
+        let mut bloc = bloc_h1(&etat, &cles);
+        bloc.signer_vote(0, &cles[0]);
+        bloc.signer_vote(1, &cles[1]); // 2 votes, il en faut 3
+        assert!(matches!(
+            etat.appliquer_bloc(&bloc),
+            Err(BlocRefus::QuorumInsuffisant {
+                obtenu: 2,
+                requis: 3
+            })
+        ));
+    }
+
+    #[test]
+    fn quorum_suffisant_accepte() {
+        let (mut etat, cles) = chaine_a(4);
+        let mut bloc = bloc_h1(&etat, &cles);
+        for (i, cle) in cles.iter().enumerate().take(3) {
+            bloc.signer_vote(i, cle);
+        }
+        assert!(etat.appliquer_bloc(&bloc).is_ok());
+        assert_eq!(etat.hauteur(), 1);
+    }
+
+    /// Un vote signé par QUELQU'UN D'AUTRE que l'autorité que le masque désigne.
+    #[test]
+    fn vote_d_un_imposteur_refuse() {
+        let (mut etat, cles) = chaine_a(4);
+        let mut bloc = bloc_h1(&etat, &cles);
+        bloc.signer_vote(0, &cles[0]);
+        bloc.signer_vote(1, &cles[1]);
+        bloc.signer_vote(2, &crypto::sig::SigKeypair::generate()); // imposteur
+        assert!(matches!(
+            etat.appliquer_bloc(&bloc),
+            Err(BlocRefus::VoteInvalide { index: 2 })
+        ));
+    }
+
+    /// LE test qui justifie `DOMAINE_VOTE` : un SCELLEMENT rejoué comme vote est
+    /// refusé. Sans domaines séparés, le scellement du producteur compterait comme
+    /// un vote et `2f` votes réels suffiraient à en afficher `2f+1`.
+    #[test]
+    fn scellement_rejoue_comme_vote_refuse() {
+        let (mut etat, cles) = chaine_a(4);
+        let mut bloc = bloc_h1(&etat, &cles);
+        let id = bloc.id();
+        bloc.certificat = Some(crate::bloc::Certificat {
+            masque: 0b0111,
+            signatures: (0..3)
+                .map(|i| cles[i].sign(crate::bloc::DOMAINE_SCELLEMENT, &id))
+                .collect(),
+        });
+        assert!(matches!(
+            etat.appliquer_bloc(&bloc),
+            Err(BlocRefus::VoteInvalide { .. })
+        ));
+    }
+
+    /// Un masque désignant un index hors de la liste d'autorités.
+    #[test]
+    fn votant_inconnu_refuse() {
+        let (mut etat, cles) = chaine_a(4);
+        let mut bloc = bloc_h1(&etat, &cles);
+        for (i, cle) in cles.iter().enumerate().take(3) {
+            bloc.signer_vote(i, cle);
+        }
+        if let Some(c) = bloc.certificat.as_mut() {
+            c.masque |= 1 << 40; // index 40, alors que n = 4
+        }
+        assert!(matches!(
+            etat.appliquer_bloc(&bloc),
+            Err(BlocRefus::VotantInconnu { index: 40 })
+        ));
+    }
+
+    /// La VUE déplace le producteur légitime : c'est tout le mécanisme du futur
+    /// changement de vue.
+    #[test]
+    fn la_vue_deplace_le_producteur() {
+        let (etat, _) = chaine_a(4);
+        let p0 = etat.producteur_attendu(1, 0).map(|k| k.to_bytes());
+        let p1 = etat.producteur_attendu(1, 1).map(|k| k.to_bytes());
+        assert_ne!(p0, p1, "la vue suivante désigne une AUTRE autorité");
+        // Et elle boucle sur la liste.
+        assert_eq!(p0, etat.producteur_attendu(1, 4).map(|k| k.to_bytes()));
+    }
+
+    /// Un certificat sur une chaîne OUVERTE : refusé, sinon deux encodages valides
+    /// du même bloc coexisteraient.
+    #[test]
+    fn certificat_sur_chaine_ouverte_refuse() {
+        let genese = crate::bloc::Bloc::genese();
+        let mut etat = ProvedLedgerState::depuis_genese_depth(&genese, 4).expect("amorçage");
+        let mut bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new()).expect("scellement");
+        bloc.signer_vote(0, &crypto::sig::SigKeypair::generate());
+        assert!(matches!(
+            etat.appliquer_bloc(&bloc),
+            Err(BlocRefus::CertificatInattendu)
+        ));
+    }
     use circuit::{prove_tx, ProvedInput, SpendNote};
     use proved_hash::domain::Domain;
     use proved_hash::felt::Felt;
@@ -966,9 +1166,12 @@ mod tests {
         ));
 
         // Le BON producteur, trois hauteurs de suite : a (h=1), b (h=2), a (h=3).
-        for (h, producteur) in [(1u64, &a), (2, &b), (3, &a)] {
+        // À n=2, f=0 donc le quorum vaut 1 : le vote du producteur suffit. C'est le
+        // sens de « tolérer zéro faute », pas une faiblesse du calcul.
+        for (h, producteur, index) in [(1u64, &a, 0usize), (2, &b, 1), (3, &a, 0)] {
             let mut bloc = crate::bloc::Bloc::sceller(&etat.tete(), h, Vec::new()).unwrap();
             bloc.signer_scellement(producteur);
+            bloc.signer_vote(index, producteur);
             etat.appliquer_bloc(&bloc)
                 .unwrap_or_else(|e| panic!("hauteur {h} par le bon producteur : {e}"));
             assert_eq!(etat.hauteur(), h);
@@ -1040,6 +1243,7 @@ mod tests {
         );
         let mut bon = crate::bloc::Bloc::sceller(&relu.tete(), 1, Vec::new()).unwrap();
         bon.signer_scellement(&a);
+        bon.signer_vote(0, &a);
         relu.appliquer_bloc(&bon)
             .expect("bon producteur accepté après rechargement");
     }

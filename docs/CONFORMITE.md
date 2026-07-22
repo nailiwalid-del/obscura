@@ -50,10 +50,11 @@ Fixture rejouable : [`docs/fixtures/conformite-v2/`](fixtures/conformite-v2/READ
 cargo test -p node --test conformite
 ```
 
-Couvre : décodage de bloc, identifiant de genèse (autorités comprises), amorçage
-d'état, chaînage, élection de producteur, vérification de scellement, avancée de
-la tête. **Ne couvre aucune transaction ni preuve STARK** — voir le README de la
-fixture, qui dit aussi pourquoi.
+Couvre : décodage de bloc **`0x04`**, identifiant de genèse (autorités
+comprises), amorçage d'état, chaînage, élection de producteur, vérification de
+scellement, **certificat de quorum**, avancée de la tête. **Ne couvre aucune
+transaction ni preuve STARK**, et son quorum n'a qu'**un seul votant** (`n = 1`,
+donc `f = 0`) — voir le README de la fixture, qui dit aussi pourquoi.
 
 ## 3. Suite complète
 
@@ -89,7 +90,12 @@ raison**, et la divergence est un défaut à signaler.
 - **Aucun audit externe n'a eu lieu.**
 - `keyGen`, `encap`, `sigGen` et le contexte ML-DSA ne sont pas couverts par
   vecteurs officiels (§1).
-- La fixture de consensus ne couvre aucune transaction (§2).
+- La fixture de consensus ne couvre aucune transaction (§2), ni un quorum à
+  plusieurs votants.
+- **Le protocole de vue n'est pas livré** (jalon J1-b) : le format du certificat
+  et sa vérification le sont, mais aucun vote ne circule sur le fil. Une chaîne à
+  `n ≥ 4` ne produit donc aucun bloc aujourd'hui
+  ([`PROTOCOL.md`](PROTOCOL.md), « Finalité : le bloc »).
 - Le backend PQ est marqué `unmaintained` en amont — dette ouverte, assumée et
   datée ([`BACKEND_PQ.md`](BACKEND_PQ.md)).
 - Les limites connues du réseau sont listées dans

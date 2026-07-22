@@ -271,7 +271,11 @@ impl Noeud {
         // même pas diffusable — chaque récepteur le refuse avant tout coût STARK —
         // donc on n'y brûle pas un cycle. Chaîne OUVERTE : comportement historique.
         let prochaine = self.etat.hauteur() + 1;
-        let doit_signer = match self.etat.producteur_attendu(prochaine) {
+        // VUE 0 : J1-a ne livre pas le protocole de vue (c'est J1-b). Le nœud ne
+        // produit donc que des blocs de vue 0, et n'en accepte pas d'autre tant que
+        // rien ne fait avancer la vue.
+        let vue = 0u32;
+        let doit_signer = match self.etat.producteur_attendu(prochaine, vue) {
             Some(attendu) => {
                 if attendu.to_bytes() != self.identite.public.to_bytes() {
                     return None;
@@ -325,6 +329,17 @@ impl Noeud {
             Bloc::sceller(&self.etat.tete(), self.etat.hauteur() + 1, transactions).ok()?;
         if doit_signer {
             bloc.signer_scellement(&self.identite);
+            // NOTRE VOTE (ADR J1). Sans lui, on produirait un bloc que nous-mêmes
+            // refuserions pour quorum insuffisant — et qu'aucun pair n'accepterait.
+            //
+            // ⚠️ À `n ≥ 4`, le quorum vaut `2f+1 ≥ 3` : notre seul vote NE SUFFIT
+            // PAS, et `appliquer_bloc` juste en dessous rejettera le bloc. C'est le
+            // comportement attendu de J1-a — rassembler les votes des autres est le
+            // travail de J1-b. À `n ≤ 3` (`f = 0`, quorum 1), l'auto-vote suffit et
+            // la chaîne avance.
+            let index =
+                ((self.etat.hauteur() + vue as u64) % self.etat.autorites().len() as u64) as usize;
+            bloc.signer_vote(index, &self.identite);
         }
         // On applique à NOTRE état avant de diffuser : diffuser un bloc qu'on n'a pas
         // su appliquer soi-même reviendrait à demander aux autres de nous croire.
