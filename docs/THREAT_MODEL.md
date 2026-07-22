@@ -741,3 +741,68 @@ bornee par la taille de la fenetre ; parade pratique : se resynchroniser juste a
 d'emettre. De meme, la protection contre la correlation synchro/envoi est
 CONSULTATIVE : l'outil ne memorise pas d'une invocation a l'autre quel noeud a servi
 l'historique, il rappelle donc l'avertissement inconditionnellement sur `envoyer`.
+
+## Canaux auxiliaires : ce qui est traité, et ce qui ne l'est pas
+
+Ajouté le 2026-07-22, défaut n°4 de la porte D. Jusqu'ici le sujet était
+**absent** de ce document — ni traité, ni écarté. Sous une thèse post-quantique,
+une absence non décidée est le pire des deux états.
+
+### Modèle d'adversaire retenu
+
+| Adversaire | Dans le périmètre ? |
+|---|---|
+| **Distant, mesurant les temps de réponse réseau** | **OUI** — c'est le seul qui existe en pratique sur un réseau public |
+| Local, partageant la machine (cache, hyperthreading, DVFS) | non — il a déjà le fichier de wallet, donc l'autorité de dépense |
+| Physique (consommation, EM, faute) | non — hors périmètre d'un prototype logiciel |
+
+Écarter les deux derniers est un **choix**, pas un oubli : un adversaire local a
+accès au fichier de wallet, qui est l'autorité de dépense ; le protéger du cache
+ne servirait à rien.
+
+### Traité : le scan du wallet ne dépend plus de nos notes
+
+**Le défaut.** `scan_proved_output` sortait tôt dès l'échec du déchiffrement
+AEAD. Le décodage de la note et le hachage Rescue final ne s'exécutaient donc
+**que pour les sorties qui nous appartiennent**, et la durée de traitement d'un
+bloc croissait avec leur nombre.
+
+**L'exploitation.** Le nœud qui sert l'historique observe la **cadence** de nos
+demandes — c'est déjà écrit plus haut dans ce document. Cette cadence dépendait
+donc du nombre de nos notes par bloc, ce que le chiffrement des enveloppes existe
+précisément pour cacher. La fuite était systématique, donc moyennable sur
+plusieurs blocs.
+
+**Le correctif.** Le chemin d'échec emprunte une note factice et exécute
+**exactement le même travail**. Coût : un hachage Rescue par sortie qui ne nous
+est pas destinée — négligeable devant la décapsulation KEM, qui a lieu pour
+toutes de toute façon. Les sorties anticipées qui subsistent ne portent que sur
+des données **publiques** (encodage du chiffré, point d'ordre faible) et ne
+distinguent pas nos sorties.
+
+### Non traité, et pourquoi
+
+- **La constance en temps de ML-KEM et ML-DSA** relève du backend. PQClean vise
+  des implémentations à temps constant, mais **nous ne le vérifions pas** et
+  aucun test de ce dépôt ne le mesure. C'est une hypothèse héritée, à réévaluer
+  au changement de backend (`docs/BACKEND_PQ.md`), d'autant que libcrux —
+  candidat — documente explicitement que ses **exécutables** ne sont pas vérifiés
+  résistants aux canaux auxiliaires, même quand le source vise l'indépendance au
+  secret.
+- **La cascade AEAD** repose sur les comparaisons à temps constant des crates
+  `aes-gcm` et `chacha20poly1305`. Hypothèse héritée, non mesurée ici.
+- **L'empreinte du fichier de wallet** est comparée avec `!=`, donc en temps non
+  constant. Ce n'est **pas** une faille : l'empreinte est un `dual_hash` **non
+  clefé**, que quiconque détient le fichier peut recalculer. Aucun secret ne
+  gouverne la comparaison. Consigné pour qu'un futur passage à un MAC clefé
+  n'oublie pas de changer aussi la comparaison.
+- **Le temps de preuve STARK** dépend de la forme `m`/`n`, qui est déjà publique
+  (cf. limites connues). Aucune information nouvelle n'y transite.
+
+### Ce qu'il faudrait pour aller plus loin
+
+Une mesure statistique réelle (type `dudect`) sur les chemins de scan et de
+décapsulation. Non fait, et **pas planifié** : cela demanderait un harnais de
+mesure et un environnement stable, et le résultat porterait surtout sur du code
+de backend que nous ne contrôlons pas. C'est un travail d'audit, pas de
+développement — il est nommé ici pour que son absence soit une décision.
