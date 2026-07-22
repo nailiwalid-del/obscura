@@ -16,3 +16,18 @@ wallet = { path = "../wallet" }
 hex.workspace = true
 thiserror.workspace = true
 rand_core.workspace = true
+
+[features]
+# Réexpose la feature de dev du crate `circuit`, UNIQUEMENT pour que l'exemple
+# `dimensionner-ouverture` puisse la déclarer en `required-features`. Elle n'est
+# PAS activée par défaut : l'invariant « build nu = surface consensus seule »
+# reste vérifié par la CI (`cargo tree -e features`).
+dev-circuits = ["circuit/dev-circuits"]
+
+# Cet exemple mesure une preuve d'ouverture (ADR J2) et dépend donc des gadgets
+# autonomes du crate `circuit`, qui sont gatés. Sans `required-features`, la passe
+# clippy PAR DÉFAUT de la CI tente de le compiler et échoue — c'est exactement ce
+# que cette passe existe pour attraper.
+[[example]]
+name = "dimensionner-ouverture"
+required-features = ["dev-circuits"]
