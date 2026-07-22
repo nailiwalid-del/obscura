@@ -49,6 +49,25 @@ servi de travers.
 
 Rien ne peut démarrer sans elle, et **rien ne peut la remplacer après coup**.
 
+### D'abord, chaque autorité publie sa clé
+
+```sh
+obscura-node --identite --donnees /var/lib/obscura
+```
+
+La commande imprime la clé publique du nœud sur **stdout** (≈3970 caractères
+hexadécimaux, seuls, sans prose autour — elle se redirige vers un fichier), crée
+l'identité si elle n'existe pas encore, et sort sans rien démarrer d'autre. C'est
+l'ordre normal des choses : votre clé doit être connue **avant** que la genèse
+n'existe.
+
+Chacun envoie cette clé au fabricant de la genèse. **Personne n'envoie son
+fichier `identite.cle`** — il contient le secret du nœud, et le perdre ou le
+divulguer coûte le tour de scellement, définitivement (la liste des autorités
+est gravée dans l'identifiant de la chaîne : elle ne se corrige pas).
+
+### Ensuite, la genèse
+
 ```sh
 # Chaîne fédérée : autorités + allocation initiale
 obscura-genese --sortie genese.bin     --autorite-hex <clé publique de l'autorité A>     --autorite-hex <clé publique de l'autorité B>     --allocation obs1…:1000000
@@ -115,11 +134,11 @@ Trois fichiers dans `--donnees` :
 
 | Fichier | Contenu | Perte = |
 |---|---|---|
-| `identite.bin` | **clé privée du nœud, EN CLAIR** | le nœud change de pair aux yeux du réseau |
+| `identite.cle` | **clé privée du nœud, EN CLAIR** | le nœud change de pair aux yeux du réseau |
 | `etat.bin` | état de consensus | resynchronisation depuis les pairs |
 | `historique.bin` | archive des sorties (si `--archiver`) | irrécupérable sans re-synchroniser depuis zéro |
 
-`identite.bin` est le seul qui ne se reconstruit pas. Sur Unix il est en `0600` ;
+`identite.cle` est le seul qui ne se reconstruit pas. Sur Unix il est en `0600` ;
 **il n'est pas chiffré** — sa protection est celle du système de fichiers.
 
 Les écritures sont **atomiques** (`tmp` + `rename`) : un arrêt brutal laisse la
@@ -160,7 +179,12 @@ n'est tenté : un nœud mal amorcé est indiscernable d'un nœud neuf en bonne s
 - **Aucune réorganisation n'est possible.** Une divergence est définitive.
 - **Le mempool n'est pas persisté** — sans gravité, les pairs réannoncent.
 - **Le nœud qui sert l'historique apprend** l'IP, la cadence et la position des
-  wallets, et peut **mentir par omission** : la racine annoncée reste cohérente.
-  Une seule source de synchronisation est un point de confiance.
+  wallets. Il peut aussi **mentir par omission** (taire une sortie : la racine
+  annoncée reste cohérente) ou **retenir sa tête** (se taire plus tôt qu'il ne
+  devrait). Les deux sont fermés côté wallet par
+  `obscura-wallet synchroniser --temoin <ip:port>`, qui corrobore chaque bloc
+  auprès d'un **second nœud** — dites donc à vos utilisateurs qu'il existe, et
+  **publiez l'adresse d'archivistes tenus par d'autres que vous** : deux nœuds
+  du même opérateur n'en valent qu'un.
 - **L'archiviste est le point de centralisation réel** du réseau.
 - Pas de Tor/I2P intégré, pas de métriques Prometheus, pas de client léger.
