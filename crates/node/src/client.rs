@@ -87,6 +87,18 @@ pub enum Arret {
     /// ⚠️ C'est le seul arrêt qui accuse. Il ne doit JAMAIS être confondu avec
     /// « à jour » : un wallet qui poursuivrait après ça aurait annulé le témoin.
     Desaccord(String),
+    /// Le nœud servant s'est tu à une hauteur que le TÉMOIN, lui, sert encore.
+    ///
+    /// C'est le mensonge inverse de l'omission, et le plus vicieux : au lieu de
+    /// tordre ce qu'il sert, le nœud se TAIT plus tôt. Le silence est exactement ce
+    /// que produit une chaîne épuisée, donc sans témoin on concluait « à jour » — et
+    /// un paiement récent devenait invisible sans qu'une seule ligne ne diffère
+    /// d'une synchronisation réussie.
+    ///
+    /// Le cas le plus fréquent n'est pas malveillant : un nœud qui n'a pas activé
+    /// `--archiver` se tait sur tout. Il n'en reste pas moins qu'un wallet pointé
+    /// sur lui n'est PAS à jour, et le lui dire est tout l'objet de cette variante.
+    TeteRetenue(String),
     /// Le témoin n'a rien répondu. Ce n'est pas un accord — c'est une ABSENCE de
     /// corroboration, et un témoin muet est un cas ordinaire (nœud sans
     /// `--archiver`, crédit d'étranglement épuisé). La boucle s'arrête sans
@@ -208,8 +220,24 @@ where
 
         let morceaux = match collecter_bloc(connexion, hauteur) {
             Recolte::Complet(m) => m,
+            // Le servant se tait. C'est le cas NORMAL d'un wallet à jour — et aussi
+            // celui d'un nœud qui retient sa tête. Les deux sont indistinguables
+            // localement : on repose donc au témoin la question restée sans réponse.
             Recolte::Silence => {
-                resume.arret = Arret::AJour;
+                resume.arret = match temoin.as_deref_mut() {
+                    Some(t) => match interroger(t, hauteur) {
+                        // Le témoin SERT ce que le servant tait : ce wallet n'est
+                        // pas à jour, quelle qu'en soit la raison.
+                        Recolte::Complet(_) => Arret::TeteRetenue(format!(
+                            "hauteur {hauteur} : le nœud servant ne la sert pas, le témoin si \
+                             — ce wallet n'est PAS à jour (nœud en retard, sans archive, \
+                             ou qui retient)"
+                        )),
+                        // Deux silences : la chaîne est réellement épuisée là.
+                        Recolte::Silence | Recolte::Incoherent(_) => Arret::AJour,
+                    },
+                    None => Arret::AJour,
+                };
                 return resume;
             }
             Recolte::Incoherent(raison) => {
@@ -298,13 +326,7 @@ fn corroborer<T: Read + Write>(
     hauteur: u64,
     annoncee: &proved_hash::digest::Digest,
 ) -> Corroboration {
-    if temoin
-        .envoyer(&Message::DemandeHistorique { hauteur }.to_bytes())
-        .is_err()
-    {
-        return Corroboration::Muet;
-    }
-    match collecter_bloc(temoin, hauteur) {
+    match interroger(temoin, hauteur) {
         Recolte::Complet(m) => {
             let sienne = m[0].racine_apres;
             if sienne.to_bytes() == annoncee.to_bytes() {
@@ -320,6 +342,18 @@ fn corroborer<T: Read + Write>(
         }
         Recolte::Silence | Recolte::Incoherent(_) => Corroboration::Muet,
     }
+}
+
+/// Demande une hauteur au témoin et rassemble sa réponse. Un envoi impossible vaut
+/// silence : le lien est coupé, il n'y a plus rien à en tirer.
+fn interroger<T: Read + Write>(temoin: &mut Connexion<T>, hauteur: u64) -> Recolte {
+    if temoin
+        .envoyer(&Message::DemandeHistorique { hauteur }.to_bytes())
+        .is_err()
+    {
+        return Recolte::Silence;
+    }
+    collecter_bloc(temoin, hauteur)
 }
 
 /// Les 8 premiers octets d'une racine, pour un message lisible. La comparaison,
