@@ -28,7 +28,8 @@
 use crypto::sig::SigKeypair;
 use ledger::bloc::Bloc;
 use ledger::proved_state::ProvedLedgerState;
-use node::orchestration::Noeud;
+use node::message::Message;
+use node::orchestration::{Action, Noeud};
 use node::persistance::Donnees;
 use proved_hash::digest::ShieldedSecret;
 use proved_hash::felt::Felt;
@@ -40,6 +41,15 @@ fn secret(graine: u64) -> ShieldedSecret {
     ShieldedSecret::from_felts(core::array::from_fn(|i| {
         Felt::from_canonical_u64(graine + i as u64).unwrap()
     }))
+}
+
+/// Un pair de test : identité et adresse.
+fn pair_de_test() -> (net::pairs::PeerId, std::net::SocketAddr) {
+    let id = net::pairs::PeerId::depuis_identite(&SigKeypair::generate().public);
+    (
+        id,
+        std::net::SocketAddr::from((std::net::Ipv4Addr::new(203, 0, 113, 1), 8333)),
+    )
 }
 
 /// Répertoire de données jetable, propre à ce test et à ce processus.
@@ -244,6 +254,101 @@ fn arret_et_reprise_du_producteur() {
         temoin.tree.root(),
         noeud.etat.tree.root(),
         "et la MÊME racine — la chaîne a bien repris, pas seulement le processus"
+    );
+
+    let _ = std::fs::remove_dir_all(&racine);
+}
+
+/// SÛRETÉ APRÈS REDÉMARRAGE : un nœud qui a voté, puis redémarre, ne vote pas pour
+/// un AUTRE bloc à la même `(hauteur, vue)`.
+///
+/// # Pourquoi ce test est le plus important du fichier
+///
+/// Sans registre persisté, il échoue — et l'échec réel ne serait pas un test rouge
+/// mais une **chaîne divergente**, définitive sur un ledger append-only. Deux blocs
+/// différents réuniraient `2f+1` à la même hauteur, deux nœuds honnêtes
+/// appliqueraient des blocs différents, et rien ne pourrait les réconcilier.
+///
+/// # Comment on obtient deux blocs distincts à la même position
+///
+/// Par leur CONTENU. Deux blocs VIDES à la même `(hauteur, vue)` ont le même
+/// identifiant — c'est la canonicité, et elle est voulue. Le second bloc porte donc
+/// une transaction.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
+fn le_redemarrage_ne_fait_pas_revoter() {
+    let racine = repertoire("revote");
+    let beneficiaire = Wallet::depuis_secret(secret(900), CONSENSUS_DEPTH);
+    let mut payeur = Wallet::depuis_secret(secret(700), CONSENSUS_DEPTH);
+
+    let donnees = Donnees::ouvrir(&racine).expect("ouverture");
+    let (identite, _) = donnees.charger_ou_creer_identite().expect("identité");
+    let genese = genese_pour(&[&payeur], &identite);
+    let etat = donnees.charger_ou_amorcer_etat(&genese).expect("amorçage");
+    rejouer_genese(&mut payeur, &genese, &etat);
+    let tx = payeur
+        .construire(&beneficiaire.adresse(), 300, 0)
+        .expect("transaction");
+
+    // Deux propositions DISTINCTES à la hauteur 1, vue 0 : l'une vide, l'autre
+    // portant la transaction. Contenus différents donc identifiants différents.
+    let mut bloc_a = Bloc::sceller(&genese.id(), 1, Vec::new()).expect("bloc A");
+    bloc_a.signer_scellement(&identite);
+    let mut bloc_b = Bloc::sceller(&genese.id(), 1, vec![tx]).expect("bloc B");
+    bloc_b.signer_scellement(&identite);
+    assert_ne!(
+        bloc_a.id(),
+        bloc_b.id(),
+        "deux contenus distincts, deux identifiants"
+    );
+
+    // ---------- LE NŒUD VOTE POUR A ----------
+    let mut noeud = Noeud::new(identite, etat, [7u8; 32]);
+    noeud.adopter_votes(donnees.charger_ou_creer_votes().expect("registre"));
+    let (p, adr) = pair_de_test();
+    noeud.pairs.ajouter(p, adr);
+
+    let copie_a = Bloc::from_bytes(&bloc_a.to_bytes()).expect("copie A");
+    let actions = noeud.traiter(p, Message::Proposition(Box::new(copie_a)), 0);
+    // Le registre est persisté par l'ACTION, dans l'ordre — ici on l'exécute nous-mêmes.
+    let mut vote_emis = false;
+    for a in &actions {
+        match a {
+            Action::PersisterVotes(r) => donnees.enregistrer_votes(r).expect("écriture"),
+            Action::Envoyer(_, Message::Vote(_)) => vote_emis = true,
+            _ => {}
+        }
+    }
+    assert!(vote_emis, "le nœud doit voter pour A");
+
+    // ---------- REDÉMARRAGE ----------
+    drop(noeud);
+    let donnees = Donnees::ouvrir(&racine).expect("réouverture");
+    let (identite2, creee) = donnees.charger_ou_creer_identite().expect("identité relue");
+    assert!(!creee, "l'identité survit");
+    let etat2 = donnees.charger_ou_amorcer_etat(&genese).expect("état relu");
+    let mut noeud = Noeud::new(identite2, etat2, [7u8; 32]);
+    noeud.adopter_votes(donnees.charger_ou_creer_votes().expect("registre relu"));
+    noeud.pairs.ajouter(p, adr);
+
+    // ---------- B NE DOIT PAS ÊTRE VOTÉ ----------
+    let copie_b = Bloc::from_bytes(&bloc_b.to_bytes()).expect("copie B");
+    assert!(
+        noeud
+            .traiter(p, Message::Proposition(Box::new(copie_b)), 0)
+            .is_empty(),
+        "ÉQUIVOCATION : après redémarrage, voter pour un AUTRE bloc à la même \
+         position produirait une divergence DÉFINITIVE"
+    );
+
+    // ---------- A RESTE VOTABLE ----------
+    let copie_a = Bloc::from_bytes(&bloc_a.to_bytes()).expect("copie A bis");
+    assert!(
+        !noeud
+            .traiter(p, Message::Proposition(Box::new(copie_a)), 0)
+            .is_empty(),
+        "re-voter pour le MÊME bloc reste permis : idempotent, et nécessaire \
+         puisqu'un vote peut se perdre"
     );
 
     let _ = std::fs::remove_dir_all(&racine);
