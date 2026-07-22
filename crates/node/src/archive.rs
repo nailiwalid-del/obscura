@@ -24,7 +24,7 @@
 //! - [`BLOCS_CONSERVES`] (64) plafonne le NOMBRE de blocs ;
 //! - [`OCTETS_CONSERVES`] (64 Mio) plafonne la TAILLE totale.
 //!
-//! Une seule borne ne suffirait pas. Un bloc plein pèse ≈ 34 Mio (512 × ~68 Kio) :
+//! Une seule borne ne suffirait pas. Un bloc plein pèse ≈ 52 Mio (512 × ~105 Kio) :
 //! plafonner à 64 blocs sans plafonner les octets autoriserait ≈ 2,1 Gio de mémoire
 //! résidente, décidés par les producteurs de blocs et pas par nous. À l'inverse,
 //! plafonner uniquement les octets laisserait une chaîne de blocs vides remplir
@@ -215,7 +215,7 @@ mod tests {
     ///
     /// Elle est ce qui empêche un producteur de blocs de décider notre empreinte
     /// mémoire : 64 blocs pleins vaudraient ≈ 2,1 Gio. Le test ne fabrique pas des
-    /// blocs de 34 Mio (il faudrait 512 preuves STARK) ; il vérifie l'INVARIANT
+    /// blocs de 52 Mio (il faudrait 512 preuves STARK) ; il vérifie l'INVARIANT
     /// permanent, qui est ce que la borne garantit réellement.
     #[test]
     fn le_budget_doctets_est_un_invariant_permanent() {

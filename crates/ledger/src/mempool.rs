@@ -3,7 +3,7 @@
 //!
 //! # L'asymétrie de coût est LE vecteur de DoS de ce projet
 //!
-//! Vérifier une `ProvedTx` coûte ~4 ms (vérification STARK) pour ~68 Kio envoyés.
+//! Vérifier une `ProvedTx` coûte ~4 ms (vérification STARK) pour ~105 Kio envoyés.
 //! Le rapport est écrasant en faveur de l'attaquant : avec une bande passante
 //! modeste il sature le CPU de tout le réseau, bien plus efficacement qu'avec une
 //! attaque volumétrique.
@@ -112,7 +112,7 @@ impl Mempool {
     }
 
     /// Les digests présents — c'est ce qu'on ANNONCE aux pairs (et non les
-    /// transactions elles-mêmes : annoncer 68 Kio à chaque pair serait une
+    /// transactions elles-mêmes : annoncer 105 Kio à chaque pair serait une
     /// amplification offerte à l'attaquant).
     pub fn digests(&self) -> Vec<[u8; 64]> {
         self.par_digest.keys().copied().collect()

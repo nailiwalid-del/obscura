@@ -140,14 +140,21 @@ pub const TAILLE_AUTORITE_MAX: usize = 4096;
 pub const VERSION_BLOC: u8 = 0x03;
 const DOMAINE_ID: &str = "obscura/bloc/id/v1";
 
-/// Taille indicative d'une `ProvedTx` (≈68 Kio) et cadre maximal de `net::frame`
-/// (1 Mio ; `ledger` ne dépend pas de `net`, d'où la constante répétée).
-const TAILLE_TX_INDICATIVE: usize = 68 * 1024;
+/// Taille indicative d'une `ProvedTx` **sur le fil** et cadre maximal de
+/// `net::frame` (1 Mio ; `ledger` ne dépend pas de `net`, d'où la constante
+/// répétée).
+///
+/// 105 Kio : mesuré (`cargo run --release --example tx_bench -p circuit`), pas
+/// estimé. Était 68 Kio avant le durcissement de soundness — passer les requêtes
+/// FRI de 32 à 48 a fait grossir la preuve, donc DIMINUÉ le nombre de
+/// transactions qu'un bloc diffusable peut porter (~15 → ~9). C'est la
+/// conséquence directe et assumée du choix de sécurité.
+const TAILLE_TX_INDICATIVE: usize = 105 * 1024;
 const CADRE_NET: usize = 1024 * 1024;
 
 /// CONSIGNÉ À LA COMPILATION : un bloc plein ne tient PAS dans un cadre réseau.
 ///
-/// 512 × ~68 Kio ≈ 34 Mio, trente fois le cadre de 1 Mio. Acheminer un bloc plein
+/// 512 × ~105 Kio ≈ 52 Mio, cinquante fois le cadre de 1 Mio. Acheminer un bloc plein
 /// exigera donc un transfert FRAGMENTÉ — par transaction, comme le gossip le fait
 /// déjà — et non un seul cadre. L'assertion est ici plutôt que dans un test pour que
 /// tout futur ajustement de `MAX_TX_PAR_BLOC` qui rendrait la remarque caduque casse
@@ -163,8 +170,8 @@ const MARGE_MESSAGE: usize = 64;
 
 /// PLAFOND DE SCELLEMENT EN OCTETS — la borne qui rend un bloc DIFFUSABLE.
 ///
-/// `MAX_TX_PAR_BLOC` borne le NOMBRE de transactions, pas leur POIDS : à ≈68 Kio
-/// pièce, une quinzaine suffit à dépasser le cadre réseau. Un bloc scellé au-delà
+/// `MAX_TX_PAR_BLOC` borne le NOMBRE de transactions, pas leur POIDS : à ≈105 Kio
+/// pièce, une dizaine suffit à dépasser le cadre réseau. Un bloc scellé au-delà
 /// serait localement valide, applicable par son producteur… et refusé par tous les
 /// autres faute de pouvoir seulement le recevoir — partition définitive, l'état étant
 /// append-only. C'est le défaut n°1 de la revue adversariale dans sa variante OCTETS.
@@ -905,17 +912,17 @@ mod tests {
     /// partitionné publiquement les feuilles en émises-sans-bénéficiaire et
     /// attribuées, et ce gabarit aurait été recopié le jour d'une coinbase shielded.
     /// Le plafond d'octets EST la capacité réelle d'un bloc, et elle est bien plus
-    /// basse que `MAX_TX_PAR_BLOC` : une quinzaine de transactions, pas 512. Ce test
+    /// basse que `MAX_TX_PAR_BLOC` : une dizaine de transactions, pas 512. Ce test
     /// fige le chiffre — s'il bouge, c'est que le format de transaction a changé.
     #[test]
-    fn le_plafond_doctets_borne_a_une_quinzaine_de_transactions() {
+    fn le_plafond_doctets_borne_a_une_dizaine_de_transactions() {
         // `MAX_OCTETS_BLOC < CADRE_NET` est garanti par l'assertion de COMPILATION
         // en tête de module — pas besoin de le re-tester ici.
         let pour = |n: usize| SURCOUT_BLOC_VIDE + n * cout_transaction(TAILLE_TX_INDICATIVE);
-        assert!(pour(15) <= MAX_OCTETS_BLOC, "15 transactions doivent tenir");
+        assert!(pour(9) <= MAX_OCTETS_BLOC, "9 transactions doivent tenir");
         assert!(
-            pour(16) > MAX_OCTETS_BLOC,
-            "16 doivent déborder : c'est précisément pourquoi le plafond existe,              MAX_TX_PAR_BLOC = {MAX_TX_PAR_BLOC} ne bornant que le NOMBRE"
+            pour(10) > MAX_OCTETS_BLOC,
+            "10 doivent déborder : c'est précisément pourquoi le plafond existe,              MAX_TX_PAR_BLOC = {MAX_TX_PAR_BLOC} ne bornant que le NOMBRE"
         );
     }
 
