@@ -1,4 +1,10 @@
-# Fixture de conformité v1
+# Fixture de conformité v2
+
+> **Pourquoi une v2.** `VERSION_BLOC 0x04` (ADR J1 : vue + certificat de quorum)
+> change l'identifiant de genèse. La fixture v1 est devenue invalide **par
+> construction**, et son échec a été la **première** chose que le changement de
+> format a produite — c'est exactement ce pour quoi elle existait. Une v2 datée
+> plutôt qu'un écrasement : le remplacement reste visible dans l'historique.
 
 Artefact rejouable qui rend vérifiable, **sans lire le code**, que cette
 implémentation produit les identifiants et les racines annoncés.
@@ -16,8 +22,8 @@ pas, et l'écart est nommé dans le message d'échec.
 
 | Fichier | Quoi |
 |---|---|
-| `genese.bin` | bloc 0, une autorité de scellement gravée, aucune allocation |
-| `bloc-1.bin` | bloc de hauteur 1, **vide**, scellé par cette autorité |
+| `genese.bin` | bloc 0 en **version `0x04`**, une autorité gravée, aucune allocation |
+| `bloc-1.bin` | bloc de hauteur 1, **vide**, vue 0, scellé par cette autorité |
 | `attendu.txt` | identifiants et racines attendus, en hexadécimal **non tronqué** |
 | `autorite.cle` | clé d'autorité **jetable**, publiée pour la reproductibilité |
 
@@ -26,9 +32,9 @@ que pour régénérer la fixture. Ne jamais s'en servir sur une chaîne réelle.
 
 ## Ce que la fixture couvre
 
-Décodage de bloc · identifiant de genèse (**autorités comprises** — deux listes
-donnent deux chaînes) · amorçage d'état · chaînage parent → enfant · élection de
-producteur · vérification de scellement · avancée de la tête.
+Décodage de bloc `0x04` · identifiant de genèse (**autorités comprises** — deux
+listes donnent deux chaînes) · amorçage d'état · chaînage parent → enfant ·
+élection de producteur · vérification de scellement · avancée de la tête.
 
 Un détail qui est une assertion et non un hasard : `racine_apres_bloc1` est
 **égale** à `racine_apres_genese`. Un bloc vide n'insère aucune sortie, donc
@@ -38,9 +44,11 @@ deux, ce qui distingue « le bloc a été appliqué » de « le bloc a été ign
 ## Ce qu'elle NE couvre PAS
 
 Aucune transaction, donc **aucune preuve STARK**, aucun nullifier, aucune
-émission. C'est délibéré : un bloc vide reste déterministe, petit et rapide. Une
-fixture avec transaction pèserait ~68 Kio et plusieurs secondes de preuve ; elle
-viendra séparément, et s'appellera `conformite-v2`.
+émission. C'est délibéré : un bloc vide reste déterministe, petit et rapide.
+
+**Aucun certificat de quorum non plus** : la vérification du quorum est livrée
+par J1-a, mais les votes ne circulent qu'à partir de J1-b. Une fixture avec
+certificat viendra avec le protocole.
 
 ## Régénérer
 

@@ -137,7 +137,11 @@ pub const TAILLE_AUTORITE_MAX: usize = 4096;
 /// chaque passage. Un état dumpé par une version antérieure porte donc une tête
 /// périmée — d'où le bump simultané de `proved_state::VERSION_ETAT`, qui le refuse
 /// au lieu de le lire de travers.
-pub const VERSION_BLOC: u8 = 0x03;
+pub const VERSION_BLOC: u8 = 0x04;
+/// Version PÉRIMÉE, refusée par son nom (ADR J1). Aucune chaîne publique n'a
+/// existé en `0x03` : il n'y a rien à migrer, et supporter deux versions
+/// n'achèterait qu'une surface de confusion.
+const VERSION_BLOC_PERIMEE: u8 = 0x03;
 const DOMAINE_ID: &str = "obscura/bloc/id/v1";
 
 /// Taille indicative d'une `ProvedTx` **sur le fil** et cadre maximal de
@@ -227,6 +231,10 @@ pub enum BlocDecodeError {
     AutoriteInvalide(usize),
     #[error("scellement indécodable ou hors bornes")]
     ScellementInvalide,
+    #[error(
+        "bloc de version {version:#04x} : format PÉRIMÉ, refusé (courant : {VERSION_BLOC:#04x})"
+    )]
+    VersionPerimee { version: u8 },
     #[error("extension non vide : aucun contenu n'est défini en version {VERSION_BLOC:#04x}")]
     ExtensionInconnue,
 }
@@ -269,6 +277,15 @@ pub struct Bloc {
     /// reçue ») là où un simple parent inconnu ne dirait pas si le nœud est en
     /// retard ou face à une autre chaîne.
     pub hauteur: u64,
+    /// VUE du consensus : numéro de tentative à cette hauteur (ADR J1, point 3).
+    ///
+    /// **Entre dans l'identifiant.** Deux vues produisent deux blocs DIFFÉRENTS,
+    /// jamais deux encodages du même — c'est la canonicité, et c'est ce qui permet
+    /// au certificat de quorum de porter sur `(hauteur, vue)` sans ambiguïté.
+    ///
+    /// `0` en fonctionnement nominal, donc sur tout l'existant. Elle n'augmente que
+    /// lorsque l'autorité du tour ne répond pas — mécanisme livré par J1-b.
+    pub vue: u32,
     /// Les transactions, dans l'ordre d'application. **C'est tout l'objet du bloc.**
     pub transactions: Vec<ProvedTx>,
     /// Les émissions. **Doit être vide dès que `hauteur > 0`** — règle de consensus
@@ -307,6 +324,7 @@ impl Bloc {
         Bloc {
             parent: PAS_DE_PARENT,
             hauteur: 0,
+            vue: 0,
             transactions: Vec::new(),
             emissions: Vec::new(),
             autorites: Vec::new(),
@@ -352,6 +370,7 @@ impl Bloc {
         Ok(Bloc {
             parent: PAS_DE_PARENT,
             hauteur: 0,
+            vue: 0,
             transactions: Vec::new(),
             emissions,
             autorites,
@@ -389,6 +408,7 @@ impl Bloc {
             transactions,
             emissions: Vec::new(),
             autorites: Vec::new(),
+            vue: 0,
             extension: Vec::new(),
             scellement: None,
         };
@@ -441,6 +461,7 @@ impl Bloc {
         let mut b = vec![VERSION_BLOC];
         b.extend_from_slice(&self.parent);
         b.extend_from_slice(&self.hauteur.to_le_bytes());
+        b.extend_from_slice(&self.vue.to_le_bytes());
         b.extend_from_slice(&(self.transactions.len() as u32).to_le_bytes());
         for tx in &self.transactions {
             let o = tx.to_bytes();
@@ -501,6 +522,9 @@ impl Bloc {
         }
 
         let version = prendre(b, &mut pos, 1)?[0];
+        if version == VERSION_BLOC_PERIMEE {
+            return Err(BlocDecodeError::VersionPerimee { version });
+        }
         if version != VERSION_BLOC {
             return Err(BlocDecodeError::VersionInconnue(version));
         }
@@ -508,6 +532,7 @@ impl Bloc {
             .try_into()
             .map_err(|_| BlocDecodeError::Tronque)?;
         let hauteur = u64::from_le_bytes(prendre(b, &mut pos, 8)?.try_into().unwrap());
+        let vue = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap());
 
         let n = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap()) as usize;
         // Borne AVANT allocation : un en-tête annonçant 10⁶ transactions ne doit rien
@@ -602,6 +627,7 @@ impl Bloc {
         Ok(Bloc {
             parent,
             hauteur,
+            vue,
             transactions,
             emissions,
             autorites,
@@ -713,6 +739,7 @@ mod tests {
         let hostile = Bloc {
             parent: PAS_DE_PARENT,
             hauteur: 0,
+            vue: 0,
             transactions: Vec::new(),
             emissions: Vec::new(),
             autorites: trop,
@@ -729,6 +756,41 @@ mod tests {
     /// aucun contenu n'est défini en 0x03, donc le moindre octet est refusé au
     /// décodage — fail-closed. Le jour où une version le remplit (coinbase,
     /// collecteur de frais), son contenu sera engagé sans déplacer un champ.
+    /// La VUE entre dans l'IDENTIFIANT : deux vues donnent deux blocs, jamais deux
+    /// encodages du même. Sans cela, un producteur présenterait le même bloc sous
+    /// deux vues et la canonicité — que tout le projet défend — tomberait.
+    #[test]
+    fn la_vue_entre_dans_l_identifiant() {
+        let genese = Bloc::genese();
+        let a = Bloc::sceller(&genese.id(), 1, Vec::new()).unwrap();
+        let mut b = Bloc::sceller(&genese.id(), 1, Vec::new()).unwrap();
+        b.vue = 1;
+        assert_ne!(a.id(), b.id(), "la vue doit changer l'identifiant");
+    }
+
+    /// Un bloc de l'ANCIENNE version est refusé par une variante QUI LE NOMME,
+    /// jamais réinterprété comme un 0x04 mal formé.
+    #[test]
+    fn version_0x03_refusee_par_son_nom() {
+        let mut octets = Bloc::genese().to_bytes();
+        octets[0] = 0x03;
+        assert!(matches!(
+            Bloc::from_bytes(&octets),
+            Err(BlocDecodeError::VersionPerimee { version: 0x03 })
+        ));
+    }
+
+    /// Aller-retour wire avec une vue non nulle : la vue survit, l'identifiant aussi.
+    #[test]
+    fn aller_retour_avec_vue() {
+        let genese = Bloc::genese();
+        let mut b = Bloc::sceller(&genese.id(), 1, Vec::new()).unwrap();
+        b.vue = 7;
+        let relu = Bloc::from_bytes(&b.to_bytes()).expect("décodable");
+        assert_eq!(relu.vue, 7);
+        assert_eq!(relu.id(), b.id());
+    }
+
     #[test]
     fn extension_reservee_et_verrouillee_vide() {
         let bloc = Bloc::sceller(&PAS_DE_PARENT, 1, Vec::new()).unwrap();
@@ -786,6 +848,9 @@ mod tests {
         let mut b = vec![VERSION_BLOC];
         b.extend_from_slice(&PAS_DE_PARENT);
         b.extend_from_slice(&0u64.to_le_bytes());
+        // VUE (0x04) : l'en-tête fabriqué à la main doit la porter, sinon le
+        // décodeur lit la vue là où ce test croyait écrire un compteur.
+        b.extend_from_slice(&0u32.to_le_bytes());
         b.extend_from_slice(&1_000_000u32.to_le_bytes());
         assert!(matches!(
             Bloc::from_bytes(&b),
@@ -808,13 +873,15 @@ mod tests {
             Bloc::from_bytes(&[]),
             Err(BlocDecodeError::Tronque)
         ));
+        // Une version FUTURE est inconnue, pas périmée.
         assert!(matches!(
-            Bloc::from_bytes(&[0x04]),
-            Err(BlocDecodeError::VersionInconnue(0x04))
+            Bloc::from_bytes(&[0x05]),
+            Err(BlocDecodeError::VersionInconnue(0x05))
         ));
         // Les versions PRÉCÉDENTES sont refusées, pas réinterprétées : le 0x01 n'a
-        // pas de compteur d'émissions, le 0x02 ni autorités ni scellement — les lire
-        // comme la version courante ferait dériver toutes les longueurs suivantes.
+        // pas de compteur d'émissions, le 0x02 ni autorités ni scellement, le 0x03
+        // pas de vue — les lire comme la version courante ferait dériver toutes les
+        // longueurs suivantes.
         assert!(matches!(
             Bloc::from_bytes(&[0x01]),
             Err(BlocDecodeError::VersionInconnue(0x01))
@@ -822,6 +889,13 @@ mod tests {
         assert!(matches!(
             Bloc::from_bytes(&[0x02]),
             Err(BlocDecodeError::VersionInconnue(0x02))
+        ));
+        // Le 0x03 est la version IMMÉDIATEMENT précédente : refusée par une variante
+        // qui la NOMME, pour qu'un opérateur sache qu'il a un artefact périmé et non
+        // un fichier corrompu.
+        assert!(matches!(
+            Bloc::from_bytes(&[0x03]),
+            Err(BlocDecodeError::VersionPerimee { version: 0x03 })
         ));
         assert!(matches!(
             Bloc::from_bytes(&[VERSION_BLOC]),
@@ -846,6 +920,7 @@ mod tests {
         let mut menteur = vec![VERSION_BLOC];
         menteur.extend_from_slice(&PAS_DE_PARENT);
         menteur.extend_from_slice(&1u64.to_le_bytes());
+        menteur.extend_from_slice(&0u32.to_le_bytes()); // vue
         menteur.extend_from_slice(&1u32.to_le_bytes()); // n_tx = 1
         menteur.extend_from_slice(&u32::MAX.to_le_bytes()); // taille annoncée délirante
         assert!(matches!(
@@ -988,6 +1063,9 @@ mod tests {
         let mut b = vec![VERSION_BLOC];
         b.extend_from_slice(&PAS_DE_PARENT);
         b.extend_from_slice(&0u64.to_le_bytes());
+        // VUE (0x04) : l'en-tête fabriqué à la main doit la porter, sinon le
+        // décodeur lit la vue là où ce test croyait écrire un compteur.
+        b.extend_from_slice(&0u32.to_le_bytes());
         b.extend_from_slice(&0u32.to_le_bytes()); // aucune transaction
         b.extend_from_slice(&500_000u32.to_le_bytes()); // émissions annoncées
         assert!(matches!(
@@ -1039,7 +1117,8 @@ mod tests {
             let mut b = vec![VERSION_BLOC];
             b.extend_from_slice(&PAS_DE_PARENT);
             b.extend_from_slice(&0u64.to_le_bytes());
-            b.extend_from_slice(&0u32.to_le_bytes());
+            b.extend_from_slice(&0u32.to_le_bytes()); // vue
+            b.extend_from_slice(&0u32.to_le_bytes()); // n_tx
             b.extend_from_slice(&n_em.to_le_bytes());
             b
         };
