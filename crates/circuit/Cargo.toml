@@ -3,6 +3,7 @@ name = "circuit"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+publish = false
 
 [features]
 # Sous-circuits autonomes (`prove_*`/`verify_*` standalone) : outillage de

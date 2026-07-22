@@ -1,13 +1,26 @@
-# cargo-deny — plan Testnet 0, T0.2. Deux contrôles : les avis RUSTSEC (les
-# crates pqcrypto round-3 sont peu maintenues, et T1 en change — un avis
-# « unmaintained » ne doit pas MASQUER un avis de vulnérabilité) et les licences.
+# cargo-deny — plan Testnet 0, T0.2. Deux contrôles : les avis RUSTSEC et les
+# licences des dépendances.
 
 [advisories]
 version = 2
 yanked = "deny"
+# Les quatre avis « unmaintained » de la famille pqcrypto round-3, IGNORÉS PAR
+# LEUR NOM et datés : c'est précisément ce que la migration FIPS (T1, spec
+# Testnet 0) remplace. ⚠️ 2026-0162/0163 (traits/internals : PQClean archivé en
+# amont) survivront à la migration vers pqcrypto-mlkem/mldsa — dette consciente,
+# la sortie propre serait un backend hors famille pqcrypto (à trancher à T1).
+ignore = [
+    { id = "RUSTSEC-2024-0380", reason = "pqcrypto-dilithium remplacé par pqcrypto-mldsa — migration T1" },
+    { id = "RUSTSEC-2024-0381", reason = "pqcrypto-kyber remplacé par pqcrypto-mlkem — migration T1" },
+    { id = "RUSTSEC-2026-0162", reason = "pqcrypto-traits : PQClean archivé — suivi à T1" },
+    { id = "RUSTSEC-2026-0163", reason = "pqcrypto-internals : PQClean archivé — suivi à T1" },
+]
 
 [licenses]
 version = 2
+# Nos crates ne sont PAS publiés (publish = false) et n'ont pas encore de champ
+# `license` : en choisir une est une décision de l'utilisateur, pas de la CI.
+private = { ignore = true }
 allow = [
     "MIT",
     "Apache-2.0",
