@@ -1613,6 +1613,50 @@ mod tests {
         );
     }
 
+    /// NIVEAU DE SÉCURITÉ de la preuve de consensus, ANNONCÉ PAR WINTERFELL.
+    ///
+    /// Le seul chiffre de sécurité STARK qu'on ait le droit d'écrire dans un
+    /// document public est celui que la bibliothèque calcule elle-même sur une
+    /// preuve RÉELLE : nos paramètres (32 requêtes, blowup 16, grinding 0,
+    /// extension quadratique) donnent une borne qu'aucune estimation à la main ne
+    /// doit remplacer. Le test AFFICHE, et n'exige qu'un plancher très bas —
+    /// c'est une mesure, pas un critère d'acceptation déguisé.
+    ///
+    /// ⚠️ Les deux régimes ne disent pas la même chose : le CONJECTURÉ repose sur
+    /// la conjecture 1 de eprint 2021/582 (non démontrée) ; le PROUVÉ est ce qui
+    /// tient sans elle, et il est très inférieur. Un document public qui cite le
+    /// conjecturé sans le nommer ment par omission.
+    ///
+    /// `cargo test -p circuit --release --lib niveau_de_securite -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "mesure : lancer explicitement avec --ignored --nocapture"]
+    fn niveau_de_securite_annonce_par_winterfell() {
+        use crate::monolith::seg_trace::tests::witness_forme_profondeur;
+        type Blake3 = winterfell::crypto::hashers::Blake3_256<BaseElement>;
+
+        // La forme par défaut du wallet, à la profondeur de consensus.
+        let w = witness_forme_profondeur(2, 2, 32);
+        let (_pi, proof) = prove_seg_forme(&w);
+
+        let conj = proof.0.conjectured_security::<Blake3>();
+        let prouve = proof.0.proven_security::<Blake3>();
+        println!("\n=== sécurité de la preuve de consensus (2/2, profondeur 32) ===");
+        println!("paramètres : 32 requêtes, blowup 16, grinding 0, extension quadratique");
+        println!(
+            "CONJECTURÉE (conjecture 1, eprint 2021/582) : {} bits",
+            conj.bits()
+        );
+        println!(
+            "PROUVÉE — décodage par liste : {} bits | décodage unique : {} bits",
+            prouve.ldr_bits(),
+            prouve.udr_bits()
+        );
+        println!("(le prouvé demande 2× à 3× plus de requêtes pour égaler le conjecturé)\n");
+
+        // Plancher volontairement bas : on mesure, on ne fige pas un seuil.
+        assert!(conj.bits() >= 80, "sécurité conjecturée effondrée");
+    }
+
     /// RE-BENCH 3z-c2 : cout par FORME, profondeur consensus (32). Mesure ce
     /// qui compte pour une monnaie -- la TAILLE de preuve (cout PERMANENT par
     /// noeud) -- sur les formes que le wallet produit : 1/1 (debloque par

@@ -78,6 +78,21 @@ la gouvernance du remplacement d'autorité. **Prototype non audité — testnet 
   PROTOCOL.md) et l'identité de transport d'un wallet qui soumet à un nœud
   (**éphémère**, sinon le nœud d'entrée relie toutes nos soumissions).
 
+## La soundness PROUVÉE de la preuve est de 62 bits (mesurée, T3)
+
+Annoncé par winterfell sur une preuve réelle (2/2, profondeur 32) : sécurité
+**conjecturée 127 bits**, **prouvée 62 bits** en décodage par liste (29 en décodage
+unique). La conjecturée suppose vraie une conjecture FRI non démontrée ; la prouvée
+est ce qui tient sans elle.
+
+C'est la borne de SOUNDNESS — la difficulté de forger une preuve invalide, donc au
+pire de **créer de la monnaie**. 62 bits n'est pas un niveau de production. Le
+remède est paramétrique (`num_queries` = 32 aujourd'hui ; la sécurité prouvée
+demande 2× à 3× plus de requêtes) et coûte directement de la taille de preuve.
+**Arbitrage ouvert, à trancher avant que la chaîne ait de la valeur.** Ce chiffre
+vaut déjà contre un adversaire CLASSIQUE — il n'a rien de quantique. Détail :
+docs/POST_QUANTIQUE.md §5 et STARK_STATEMENT.md, « Soundness ».
+
 ## Ce que le wallet ne protège PAS (état actuel)
 
 - **La FORME (m, n) d'une transaction est PUBLIQUE (3z-c2).** Le circuit accepte
