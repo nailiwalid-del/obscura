@@ -40,23 +40,66 @@ pub fn encrypt_note(
     })
 }
 
+/// Note FACTICE empruntée par le chemin d'ÉCHEC du scan, pour qu'il exécute le même
+/// travail que le chemin de succès. Valeurs arbitraires et publiques : elle ne
+/// correspond à aucun commitment réel, donc la comparaison finale la rejette de
+/// toute façon — le drapeau `reel` n'est qu'une ceinture supplémentaire.
+fn note_factice() -> SpendNote {
+    let zero = Digest([Felt::ZERO; proved_hash::digest::DIGEST_FELTS]);
+    SpendNote {
+        value: 0,
+        owner: zero,
+        rho: zero,
+        r: zero,
+    }
+}
+
 /// Scanne une sortie prouvée : tente de déchiffrer `e` avec la paire KEM `receive`, et
 /// ne rend la note QUE si (1) elle déchiffre, (2) son commitment recalculé == `commitment`
 /// (le public de la tx), et (3) son owner == `expected_owner` (l'owner prouvé du wallet,
 /// `H_owner(secret)`). Retourne `None` si la sortie n'est pas destinée à ce wallet ou est
 /// incohérente (expéditeur malveillant — P8 non prouvé, cf. STARK_STATEMENT).
+///
+/// # Travail CONSTANT après la décapsulation
+///
+/// ⚠️ La version précédente sortait tôt (`.ok()?`) dès l'échec de l'AEAD. Le décodage
+/// de la note et le hachage Rescue final ne s'exécutaient donc **que pour nos
+/// sorties**, et la durée du scan d'un bloc croissait avec le NOMBRE de sorties qui
+/// nous appartiennent. Un observateur capable de chronométrer le traitement d'un bloc
+/// — au premier chef le nœud qui sert l'historique, via la cadence des demandes
+/// suivantes — apprenait ainsi quels blocs nous concernent, ce que le chiffrement des
+/// enveloppes existe précisément pour cacher.
+///
+/// Le chemin d'échec emprunte donc une note factice et exécute **le même travail**.
+/// Coût : un hachage Rescue par sortie non destinée à nous, négligeable devant la
+/// décapsulation KEM qui, elle, a déjà lieu pour toutes.
+///
+/// Ce qui reste HORS de notre portée : la constance en temps de ML-KEM et de l'AEAD
+/// eux-mêmes, qui relève du backend (cf. `docs/THREAT_MODEL.md`, canaux auxiliaires).
+/// Les sorties anticipées qui subsistent ne portent que sur des données **publiques**
+/// (encodage du chiffré, point d'ordre faible) et ne distinguent pas nos sorties.
 pub fn scan_proved_output(
     receive: &kem::KemKeypair,
     expected_owner: &Digest,
     commitment: &Digest,
     e: &EncNote,
 ) -> Option<SpendNote> {
+    // Ces deux échecs ne dépendent que du CHIFFRÉ, qui est public : sortir tôt ici
+    // ne distingue pas nos sorties des autres.
     let ct = kem::KemCiphertext::from_bytes(&e.kem_ct).ok()?;
     let ss = kem::decapsulate(receive, &ct).ok()?;
-    let pt = aead::decrypt(&ss, &commitment.to_bytes(), &e.enc_note).ok()?;
-    let note = SpendNote::from_bytes(&pt)?;
+
+    // À partir d'ici, le succès dépend de NOTRE clé : plus aucune sortie anticipée.
+    let (note, reel) = match aead::decrypt(&ss, &commitment.to_bytes(), &e.enc_note) {
+        Ok(pt) => match SpendNote::from_bytes(&pt) {
+            Some(n) => (n, true),
+            None => (note_factice(), false),
+        },
+        Err(_) => (note_factice(), false),
+    };
     let recomputed = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
-    (recomputed == *commitment && note.owner == *expected_owner).then_some(note)
+    let coherente = recomputed == *commitment && note.owner == *expected_owner;
+    (reel && coherente).then_some(note)
 }
 
 /// Émission de genèse DESTINÉE à quelqu'un : le bénéficiaire retrouve sa note par
