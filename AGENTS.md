@@ -1,5 +1,16 @@
 # Obscura — contexte projet pour Codex
 
+> **Ce fichier ne fait pas autorité.** Ce sont des notes de travail. La
+> spécification est dans `docs/` — commencer par `docs/CONFORMITE.md`. En cas de
+> divergence, **`docs/` a raison**, et la divergence est un défaut à corriger
+> ici, pas là-bas. Les constantes et formats cités plus bas sont **informatifs** :
+> l'autorité est le code, décrit par `docs/PROTOCOL.md`.
+>
+> ⚠️ Ce fichier et `CLAUDE.md` ont **divergé** par le passé (principe directeur
+> resté en round-3, dette zeroize annoncée ouverte alors qu'elle est fermée).
+> Toute modification de l'un doit être répercutée sur l'autre, ou les deux
+> redériveront.
+
 Monnaie numérique privée post-quantique. Prototype Rust — les phases 1 à 5 sont
 prototypées et testées : nœud persistant, cycle complet payer → sceller → recevoir
 validé sur testnet local.
