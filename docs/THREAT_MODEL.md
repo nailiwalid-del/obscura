@@ -564,11 +564,16 @@ en retard sur la tranche qu'il vient de servir. Le nœud annonce la tete qu'il p
 reellement SERVIR (`historique.hauteur_max()`), pas `etat.hauteur()` : promettre une
 hauteur non archivee ferait boucler le wallet sur une demande eternellement silencieuse.
 
-⚠️ Le mensonge INVERSE — annoncer une tete plus courte que la vraie — reste indetectable
-aupres d'un noeud unique, et le TEMOIN ne le ferme PAS : il corrobore la racine d'une
-hauteur SERVIE, alors qu'ici les deux noeuds se taisent en fin de chaine, ce qui est
-indistinguable d'un wallet reellement a jour. Un wallet retenu en arriere ne perd rien
-(il redemandera), mais il ignore les paiements recents sans que rien ne le signale.
+⚠️ Le mensonge INVERSE — se taire plus tot que la vraie tete — est indetectable aupres
+d'un noeud UNIQUE, et c'est le plus vicieux des deux : le silence est exactement ce que
+produit une chaine epuisee, donc le wallet concluait « a jour » sans qu'une seule ligne
+ne differe d'une synchronisation reussie. Le TEMOIN le ferme sans rien de neuf sur le
+fil : quand le servant se tait, on repose la MEME question au temoin, et s'il SERT cette
+hauteur, le wallet n'est pas a jour (`Arret::TeteRetenue`). Deux silences valent « a
+jour » — sinon toute synchronisation se terminerait par un avertissement.
+Le cas le plus frequent n'est d'ailleurs pas malveillant : un noeud sans `--archiver` se
+tait sur TOUT, et un wallet pointe sur lui affichait « a jour, 0 bloc » avec un solde nul
+et l'air satisfait. C'est le pire mode d'echec, parce qu'il ressemble au succes.
 
 #### Ce qui MANQUE encore, ecrit franchement
 

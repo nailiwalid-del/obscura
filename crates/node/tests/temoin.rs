@@ -229,3 +229,90 @@ fn un_temoin_muet_arrete_la_boucle_sans_appliquer() {
     assert_eq!(resume.blocs_rejoues, 0, "rien appliqué sans corroboration");
     assert_eq!(w.prochaine_hauteur(), 0);
 }
+
+/// UN NŒUD QUI S'ARRÊTE AVANT LE TÉMOIN NE DIT PAS « À JOUR ».
+///
+/// C'est le mensonge INVERSE de l'omission, et il est plus vicieux : au lieu de
+/// tordre ce qu'il sert, le nœud servant se TAIT plus tôt. Le wallet obtient alors
+/// un silence — exactement ce que produit une chaîne réellement épuisée — et
+/// concluait « à jour ». Un paiement récent devenait invisible sans qu'aucune ligne
+/// ne diffère de celles d'une synchronisation réussie.
+///
+/// Le témoin le démasque sans rien de neuf sur le fil : on lui repose la question à
+/// laquelle le servant n'a pas répondu. S'il SERT cette hauteur, c'est que le
+/// servant la retenait ou ne l'a pas.
+///
+/// (Le nœud silencieux est ici un nœud sans `--archiver` : il ne ment pas, il
+/// n'archive pas. C'est justement le cas le plus fréquent, et le pire à confondre
+/// avec un succès — un wallet pointé sur lui affichait « à jour, 0 bloc » avec un
+/// solde nul et l'air satisfait.)
+#[test]
+fn un_servant_qui_sarrete_avant_le_temoin_est_signale() {
+    let (servant, fini_s, h_s) = lancer(genese_de(SORTIES), false);
+    let (temoin, fini_t, h_t) = lancer(genese_de(SORTIES), true);
+
+    let mut w = Wallet::nouveau(PROFONDEUR);
+    let mut c = client(servant);
+    let mut t = client(temoin);
+    let resume = node::client::synchroniser_avec_temoin(
+        &mut c,
+        Some(&mut t),
+        &mut w,
+        Duration::ZERO,
+        |_, _| Ok(()),
+    );
+
+    for f in [&fini_s, &fini_t] {
+        f.store(true, Ordering::SeqCst);
+    }
+    h_s.join().expect("servant");
+    h_t.join().expect("témoin");
+
+    match resume.arret {
+        Arret::TeteRetenue(raison) => assert!(
+            raison.contains("hauteur 0"),
+            "l'arrêt doit nommer la hauteur retenue : {raison}"
+        ),
+        autre => panic!("tête retenue attendue, obtenu {autre:?}"),
+    }
+    assert_eq!(resume.blocs_rejoues, 0);
+    assert_eq!(w.prochaine_hauteur(), 0);
+}
+
+/// DEUX SILENCES = RÉELLEMENT À JOUR.
+///
+/// Sans ce test, le précédent serait satisfait par une boucle qui ne conclut
+/// JAMAIS « à jour » dès qu'un témoin est branché — c'est-à-dire par une
+/// synchronisation qui se termine toujours par un avertissement.
+#[test]
+fn deux_silences_valent_a_jour() {
+    let (servant, fini_s, h_s) = lancer(genese_de(SORTIES), true);
+    let (temoin, fini_t, h_t) = lancer(genese_de(SORTIES), true);
+
+    let mut w = Wallet::nouveau(PROFONDEUR);
+    let mut c = client(servant);
+    let mut t = client(temoin);
+    // Les deux servent la hauteur 0, puis plus rien : la boucle doit rejouer le
+    // bloc 0 et s'arrêter À JOUR sur le double silence à la hauteur 1.
+    let resume = node::client::synchroniser_avec_temoin(
+        &mut c,
+        Some(&mut t),
+        &mut w,
+        Duration::ZERO,
+        |_, _| Ok(()),
+    );
+
+    for f in [&fini_s, &fini_t] {
+        f.store(true, Ordering::SeqCst);
+    }
+    h_s.join().expect("servant");
+    h_t.join().expect("témoin");
+
+    assert!(
+        matches!(resume.arret, Arret::AJour),
+        "arrêt inattendu : {:?}",
+        resume.arret
+    );
+    assert_eq!(resume.blocs_rejoues, 1);
+    assert_eq!(w.prochaine_hauteur(), 1);
+}

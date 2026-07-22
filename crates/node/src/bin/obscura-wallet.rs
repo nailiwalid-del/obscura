@@ -440,6 +440,13 @@ fn rapporter_synchro(w: &Wallet, resume: &ResumeSynchro, depart: u64, corrobore:
                       faux ; comparez avec un TROISIÈME nœud plutôt que de choisir au
                       hasard, et n'utilisez pas le solde affiché avant d'avoir tranché."
         )),
+        Arret::TeteRetenue(raison) => abandon(&format!(
+            "CE WALLET N'EST PAS A JOUR : {raison}
+                      Le noeud interroge s'arrete avant le temoin. Sans temoin, ce cas
+                      est indistinguable d'une synchronisation reussie — c'est
+                      exactement ce qu'il sert a montrer.
+                      Synchronisez contre le noeud qui, lui, sert cette hauteur."
+        )),
         Arret::TemoinMuet => println!(
             "⚠️  le témoin n'a pas répondu : ce bloc n'a PAS été appliqué.
                  Ce n'est pas un accord — un nœud qui n'archive pas, ou dont le

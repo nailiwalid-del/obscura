@@ -163,7 +163,9 @@ Ce qui reste ouvert, en détail dans [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md
    celle qu'il annonce — le paiement omis restait invisible, et aucun contrôle *local*
    ne pouvait le démentir. `obscura-wallet synchroniser --temoin <ip:port>` interroge un
    **second nœud** sur la même hauteur et compare sa racine de fin de bloc : un
-   désaccord arrête tout **avant** application. Trois limites : le témoin n'a de valeur
+   désaccord arrête tout **avant** application. Le témoin ferme aussi le mensonge
+   inverse — se taire plus tôt que la vraie tête, indistinguable d'une chaîne épuisée :
+   la même question lui est reposée quand le nœud servant se tait. Trois limites : le témoin n'a de valeur
    que choisi indépendamment (deux nœuds d'un même opérateur n'en valent qu'un, et le
    protocole ne peut pas le vérifier) ; un désaccord ne dit pas *lequel* des deux ment ;
    l'option est **off par défaut**, et sans elle le CLI dit « à jour **selon ce nœud** »

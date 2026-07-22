@@ -262,9 +262,13 @@ round-3 (0x01) est REFUSÉ PAR SON NOM (`CryptoError::AlgoPerime`), jamais cohab
   n'est PAS un accord (`Arret::TemoinMuet` : arrêt sans appliquer — un nœud sans
   `--archiver` ou à crédit épuisé se tait, et poursuivre serait un placebo). Toute
   anomalie du témoin vaut MUET, jamais désaccord : `Arret::Desaccord` est le seul arrêt
-  qui accuse, et il dit qu'un des deux ment sans dire lequel. ⚠️ N'a de valeur que choisi
-  INDÉPENDAMMENT (le protocole ne peut pas vérifier l'indépendance) ; ne ferme PAS la
-  tête RACCOURCIE (deux nœuds silencieux en fin de chaîne = wallet à jour, indistinguable).
+  qui accuse, et il dit qu'un des deux ment sans dire lequel. Ferme AUSSI la tête
+  RACCOURCIE : quand le servant se TAIT, la même question est reposée au témoin, et s'il
+  sert cette hauteur le wallet n'est pas à jour (`Arret::TeteRetenue`) — c'était le pire
+  mode d'échec, parce qu'un silence est indistinguable d'une chaîne épuisée et qu'un nœud
+  sans `--archiver` produisait « à jour, 0 bloc » avec l'air satisfait ; deux silences
+  valent à jour, sinon toute synchronisation finirait par un avertissement. ⚠️ N'a de
+  valeur que choisi INDÉPENDAMMENT (le protocole ne peut pas vérifier l'indépendance).
   Le prix est le doublement de la BANDE PASSANTE, pas du scan (une seule décapsulation
   KEM par sortie, côté servant). `envoyer` REFUSE si `prochaine_hauteur() == 0` (jamais
   synchronisé) et propose `--noeud-synchro` DISTINCT de `--noeud` (avertissement quand
