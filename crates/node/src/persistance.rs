@@ -43,6 +43,7 @@
 //! phrase de passe supposerait une saisie interactive, hors périmètre d'un
 //! prototype ; c'est écrit ici plutôt que laissé à supposer.
 
+use crate::votes::RegistreVotes;
 use crypto::sig::SigKeypair;
 use ledger::bloc::Bloc;
 use ledger::historique::{HistoriqueSorties, Reprise};
@@ -53,6 +54,7 @@ use std::path::{Path, PathBuf};
 const FICHIER_IDENTITE: &str = "identite.cle";
 const FICHIER_ETAT: &str = "etat.bin";
 const FICHIER_HISTORIQUE: &str = "historique.bin";
+const FICHIER_VOTES: &str = "votes.bin";
 
 #[derive(Debug, thiserror::Error)]
 pub enum PersistanceError {
@@ -60,6 +62,14 @@ pub enum PersistanceError {
     Io(#[from] std::io::Error),
     #[error("fichier d'identité illisible ou corrompu")]
     IdentiteInvalide,
+    /// Le registre de votes est illisible.
+    ///
+    /// ⚠️ Erreur FATALE, jamais rattrapée par un registre vierge : repartir de zéro
+    /// autoriserait l'équivocation exactement au moment où l'on ne sait plus ce
+    /// qu'on a promis. Même discipline que « un fichier de wallet illisible ne doit
+    /// jamais devenir un wallet vide ».
+    #[error("registre de votes illisible ou corrompu : {0} — le nœud REFUSE de démarrer, repartir de zéro autoriserait l'équivocation")]
+    VotesInvalides(String),
     #[error("fichier d'état illisible ou corrompu : {0}")]
     EtatInvalide(String),
     #[error("fichier de genèse illisible ou corrompu : {0}")]
@@ -305,6 +315,32 @@ impl Donnees {
     /// Les permissions sont posées AVANT d'écrire le contenu — sinon la clé
     /// existerait brièvement en lecture pour tous, fenêtre suffisante pour un
     /// processus local qui l'attend.
+    /// Charge le registre des votes émis, ou en crée un VIERGE au premier démarrage.
+    ///
+    /// ⚠️ Un fichier ILLISIBLE n'est jamais remplacé par un registre vierge : ce
+    /// serait rouvrir la porte de l'équivocation précisément quand on a perdu la
+    /// mémoire de ses promesses. L'erreur remonte, et le nœud refuse de démarrer.
+    pub fn charger_ou_creer_votes(&self) -> Result<RegistreVotes, PersistanceError> {
+        let chemin = self.chemin(FICHIER_VOTES);
+        if !chemin.exists() {
+            return Ok(RegistreVotes::neuf());
+        }
+        let octets = fs::read(&chemin)?;
+        RegistreVotes::from_bytes(&octets)
+            .map_err(|e| PersistanceError::VotesInvalides(e.to_string()))
+    }
+
+    /// Écrit le registre des votes, atomiquement et avec `sync_all`.
+    ///
+    /// ⚠️ **À appeler AVANT d'émettre le vote**, jamais après. Si la machine tombe
+    /// entre l'écriture et l'envoi, on a promis sans le dire : inoffensif, le vote
+    /// sera redemandé. Dans l'autre ordre, on aurait dit sans avoir promis — et au
+    /// redémarrage on pourrait promettre autre chose, ce qui est exactement la faute
+    /// que ce fichier existe pour empêcher.
+    pub fn enregistrer_votes(&self, r: &RegistreVotes) -> Result<(), PersistanceError> {
+        self.ecrire_secret(&self.chemin(FICHIER_VOTES), &r.to_bytes())
+    }
+
     fn ecrire_secret(&self, chemin: &Path, octets: &[u8]) -> Result<(), PersistanceError> {
         let tmp = chemin.with_extension("tmp");
 
@@ -342,6 +378,63 @@ mod tests {
         let p = std::env::temp_dir().join(format!("obscura_test_{}_{}", nom, std::process::id()));
         let _ = fs::remove_dir_all(&p);
         p
+    }
+
+    /// Le registre de votes SURVIT au redémarrage — sans quoi un nœud relancé
+    /// pourrait voter une seconde fois, pour un autre bloc, à la même position.
+    #[test]
+    fn le_registre_de_votes_survit_au_redemarrage() {
+        let dir = repertoire_temporaire("votes");
+        let d = Donnees::ouvrir(&dir).expect("ouverture");
+
+        // Premier démarrage : registre vierge, tout vote est permis.
+        let mut r = d.charger_ou_creer_votes().expect("registre vierge");
+        assert!(r.peut_voter(1, 0, &[1u8; 64]));
+
+        // On promet, PUIS on persiste — l'ordre inverse est celui qui perd.
+        r.enregistrer(1, 0, [1u8; 64]);
+        d.enregistrer_votes(&r).expect("écriture");
+
+        // REDÉMARRAGE : nouveau dépôt sur le même répertoire.
+        let d2 = Donnees::ouvrir(&dir).expect("réouverture");
+        let relu = d2.charger_ou_creer_votes().expect("registre relu");
+        assert!(
+            !relu.peut_voter(1, 0, &[2u8; 64]),
+            "l'ÉQUIVOCATION doit rester interdite après redémarrage"
+        );
+        assert!(
+            relu.peut_voter(1, 0, &[1u8; 64]),
+            "re-voter pour le MÊME bloc reste permis (idempotent)"
+        );
+        assert!(
+            relu.peut_voter(2, 0, &[2u8; 64]),
+            "la hauteur suivante est ouverte"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Un registre CORROMPU fait échouer le démarrage — il n'est JAMAIS remplacé
+    /// par un registre vierge, ce qui rouvrirait la porte de l'équivocation.
+    #[test]
+    fn registre_de_votes_corrompu_refuse_le_demarrage() {
+        let dir = repertoire_temporaire("votes_corrompus");
+        let d = Donnees::ouvrir(&dir).expect("ouverture");
+        d.enregistrer_votes(&RegistreVotes::neuf())
+            .expect("écriture");
+
+        // On abîme le fichier.
+        let chemin = dir.join(FICHIER_VOTES);
+        fs::write(&chemin, b"pas un registre").expect("corruption");
+
+        assert!(
+            matches!(
+                d.charger_ou_creer_votes(),
+                Err(PersistanceError::VotesInvalides(_))
+            ),
+            "un registre illisible ne doit JAMAIS devenir un registre vierge"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// PREMIER DÉMARRAGE puis REDÉMARRAGE : l'identité doit être la MÊME.
