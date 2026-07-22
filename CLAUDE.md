@@ -18,7 +18,7 @@ round-3 (0x01) est REFUSÉ PAR SON NOM (`CryptoError::AlgoPerime`), jamais cohab
 - `crates/crypto` : hash, kem, sig, aead — testés. KEM **contributif** : les points
   X25519 d'ordre faible sont rejetés à l'encapsulation ET à la décapsulation
   (`CryptoError::NonContributif`) — sinon un pair hostile force un DH nul et la moitié
-  courbes disparaît en silence, Kyber portant seul la sécurité.
+  courbes disparaît en silence, ML-KEM portant seul la sécurité.
 - `crates/net` : **transport chiffré PQ** (phase 4, brique 1/4) — handshake hybride
   3 passes avec **forward secrecy** (éphémères jetés) et **masquage d'identité**
   (identités chiffrées sur le fil), machine à états en typestate, canal anti-rejeu
@@ -425,11 +425,14 @@ sophistication crypto**. Reste :
   gaté (l'invariant « défaut = consensus seul » doit tenir). Les modules gadgets restent
   compilés (le monolithe réutilise leurs helpers `pub(crate)`) ; seules leurs entrées
   publiques standalone sont gatées.
-- Migration vers `pqcrypto-mlkem`/`pqcrypto-mldsa` (FIPS 203/204 finaux) : ce n'est
-  PAS un simple changement d'import. FIPS 203/204 diffèrent de Kyber/Dilithium round-3
-  (dérivation, encodages, errata NIST) → c'est une **nouvelle version d'algo `0x02`**
-  qui cohabite avec `0x01`, pas un remplacement (voir PROTOCOL.md, versioning). Prévoir
-  crates FIPS, byte de version, et vecteurs de test croisés.
+- Migration FIPS 203/204 : **FAITE** (T1, `858da4a`) — `pqcrypto-mlkem` et
+  `pqcrypto-mldsa`, version d'algo `0x02`. Ce ne fut pas un changement d'import :
+  FIPS 203/204 diffèrent du round-3 (dérivation, encodages, errata NIST). ⚠️ Le
+  `0x01` ne COHABITE PAS : il est refusé par son nom (`CryptoError::AlgoPerime`) —
+  aucun réseau public n'ayant existé en round-3, supporter deux versions n'aurait
+  acheté qu'une surface de confusion. Autorité : `docs/PROTOCOL.md`, versioning.
+  **Reste ouvert** : les vecteurs de conformité officiels (voir
+  `docs/superpowers/plans/2026-07-22-porte-aud.md`).
 - ⚠️ **DETTE DE BACKEND PQ (ouverte)** : TOUTE la famille `pqcrypto` est marquée
   `unmaintained` (RUSTSEC 2026-0161/0166/0162/0163) — PQClean est ARCHIVÉ en amont.
   La migration FIPS (T1) a DÉPLACÉ cette dette, pas supprimée : `pqcrypto-mlkem` et
@@ -446,8 +449,10 @@ sophistication crypto**. Reste :
   RE-TESTER avant le gel de genèse.
 - **Zeroize (durcissement #7)** : `ShieldedSecret` (volatile non élidable),
   `WalletKeys::{shielded_secret, nk}` et les clés AEAD dérivées s'effacent au drop ;
-  les moitiés dalek (X25519/Ed25519) aussi. ⚠️ Les `SecretKey` pqcrypto (Kyber768/
-  Dilithium3) NE s'effacent PAS (limitation crate) — à fermer à la migration FIPS 0x02.
+  les moitiés dalek (X25519/Ed25519) aussi. Les secrets **ML-KEM et ML-DSA aussi**,
+  par le repli T1.5 : stockés en `Zeroizing<Vec<u8>>`, le type pqcrypto étant
+  RECONSTRUIT à chaque usage (`crypto::kem`, `crypto::sig`) — coût, un `from_bytes`
+  par opération, hors chemin chaud. Autorité : `docs/PROTOCOL.md`.
 - Prototype pédagogique : pas d'audit, ne pas utiliser en production.
 
 ## Conventions
