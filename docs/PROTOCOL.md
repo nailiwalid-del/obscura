@@ -1,5 +1,9 @@
 # Protocole Obscura — spécification v0.2
 
+> **Pour vérifier cette implémentation plutôt que la lire :**
+> [`CONFORMITE.md`](CONFORMITE.md) — vecteurs ACVP ciblés, fixture rejouable, et
+> la liste de ce qui n'est **pas** démontré.
+
 ## Changements v0.1 → v0.2 (suite à revue)
 
 1. **La preuve STARK est la règle de consensus** (voir `STARK_STATEMENT.md`) ; la
