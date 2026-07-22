@@ -210,6 +210,11 @@ impl Noeud {
             Message::Demande(digests) => self.sur_demande(de, digests),
             Message::Transaction(tx) => self.sur_transaction(de, *tx, maintenant_ms),
             Message::Bloc(bloc) => self.sur_bloc(de, *bloc),
+            // Câblés par J1-b1 tâche 3. Ignorés SANS pénalité d'ici là : un pair
+            // qui les émet parle une version PLUS RÉCENTE du protocole, pas une
+            // version fautive — le sanctionner partitionnerait le réseau à la
+            // première mise à jour.
+            Message::Proposition(_) | Message::Vote(_) => Vec::new(),
             Message::DemandeBloc { hauteur } => self.sur_demande_bloc(de, hauteur, maintenant_ms),
             Message::DemandeHistorique { hauteur } => {
                 self.sur_demande_historique(de, hauteur, maintenant_ms)

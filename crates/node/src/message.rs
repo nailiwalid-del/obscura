@@ -44,6 +44,36 @@ const TAG_BLOC: u8 = 4;
 const TAG_DEMANDE_BLOC: u8 = 5;
 const TAG_DEMANDE_HISTORIQUE: u8 = 6;
 const TAG_HISTORIQUE: u8 = 7;
+const TAG_PROPOSITION: u8 = 8;
+const TAG_VOTE: u8 = 9;
+
+/// Dernier tag attribué. **À incrémenter avec chaque nouveau message.**
+///
+/// Sert la frontière « connu / version future » : un tag au-delà vient d'une
+/// version plus récente du protocole et ne doit PAS être sanctionné. Le test
+/// `le_tag_de_demande_bloc_nest_pas_une_version_future` s'en sert — sans cette
+/// constante il figeait le dernier tag en dur, et il a cassé au premier ajout.
+const DERNIER_TAG: u8 = TAG_VOTE;
+
+/// CONSIGNÉ À LA COMPILATION : `DERNIER_TAG` majore bien tous les tags attribués.
+///
+/// Ajouter un message sans mettre `DERNIER_TAG` à jour casse la compilation, au
+/// lieu de déplacer silencieusement la frontière « connu / version future » — et
+/// donc de faire sanctionner un pair à jour comme s'il parlait une version future.
+const _: () = assert!(
+    TAG_ANNONCE <= DERNIER_TAG
+        && TAG_DEMANDE <= DERNIER_TAG
+        && TAG_TRANSACTION <= DERNIER_TAG
+        && TAG_BLOC <= DERNIER_TAG
+        && TAG_DEMANDE_BLOC <= DERNIER_TAG
+        && TAG_DEMANDE_HISTORIQUE <= DERNIER_TAG
+        && TAG_HISTORIQUE <= DERNIER_TAG
+        && TAG_PROPOSITION <= DERNIER_TAG
+        && TAG_VOTE <= DERNIER_TAG
+);
+
+/// Majorant du VOTE sur le fil : id + index + signature longueur-préfixée.
+const TAILLE_VOTE_MAX: usize = 64 + 2 + 4 + ledger::bloc::TAILLE_SCELLEMENT_MAX;
 
 /// CONSIGNÉ À LA COMPILATION : un bloc scellé au plafond, enveloppé (`TAG_BLOC`)
 /// puis CHIFFRÉ (le cadre borne le chiffré, pas le clair), tient dans un cadre.
@@ -71,6 +101,10 @@ pub enum MessageError {
     BlocInvalide(ledger::bloc::BlocDecodeError),
     #[error("réponse d'historique indécodable : {0}")]
     HistoriqueInvalide(ReponseDecodeError),
+    #[error("proposition PORTANT un certificat : une proposition n'est pas certifiée")]
+    PropositionCertifiee,
+    #[error("vote indécodable ou hors bornes")]
+    VoteInvalide,
 }
 
 impl MessageError {
@@ -101,6 +135,27 @@ impl MessageError {
     }
 }
 
+/// Le VOTE d'une autorité pour un bloc donné (ADR J1, jalon J1-b1).
+///
+/// # Ce qu'il ne porte PAS, et pourquoi
+///
+/// Ni hauteur, ni vue. L'identifiant du bloc les engage DÉJÀ — les deux entrent
+/// dans son corps. Les répéter créerait un champ capable de MENTIR par rapport à
+/// l'`id`, donc une divergence à arbitrer, pour zéro information nouvelle.
+///
+/// # Ce qu'il porte, et pourquoi
+///
+/// L'index de l'autorité. Sans lui, le collecteur devrait essayer la signature
+/// contre chacune des `n` autorités — jusqu'à 64 vérifications hybrides pour
+/// attribuer UN vote, offertes à quiconque envoie n'importe quoi.
+pub struct Vote {
+    /// Identifiant du bloc voté. C'est lui qui est signé, sous `DOMAINE_VOTE`.
+    pub id: [u8; 64],
+    /// Index de l'autorité dans la liste gravée en genèse.
+    pub index: u16,
+    pub signature: crypto::sig::HybridSignature,
+}
+
 /// Message applicatif échangé entre nœuds.
 pub enum Message {
     /// « J'ai ces transactions » — inventaire, digests seulement.
@@ -119,6 +174,20 @@ pub enum Message {
     /// 1 Mio : à la cadence actuelle du prototype les blocs sont petits, mais un
     /// transfert fragmenté sera nécessaire avant tout usage sérieux.
     Bloc(Box<ledger::bloc::Bloc>),
+    /// PROPOSITION d'un bloc par le producteur du tour — **non certifié**.
+    ///
+    /// Premier temps du consensus BFT (ADR J1) : le producteur légitime de
+    /// `(hauteur, vue)` diffuse le bloc qu'il propose, sans certificat puisqu'il
+    /// n'a pas encore les votes. Les autorités qui l'acceptent répondent par un
+    /// [`Message::Vote`] ; au quorum, le producteur rediffuse le bloc CERTIFIÉ
+    /// par [`Message::Bloc`], qui s'applique alors par le chemin normal.
+    ///
+    /// ⚠️ Un bloc PORTANT un certificat n'est pas une proposition : le décodeur le
+    /// refuse. Accepter les deux formes donnerait deux encodages du même objet, et
+    /// le receveur ne saurait pas s'il doit voter ou appliquer.
+    Proposition(Box<ledger::bloc::Bloc>),
+    /// VOTE d'une autorité pour une proposition.
+    Vote(Box<Vote>),
     /// « Envoie-moi le bloc de cette hauteur » — RATTRAPAGE.
     ///
     /// Sans ce message, un nœud qui manque UN bloc est figé pour toujours : l'état
@@ -180,6 +249,21 @@ impl Message {
                 b.push(TAG_BLOC);
                 b.extend_from_slice(&bloc.to_bytes());
             }
+            // La proposition réutilise l'encodage du bloc : un seul format de bloc
+            // sur le fil, un seul décodeur à auditer. Seul le TAG distingue « vote
+            // là-dessus » de « applique ça ».
+            Message::Proposition(bloc) => {
+                b.push(TAG_PROPOSITION);
+                b.extend_from_slice(&bloc.to_bytes());
+            }
+            Message::Vote(v) => {
+                b.push(TAG_VOTE);
+                b.extend_from_slice(&v.id);
+                b.extend_from_slice(&v.index.to_le_bytes());
+                let sig = v.signature.to_bytes();
+                b.extend_from_slice(&(sig.len() as u32).to_le_bytes());
+                b.extend_from_slice(&sig);
+            }
             Message::DemandeBloc { hauteur } => {
                 b.push(TAG_DEMANDE_BLOC);
                 b.extend_from_slice(&hauteur.to_le_bytes());
@@ -211,6 +295,43 @@ impl Message {
                 let bloc =
                     ledger::bloc::Bloc::from_bytes(reste).map_err(MessageError::BlocInvalide)?;
                 Ok(Message::Bloc(Box::new(bloc)))
+            }
+            TAG_PROPOSITION => {
+                let bloc =
+                    ledger::bloc::Bloc::from_bytes(reste).map_err(MessageError::BlocInvalide)?;
+                // Une proposition est PAR DÉFINITION non certifiée. Accepter les
+                // deux formes donnerait deux encodages du même objet, et le receveur
+                // ne saurait pas s'il doit voter ou appliquer.
+                if bloc.certificat.is_some() {
+                    return Err(MessageError::PropositionCertifiee);
+                }
+                Ok(Message::Proposition(Box::new(bloc)))
+            }
+            TAG_VOTE => {
+                // Borné AVANT toute lecture : un vote annonçant une signature
+                // délirante ne doit rien coûter.
+                if reste.len() > TAILLE_VOTE_MAX {
+                    return Err(MessageError::VoteInvalide);
+                }
+                if reste.len() < 64 + 2 + 4 {
+                    return Err(MessageError::Tronque);
+                }
+                let id: [u8; 64] = reste[..64].try_into().expect("64 octets");
+                let index = u16::from_le_bytes(reste[64..66].try_into().expect("2 octets"));
+                let n = u32::from_le_bytes(reste[66..70].try_into().expect("4 octets")) as usize;
+                if n == 0 || n > ledger::bloc::TAILLE_SCELLEMENT_MAX {
+                    return Err(MessageError::VoteInvalide);
+                }
+                if 70 + n != reste.len() {
+                    return Err(MessageError::OctetsResiduels);
+                }
+                let signature = crypto::sig::HybridSignature::from_bytes(&reste[70..])
+                    .map_err(|_| MessageError::VoteInvalide)?;
+                Ok(Message::Vote(Box::new(Vote {
+                    id,
+                    index,
+                    signature,
+                })))
             }
             // Longueur EXACTE : 8 octets, ni moins (troncature) ni plus (octets
             // résiduels). Pas d'allocation à borner ici — la borne utile est en aval,
@@ -392,6 +513,93 @@ mod tests {
         }
     }
 
+    /// Aller-retour des deux messages du consensus.
+    #[test]
+    fn aller_retour_proposition_et_vote() {
+        let genese = ledger::bloc::Bloc::genese();
+        let bloc = ledger::bloc::Bloc::sceller(&genese.id(), 1, Vec::new()).unwrap();
+        let id = bloc.id();
+        let octets = Message::Proposition(Box::new(bloc)).to_bytes();
+        match Message::from_bytes(&octets).expect("proposition décodable") {
+            Message::Proposition(b) => assert_eq!(b.id(), id, "l'identifiant survit au fil"),
+            _ => panic!("Proposition attendue"),
+        }
+
+        let k = crypto::sig::SigKeypair::generate();
+        let v = Vote {
+            id,
+            index: 3,
+            signature: k.sign(ledger::bloc::DOMAINE_VOTE, &id),
+        };
+        let octets = Message::Vote(Box::new(v)).to_bytes();
+        match Message::from_bytes(&octets).expect("vote décodable") {
+            Message::Vote(v) => {
+                assert_eq!(v.id, id);
+                assert_eq!(v.index, 3);
+                assert!(
+                    crypto::sig::verify(&k.public, ledger::bloc::DOMAINE_VOTE, &id, &v.signature),
+                    "la signature doit survivre au fil"
+                );
+            }
+            _ => panic!("Vote attendu"),
+        }
+    }
+
+    /// Une proposition PORTANT un certificat est refusée : accepter les deux formes
+    /// donnerait deux encodages du même objet, et le receveur ne saurait pas s'il
+    /// doit voter ou appliquer.
+    #[test]
+    fn proposition_certifiee_refusee() {
+        let genese = ledger::bloc::Bloc::genese();
+        let mut bloc = ledger::bloc::Bloc::sceller(&genese.id(), 1, Vec::new()).unwrap();
+        bloc.signer_vote(0, &crypto::sig::SigKeypair::generate());
+        let octets = Message::Proposition(Box::new(bloc)).to_bytes();
+        assert!(matches!(
+            Message::from_bytes(&octets),
+            Err(MessageError::PropositionCertifiee)
+        ));
+    }
+
+    /// Votes malformés : jamais de panique, et la borne est vérifiée AVANT lecture.
+    #[test]
+    fn votes_malformes_sans_panique() {
+        assert!(Message::from_bytes(&[TAG_VOTE]).is_err());
+        assert!(Message::from_bytes(&[TAG_VOTE, 0, 1, 2]).is_err());
+
+        // Longueur de signature délirante.
+        let mut b = vec![TAG_VOTE];
+        b.extend_from_slice(&[0u8; 64]);
+        b.extend_from_slice(&0u16.to_le_bytes());
+        b.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(matches!(
+            Message::from_bytes(&b),
+            Err(MessageError::VoteInvalide)
+        ));
+
+        // Longueur nulle.
+        let mut b = vec![TAG_VOTE];
+        b.extend_from_slice(&[0u8; 64]);
+        b.extend_from_slice(&0u16.to_le_bytes());
+        b.extend_from_slice(&0u32.to_le_bytes());
+        assert!(matches!(
+            Message::from_bytes(&b),
+            Err(MessageError::VoteInvalide)
+        ));
+
+        // Octets résiduels après la signature annoncée.
+        let k = crypto::sig::SigKeypair::generate();
+        let sig = k.sign(ledger::bloc::DOMAINE_VOTE, &[0u8; 64]).to_bytes();
+        let mut b = vec![TAG_VOTE];
+        b.extend_from_slice(&[0u8; 64]);
+        b.extend_from_slice(&0u16.to_le_bytes());
+        b.extend_from_slice(&((sig.len() - 1) as u32).to_le_bytes());
+        b.extend_from_slice(&sig);
+        assert!(matches!(
+            Message::from_bytes(&b),
+            Err(MessageError::OctetsResiduels)
+        ));
+    }
+
     /// Un bloc indécodable est rejeté proprement, et l'erreur CONSERVE la cause :
     /// « trop de transactions » et « tronqué » n'appellent pas la même réaction (la
     /// première est une tentative d'abus, la seconde peut être un lien coupé).
@@ -480,9 +688,17 @@ mod tests {
         // Et le tag reste décodable : ce n'est pas un tag inconnu.
         assert!(Message::from_bytes(&Message::DemandeBloc { hauteur: 1 }.to_bytes()).is_ok());
         // Les tags au-delà de ceux que nous connaissons restent, eux, « futurs ».
-        // (`TAG_HISTORIQUE` est le dernier attribué : la frontière suit les ajouts,
-        // elle n'est pas recopiée en dur.)
-        assert!(erreur(&[TAG_HISTORIQUE + 1]).version_inconnue());
+        // `DERNIER_TAG` porte la frontière : ce test avait figé `TAG_HISTORIQUE + 1`
+        // en dur et a cassé au premier ajout de message.
+        assert!(erreur(&[DERNIER_TAG + 1]).version_inconnue());
+        // Et tous les tags attribués sont, eux, décodables ou malformés — jamais
+        // « version future ». C'est ce qui empêche de bannir un pair à jour.
+        for tag in 1..=DERNIER_TAG {
+            assert!(
+                !erreur(&[tag]).version_inconnue(),
+                "le tag {tag} est attribué : sa troncature est une MALFORMATION"
+            );
+        }
     }
 
     /// Une version INCONNUE se distingue d'une malformation.
