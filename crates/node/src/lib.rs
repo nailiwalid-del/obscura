@@ -29,6 +29,7 @@ pub mod orchestration;
 pub mod persistance;
 pub mod runtime;
 pub mod synchro;
+pub mod votes;
 
 pub use archive::ArchiveBlocs;
 pub use client::{synchroniser_avec_temoin, synchroniser_par_connexion, Arret, ResumeSynchro};
