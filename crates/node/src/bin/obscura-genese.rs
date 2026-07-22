@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! obscura-genese --sortie genese.bin \
-//!     --autorite donnees-a/identite.bin --autorite-hex 01ab... \
+//!     --autorite donnees-a/identite.cle --autorite-hex 01ab... \
 //!     --allocation obs1…:1000000
 //! ```
 //!
@@ -44,9 +44,10 @@ fn usage() -> ! {
     eprintln!("usage : obscura-genese --sortie <fichier> [options]");
     eprintln!();
     eprintln!("  --sortie <fichier>         fichier de genèse à écrire (obligatoire)");
-    eprintln!("  --autorite <identite.bin>  autorité de scellement, depuis un fichier");
+    eprintln!("  --autorite <identite.cle>  autorité de scellement, depuis un fichier");
     eprintln!("                             d'identité de nœud (répétable)");
     eprintln!("  --autorite-hex <hex>       idem, depuis une clé publique hexadécimale");
+    eprintln!("                             (obtenue par : obscura-node --identite)");
     eprintln!("  --allocation <adr>:<n>     alloue <n> unités à l'adresse obs1… (répétable)");
     eprintln!();
     eprintln!("⚠️  SANS --autorite, la chaîne est OUVERTE : n'importe quel nœud peut");
@@ -75,7 +76,8 @@ fn abandon(message: &str) -> ! {
 /// moitié publique, et on ne la recopie nulle part — mais fournir ce fichier
 /// suppose de l'avoir sous la main, donc d'être soi-même l'opérateur du nœud.
 /// Pour une fédération, `--autorite-hex` est la bonne voie : chaque opérateur
-/// publie sa clé publique, personne ne transmet son fichier.
+/// publie sa clé publique (`obscura-node --identite --donnees <rep>`), personne ne
+/// transmet son fichier.
 fn lire_autorite_fichier(chemin: &str) -> crypto::sig::SigPublicKey {
     let octets = std::fs::read(chemin)
         .unwrap_or_else(|e| abandon(&format!("identité illisible ({chemin}) : {e}")));
@@ -89,11 +91,11 @@ fn lire_autorite_fichier(chemin: &str) -> crypto::sig::SigPublicKey {
     paire.public
 }
 
+/// L'autre moitié de `obscura-node --identite`, et c'est délibérément le MÊME code
+/// (`node::autorite`) : ce qu'un nœud imprime doit être exactement ce qu'on relit
+/// ici, sous peine de découvrir la dérive au moment de graver une chaîne.
 fn lire_autorite_hex(h: &str) -> crypto::sig::SigPublicKey {
-    let octets = hex::decode(h.trim())
-        .unwrap_or_else(|_| abandon("clé d'autorité : caractères non hexadécimaux"));
-    crypto::sig::SigPublicKey::from_bytes(&octets)
-        .unwrap_or_else(|e| abandon(&format!("clé d'autorité invalide : {e:?}")))
+    node::autorite::decoder(h).unwrap_or_else(|e| abandon(&format!("clé d'autorité : {e}")))
 }
 
 /// `adresse:montant`. Le séparateur est le DERNIER `:` — une adresse `obs1…` n'en

@@ -7,6 +7,7 @@
 //! | module | rôle |
 //! |---|---|
 //! | [`archive`] | les N derniers blocs, pour SERVIR un pair qui a manqué une hauteur |
+//! | [`autorite`] | publier/relire une clé d'autorité de scellement — les deux bouts |
 //! | [`message`] | protocole applicatif circulant DANS le canal chiffré |
 //! | [`synchro`] | format de fil du service d'HISTORIQUE (synchronisation wallet) |
 //! | [`etranglement`] | seaux à jetons du service d'historique, par GROUPE RÉSEAU |
@@ -19,6 +20,7 @@
 //! le câblage vit ici plutôt que là-bas.
 
 pub mod archive;
+pub mod autorite;
 pub mod client;
 pub mod etranglement;
 pub mod journal;
