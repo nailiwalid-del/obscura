@@ -1,0 +1,23 @@
+# cargo-deny — plan Testnet 0, T0.2. Deux contrôles : les avis RUSTSEC (les
+# crates pqcrypto round-3 sont peu maintenues, et T1 en change — un avis
+# « unmaintained » ne doit pas MASQUER un avis de vulnérabilité) et les licences.
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "CC0-1.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "MPL-2.0",
+]

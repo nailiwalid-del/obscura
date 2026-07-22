@@ -1,6 +1,9 @@
 [workspace]
 resolver = "2"
 members = ["crates/crypto", "crates/ledger", "crates/proved-hash", "crates/circuit", "crates/zk-spike", "crates/net", "crates/node", "crates/wallet"]
+# Le crate de fuzzing vit HORS du workspace : il exige nightly (cargo-fuzz) et ne
+# doit pas peser sur le build de consensus (cf. fuzz/Cargo.toml).
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.1.0"

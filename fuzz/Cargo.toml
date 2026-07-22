@@ -1,0 +1,50 @@
+# Cibles de fuzzing (plan Testnet 0, T0.3) — anneau 1 : les quatre décodeurs
+# atteignables par un INCONNU sur le réseau. Propriété vérifiée : JAMAIS de
+# panique (les bornes anti-DoS tiennent l'allocation, libFuzzer surveille la
+# mémoire). Tout crash est reversé en test de non-régression du crate concerné.
+#
+# Hors workspace (cf. `exclude` à la racine) : cargo-fuzz exige nightly et des
+# profils propres, il ne doit pas peser sur le build de consensus.
+
+[package]
+name = "obscura-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+node = { path = "../crates/node" }
+ledger = { path = "../crates/ledger" }
+circuit = { path = "../crates/circuit" }
+
+[[bin]]
+name = "message"
+path = "fuzz_targets/message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proved_tx"
+path = "fuzz_targets/proved_tx.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bloc"
+path = "fuzz_targets/bloc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "reponse_historique"
+path = "fuzz_targets/reponse_historique.rs"
+test = false
+doc = false
+bench = false

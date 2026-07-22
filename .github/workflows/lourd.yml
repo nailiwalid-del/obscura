@@ -1,0 +1,47 @@
+# Travaux LOURDS, plantés la nuit — trop lents pour une pull request (plan
+# Testnet 0, T0.2/T0.3). Tout crash de fuzzing doit être reversé en test de
+# non-régression dans le crate concerné.
+name: lourd
+
+on:
+  schedule:
+    - cron: "17 2 * * *" # chaque nuit, 02:17 UTC
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  profondeur-consensus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Les tests profondeur 32 ignorés par défaut (benchs) : mesure_formes est le
+      # bench vivant des tailles de preuve par forme.
+      - run: cargo test -p circuit --release --lib -- --ignored --nocapture
+
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-fuzz --locked
+      # Anneau 1 : les décodeurs atteignables par un INCONNU (priorité absolue).
+      # Budget par cible ; -rss_limit_mb par sécurité (les bornes anti-DoS des
+      # décodeurs doivent tenir l'allocation bien en dessous).
+      - name: fuzz des décodeurs de l'anneau 1
+        run: |
+          for cible in message proved_tx bloc reponse_historique; do
+            cargo fuzz run "$cible" -- -max_total_time=600 -rss_limit_mb=4096
+          done
+      - name: conserver les artefacts de crash éventuels
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artefacts
+          path: fuzz/artifacts

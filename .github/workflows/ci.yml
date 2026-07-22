@@ -1,0 +1,93 @@
+# CI — plan Testnet 0, T0.2 (spec : docs/superpowers/specs/2026-07-22-testnet-public-0-design.md).
+#
+# Deux principes structurent ce fichier :
+# - CHAQUE passe clippy/test tourne DEUX fois : par défaut (la surface CONSENSUS
+#   seule — c'est un invariant du dépôt) puis --all-features (les chemins de dev).
+# - Matrice ubuntu + windows : le développement se fait sous Windows et le code de
+#   permissions 0600 est gaté Unix — une seule plateforme laisserait pourrir l'autre.
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # Passe PAR DÉFAUT d'abord : elle garde l'invariant « build nu = surface
+      # consensus seule » (un warning qui n'apparaît qu'ici est un warning du
+      # chemin de consensus).
+      - run: cargo clippy --workspace --all-targets --release -- -D warnings
+      - run: cargo clippy --workspace --all-targets --release --all-features -- -D warnings
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # --release : les preuves STARK sont gatées release (tests #[ignore] en debug).
+      - run: cargo test --workspace --release
+      - run: cargo test --workspace --release --all-features
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.87"
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --all-targets --all-features
+
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories licenses
+
+  # L'invariant que CLAUDE.md énonce et que rien ne faisait respecter : le build
+  # PAR DÉFAUT ne doit activer aucune feature de dev (dev-transparent,
+  # dev-circuits). `cargo tree -e features` liste les features réellement
+  # activées ; la moindre occurrence fait échouer le job.
+  invariant-features:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: le build par défaut n'active aucune feature de dev
+        run: |
+          if cargo tree -e features --workspace | grep -E "dev-transparent|dev-circuits"; then
+            echo "::error::une feature de dev est active dans le build par défaut"
+            exit 1
+          fi
