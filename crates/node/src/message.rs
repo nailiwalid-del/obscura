@@ -5,7 +5,7 @@
 //!
 //! # Annoncer des digests, pas des transactions
 //!
-//! Une `ProvedTx` pèse ~68 Kio. Envoyer spontanément la transaction à chaque pair
+//! Une `ProvedTx` pèse ~105 Kio. Envoyer spontanément la transaction à chaque pair
 //! serait offrir une **amplification** à l'attaquant : une transaction injectée une
 //! fois se démultiplierait en autant d'envois qu'il y a de liens. Le protocole est
 //! donc en trois temps :
@@ -13,7 +13,7 @@
 //! ```text
 //!   Annonce(digests)  →   « j'ai ces transactions »        ~64 o par entrée
 //!   Demande(digests)  ←   « envoie-moi celles qui manquent »
-//!   Transaction(tx)   →   la transaction elle-même         ~68 Kio
+//!   Transaction(tx)   →   la transaction elle-même         ~105 Kio
 //! ```
 //!
 //! Un pair ne télécharge ainsi que ce qu'il n'a pas, et la bande passante suit le
@@ -115,7 +115,7 @@ pub enum Message {
     /// par digest. La raison est asymétrique : une transaction annoncée peut être
     /// déjà connue de dix pairs, alors qu'un bloc neuf ne l'est de personne — un
     /// aller-retour annonce/demande ne ferait que retarder ce que tout le monde va
-    /// vouloir. ⚠️ Un bloc plein (~34 Mio) dépasse largement le cadre réseau de
+    /// vouloir. ⚠️ Un bloc plein (~52 Mio) dépasse largement le cadre réseau de
     /// 1 Mio : à la cadence actuelle du prototype les blocs sont petits, mais un
     /// transfert fragmenté sera nécessaire avant tout usage sérieux.
     Bloc(Box<ledger::bloc::Bloc>),

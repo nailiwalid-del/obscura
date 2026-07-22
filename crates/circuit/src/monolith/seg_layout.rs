@@ -158,9 +158,15 @@ mod plan {
     /// colonnes disjoints) → max(32, 60) arrondi à 64 (puissance de 2).
     pub(crate) const OUT_LEN: usize = 64;
 
-    /// Lignes de blinding (witness-hiding, 3z-b1). Dérivé : ≥ q(32) + OOD(2) + marge(6).
-    /// `q` = nombre de requêtes de `proof_options_hi`. Assertion de cohérence dans air.rs.
-    pub(crate) const BLIND_ROWS: usize = 40;
+    /// Lignes de blinding (witness-hiding, 3z-b1). Dérivé : ≥ q + OOD(4) + marge.
+    /// `q` = `REQUETES_CONSENSUS` (48 depuis le durcissement de soundness) →
+    /// plancher 52, porté à 56 pour la marge. Assertion de cohérence dans seg_air.
+    ///
+    /// ⚠️ Passer de 40 à 56 ne coûte RIEN en longueur de trace : à la profondeur
+    /// de consensus, `used_rows` = 1168 et la trace fait 2048 — il reste 880 lignes
+    /// disponibles. Le witness-hiding suit donc gratuitement le durcissement de la
+    /// soundness, alors que l'inverse (blinding insuffisant) le casserait.
+    pub(crate) const BLIND_ROWS: usize = 56;
 
     /// Nombre de segments du schedule 2-in/2-out figé (1 KEY + 2 IN + 2 OUT).
     /// Test-only depuis C2-T8, comme le reste de la forme 2/2 épinglée
@@ -449,11 +455,11 @@ mod tests {
     // WIDTH dépasse le budget winterfell, la compilation échoue.
     const _: () = assert!(WIDTH <= winterfell::TraceInfo::MAX_TRACE_WIDTH);
 
-    // Marge de blinding : garde-fou COMPILE-TIME (même motif). 32 = nombre de
-    // requêtes de `proof_options_hi`, +4 = 2 évaluations OOD × 2 composantes base-field
-    // (extension quadratique) ; la liaison RUNTIME aux options réelles est assertée
-    // dans `MonolithAir::new`.
-    const _: () = assert!(BLIND_ROWS >= 32 + 4);
+    // Marge de blinding : garde-fou COMPILE-TIME (même motif). `REQUETES_CONSENSUS`
+    // requêtes, +4 = 2 évaluations OOD × 2 composantes base-field (extension
+    // quadratique) ; la liaison RUNTIME aux options réelles est assertée dans
+    // `SegMonolithAir::new`.
+    const _: () = assert!(BLIND_ROWS >= crate::REQUETES_CONSENSUS + 4);
 
     #[test]
     fn groupes_de_segment_contigus() {

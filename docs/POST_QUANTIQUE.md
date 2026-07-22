@@ -91,29 +91,45 @@ Ces valeurs sont **annoncées par winterfell lui-même** sur une preuve réelle 
 2/2, profondeur de consensus 32), pas estimées :
 
 ```
-paramètres : 32 requêtes, blowup 16, grinding 0, extension quadratique
+paramètres : 48 requêtes, blowup 16, grinding 0, extension quadratique
 CONJECTURÉE (conjecture 1, eprint 2021/582) : 127 bits
-PROUVÉE — décodage par liste :  62 bits | décodage unique : 29 bits
+PROUVÉE — décodage par liste : 78 à 82 bits selon la forme | unique : 43 bits
 ```
 
-Reproduire :
-`cargo test -p circuit --release --lib niveau_de_securite -- --ignored --nocapture`
+Reproduire : `cargo test -p circuit --release --lib securite_par_forme --
+--ignored --nocapture`
 
 **Comment le lire.** La sécurité *conjecturée* (127 bits) suppose vraie une
-conjecture de la littérature FRI qui n'est pas démontrée. La sécurité *prouvée*
-(62 bits en décodage par liste) est ce qui tient **sans** cette conjecture. C'est
-la borne de **soundness** — la difficulté de forger une preuve invalide, donc, dans
-le pire cas, de **créer de la monnaie**.
+conjecture de la littérature FRI qui n'est pas démontrée. La sécurité *prouvée* est
+ce qui tient **sans** cette conjecture. C'est la borne de **soundness** — la
+difficulté de forger une preuve invalide, donc, dans le pire cas, de **créer de la
+monnaie**.
 
-**62 bits n'est pas un niveau de production pour une monnaie.** Le remède est connu
-et purement paramétrique : la sécurité prouvée demande 2× à 3× plus de requêtes que
-la conjecturée à niveau égal — augmenter `num_queries` (32 aujourd'hui) rapproche
-les deux, au prix direct de la taille de preuve, qui est le coût permanent du
-réseau. C'est un arbitrage à trancher **avant** que la chaîne ait de la valeur,
-et il est ouvert.
+**Elle dépend de la LONGUEUR DE TRACE, donc de la forme de la transaction :**
 
-> Ce chiffre est indépendant du quantique : il vaut déjà contre un adversaire
-> classique. Il est écrit ici parce qu'un document qui vante 127 bits sans nommer
+| forme | trace | prouvé (liste) |
+|---|---|---|
+| 1-in/1-out, 1-in/2-out | 1024 | 82 bits |
+| 2-in/2-out (défaut) | 2048 | 80 bits |
+| 4-in/4-out | 4096 | **78 bits** |
+
+Le réseau ne vaut donc que ce que vaut sa **plus grande** transaction : le vérifieur
+exige 78 bits prouvés (`SOUNDNESS_MINIMALE`) et refuse toute preuve en dessous.
+
+**Ce que le durcissement du 2026-07-22 a changé.** Le circuit produisait ses preuves
+avec 32 requêtes FRI — 62 bits prouvés — et, plus grave, le vérifieur n'exigeait
+qu'un niveau *conjecturé* (95 bits) qui vaut 127 à 32 comme à 48 requêtes : il ne
+distinguait donc **rien**. N'importe qui pouvait produire une preuve économique que
+le réseau acceptait. Le verrou est désormais côté vérifieur (`MinProvenSecurity`).
+
+**Ce qui reste ouvert.** Ces 78 bits vivent dans le régime de décodage par **liste**,
+qui suppose la list-decodability. Le régime de décodage **unique**, qui ne suppose
+rien, ne vaut que 43 bits ici ; l'amener à 87 demanderait 96 requêtes, soit ×1,8 sur
+la taille de preuve (178 Kio par transaction). Arbitrage tranché en faveur de 48 :
+le gain théorique ne valait pas un doublement du coût permanent du réseau.
+
+> Ces chiffres sont indépendants du quantique : ils valent déjà contre un adversaire
+> classique. Ils sont écrits ici parce qu'un document qui vante 127 bits sans nommer
 > la conjecture mentirait par omission.
 
 ## 6. Le coût, mesuré
@@ -123,12 +139,16 @@ Preuves à la profondeur de consensus (32), par forme de transaction —
 
 | Forme | Taille de preuve | Vérification |
 |---|---|---|
-| 1-in/1-out | 54,7 Kio | 1,7 ms |
-| 1-in/2-out | 53,7 Kio | 1,6 ms |
-| **2-in/2-out** (défaut) | **68,3 Kio** | 5,1 ms |
-| 4-in/4-out | 80,6 Kio | 11,8 ms |
+| 1-in/1-out | 78,3 Kio | 2,4 ms |
+| 1-in/2-out | 78,1 Kio | 1,8 ms |
+| **2-in/2-out** (défaut) | **98,0 Kio** | 4,6 ms |
+| 4-in/4-out | 114,0 Kio | 11,3 ms |
 
-Une transaction Obscura pèse donc **environ 68 Kio**, contre un ordre de grandeur
+Sur le fil, une `ProvedTx` 2/2 complète (preuve + enveloppe d'intention + enc_notes)
+pèse **105 Kio** — c'est ce chiffre-là qui borne le nombre de transactions par bloc
+(~9, contre ~15 avant le durcissement de soundness).
+
+Une transaction Obscura pèse donc **environ 105 Kio**, contre un ordre de grandeur
 de quelques Kio pour les monnaies privées à courbes elliptiques. **L'écart n'est
 pas rattrapable par de l'optimisation : c'est le prix des STARK.** Un lecteur qui
 n'accepte pas ce prix n'a pas besoin d'Obscura — et le document doit le lui dire.

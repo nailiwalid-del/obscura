@@ -663,22 +663,32 @@ pas estimés — `cargo test -p circuit --release --lib niveau_de_securite --
 --ignored --nocapture` :
 
 ```
-paramètres : 32 requêtes, blowup 16, grinding 0, extension quadratique
+paramètres : 48 requêtes, blowup 16, grinding 0, extension quadratique
 CONJECTURÉE (conjecture 1, eprint 2021/582) : 127 bits
-PROUVÉE — décodage par liste :  62 bits | décodage unique : 29 bits
+PROUVÉE — décodage par liste : 78 (4/4) à 82 (1/1) bits | unique : 43 bits
 ```
+(avant le durcissement du 2026-07-22 : 32 requêtes, 62 bits prouvés)
 
 La sécurité *conjecturée* suppose vraie une conjecture de la littérature FRI qui
 n'est pas démontrée ; la *prouvée* est ce qui tient sans elle. Cette borne est
 celle de la SOUNDNESS : la difficulté de forger une preuve invalide — donc, au
 pire, de créer de la monnaie.
 
-**62 bits n'est pas un niveau de production pour une monnaie.** Le remède est
-paramétrique et connu (la sécurité prouvée demande 2× à 3× plus de requêtes que la
-conjecturée à niveau égal) : augmenter `num_queries` — 32 aujourd'hui dans
-`proof_options_hi` — au prix direct de la taille de preuve, qui est le coût
-permanent payé par chaque nœud. **Arbitrage OUVERT, à trancher avant que la chaîne
-ait de la valeur.**
+**Arbitrage TRANCHÉ (2026-07-22) : 48 requêtes.** C'est le point où le régime de
+décodage par liste SATURE — au-delà, chaque requête coûte ~1,8 Kio de preuve pour
+zéro bit prouvé de plus. La sécurité prouvée décroît avec la LONGUEUR DE TRACE
+(82 bits à 1024 lignes, 80 à 2048, 78 à 4096), donc le seuil du vérifieur est celui
+de la PIRE forme : `SOUNDNESS_MINIMALE = 78`. Fixer 80 aurait silencieusement rejeté
+la forme 4/4 — la consolidation de notes serait devenue impossible sans qu'aucune
+règle ne le dise.
+
+**Le verrou est côté VÉRIFIEUR** : `MinProvenSecurity(78)` remplace
+`MinConjecturedSecurity(95)`. Le conjecturé valant 127 bits à 32 requêtes comme à 48,
+il ne distinguait RIEN — un prouveur pouvait économiser des requêtes et le réseau
+acceptait sa preuve à 62 bits. Test : `preuve_affaiblie_refusee_par_le_verifieur`.
+
+Reste ouvert : le régime de décodage UNIQUE (aucune hypothèse) ne vaut que 43 bits ;
+l'amener à 87 demanderait 96 requêtes, soit ×1,8 sur la taille de preuve.
 
 ⚠️ Ce chiffre ne dépend pas du quantique : il vaut déjà contre un adversaire
 classique. Il est écrit parce qu'annoncer 127 bits sans nommer la conjecture serait

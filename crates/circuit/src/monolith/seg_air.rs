@@ -1104,6 +1104,29 @@ pub(crate) fn prove_seg_forme(
     (pi, ValidityProof(proof))
 }
 
+/// Soundness PROUVÉE minimale exigée d'une preuve de consensus, en bits.
+///
+/// **78 = ce qu'atteint la PIRE forme**, et c'est le seul chiffre honnête : la
+/// sécurité prouvée décroît avec la LONGUEUR DE TRACE, donc le réseau ne vaut que
+/// ce que vaut sa plus grande transaction. Mesuré à 48 requêtes, profondeur 32 :
+///
+/// | forme | trace | prouvé (liste) |
+/// |-------|-------|----------------|
+/// | 1/1, 1/2 | 1024 | 82 |
+/// | 2/2   | 2048  | 80 |
+/// | 4/4   | 4096  | **78** |
+///
+/// Fixer le seuil à 80 aurait REJETÉ la forme 4/4 — la consolidation de notes
+/// serait devenue impossible sans qu'aucune règle ne le dise. Le test
+/// `securite_par_forme` republie ce tableau à la demande ; si `MAX_IN`/`MAX_OUT`
+/// grandissaient, la trace grandirait et ce seuil devrait BAISSER encore.
+///
+/// ⚠️ Cette garantie vit dans le régime de décodage par LISTE (il suppose la
+/// list-decodability). Le régime de décodage UNIQUE, qui ne suppose rien, ne vaut
+/// que 43 bits à 48 requêtes ; il faudrait 96 requêtes pour l'amener à 87, au prix
+/// de ×1,8 sur la taille de preuve. Arbitrage tranché (2026-07-22) : on garde 48.
+pub(crate) const SOUNDNESS_MINIMALE: u32 = 78;
+
 /// Vérifie une preuve du monolithe segmenté.
 pub(crate) fn verify_seg_monolith(
     pi: &MonolithPublicInputs,
@@ -1112,7 +1135,14 @@ pub(crate) fn verify_seg_monolith(
 ) -> bool {
     let mut pv = pi.clone();
     pv.depth = depth;
-    let acceptable = winterfell::AcceptableOptions::MinConjecturedSecurity(95);
+    // VERROU DE CONSENSUS : on exige la sécurité PROUVÉE, pas la conjecturée.
+    //
+    // `MinConjecturedSecurity(95)` ne distinguait rien : le conjecturé vaut 127 bits
+    // à 32 requêtes comme à 48. Un prouveur pouvait donc économiser des requêtes et
+    // produire une preuve à 62 bits PROUVÉS que le réseau acceptait. Avec
+    // `MinProvenSecurity(80)` — le plafond du régime de décodage par liste, atteint
+    // à 48 requêtes — une preuve moins chère est refusée par le consensus lui-même.
+    let acceptable = winterfell::AcceptableOptions::MinProvenSecurity(SOUNDNESS_MINIMALE);
     winterfell::verify::<SegMonolithAir, Blake3, DefaultRandomCoin<Blake3>, MerkleTree<Blake3>>(
         proof.0.clone(),
         pv,
@@ -1655,6 +1685,117 @@ mod tests {
 
         // Plancher volontairement bas : on mesure, on ne fige pas un seuil.
         assert!(conj.bits() >= 80, "sécurité conjecturée effondrée");
+    }
+
+    /// Prouve la MÊME trace avec un nombre de requêtes CHOISI — sert à démontrer
+    /// qu'une preuve affaiblie est refusée par le vérifieur de consensus.
+    #[cfg(test)]
+    fn prouver_avec_requetes(
+        w: &crate::monolith::seg_trace::SegWitness,
+        q: usize,
+    ) -> (MonolithPublicInputs, ValidityProof) {
+        let options = winterfell::ProofOptions::new(
+            q,
+            16,
+            0,
+            winterfell::FieldExtension::Quadratic,
+            8,
+            127,
+            winterfell::BatchingMethod::Linear,
+            winterfell::BatchingMethod::Linear,
+        );
+        let f = w.forme();
+        let depth = w.inputs[0].path.len();
+        let trace =
+            crate::monolith::seg_trace::build_seg_trace_forme_seeded(w, &mut rand::rngs::OsRng);
+        let pi = MonolithPublicInputs {
+            root: read4(&trace, ROOT_C, 0),
+            nullifiers: (0..f.m())
+                .map(|i| {
+                    read4(
+                        &trace,
+                        SEG_SPONGE_OFF + RATE_START,
+                        f.seg_start(1 + i, depth) + NF_ROWS_END - 1,
+                    )
+                })
+                .collect(),
+            output_commitments: (0..f.n())
+                .map(|j| {
+                    read4(
+                        &trace,
+                        SEG_SPONGE_OFF + RATE_START,
+                        f.seg_start(1 + f.m() + j, depth) + CM_ROWS_END - 1,
+                    )
+                })
+                .collect(),
+            fee: w.fee,
+            depth,
+        };
+        let prover = SegMonolithProver {
+            options,
+            pi: pi.clone(),
+        };
+        let proof = prover.prove(trace).expect("génération");
+        (pi, ValidityProof(proof))
+    }
+
+    /// UNE PREUVE AFFAIBLIE EST REFUSÉE PAR LE CONSENSUS.
+    ///
+    /// Augmenter `num_queries` côté PROUVEUR ne vaut RIEN si le vérifieur continue
+    /// d'accepter les preuves faibles : n'importe qui produirait alors des preuves
+    /// à 32 requêtes (62 bits prouvés) et le réseau les avalerait. Le verrou est
+    /// donc côté vérifieur — `MinProvenSecurity`, pas `MinConjecturedSecurity`,
+    /// car le conjecturé vaut 127 bits à 32 requêtes comme à 48 et ne distingue
+    /// donc RIEN.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "monolithe gaté : --release")]
+    fn preuve_affaiblie_refusee_par_le_verifieur() {
+        use crate::monolith::seg_trace::tests::witness_forme_profondeur;
+        let w = witness_forme_profondeur(2, 2, 32);
+
+        // Contrôle : aux paramètres de consensus, la preuve passe.
+        let (pi, preuve) = prove_seg_forme(&w);
+        assert!(
+            verify_seg_monolith(&pi, 32, &preuve),
+            "contrôle : les paramètres de consensus doivent être acceptés"
+        );
+
+        // ADVERSE : un prouveur qui économise des requêtes est REFUSÉ.
+        let (pi_faible, faible) = prouver_avec_requetes(&w, 32);
+        assert!(
+            !verify_seg_monolith(&pi_faible, 32, &faible),
+            "une preuve à 32 requêtes (62 bits prouvés) doit être REFUSÉE"
+        );
+    }
+
+    /// SÉCURITÉ PROUVÉE PAR FORME : la trace la plus LONGUE est la plus faible.
+    ///
+    /// `cargo test -p circuit --release --lib securite_par_forme -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "mesure : lancer explicitement avec --ignored --nocapture"]
+    fn securite_par_forme() {
+        use crate::monolith::seg_trace::tests::witness_forme_profondeur;
+        type Blake3b = winterfell::crypto::hashers::Blake3_256<BaseElement>;
+        println!(
+            "
+=== securite PROUVEE par forme (profondeur 32, {} requetes) ===",
+            crate::REQUETES_CONSENSUS
+        );
+        for (m, n) in [(1usize, 1usize), (1, 2), (2, 2), (4, 4)] {
+            let w = witness_forme_profondeur(m, n, 32);
+            let (_pi, proof) = prove_seg_forme(&w);
+            let pr = proof.0.proven_security::<Blake3b>();
+            println!(
+                "forme {}/{} | trace {:5} | conj {:3} | prouve liste {:3} / unique {:3} | seuil {} => {}",
+                m, n,
+                w.forme().trace_len(32),
+                proof.0.conjectured_security::<Blake3b>().bits(),
+                pr.ldr_bits(), pr.udr_bits(),
+                SOUNDNESS_MINIMALE,
+                if pr.ldr_bits() >= SOUNDNESS_MINIMALE || pr.udr_bits() >= SOUNDNESS_MINIMALE { "ACCEPTE" } else { "REFUSE" }
+            );
+        }
+        println!();
     }
 
     /// RE-BENCH 3z-c2 : cout par FORME, profondeur consensus (32). Mesure ce

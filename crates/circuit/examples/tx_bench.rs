@@ -129,18 +129,24 @@ fn main() {
         bytes as f64 / 1024.0
     );
     println!("  = 1 SEULE preuve STARK monolithique SEGMENTÉE (P1–P7, 92 col × 2048 lignes)");
-    println!();
-    println!("=== RÉFÉRENCE : monolithe CÔTE-À-CÔTE (3z-b1, avant bascule 3z-c1) ===");
-    println!("génération  :   1260.6 ms");
-    println!("vérification:      2.8 ms");
-    println!("taille preuve totale : 89.3 Kio (201 col × 1024 lignes)");
-    println!();
+
+    // Ce qui voyage RÉELLEMENT sur le fil : la preuve, plus l'enveloppe d'intention
+    // (clé + signature hybrides), les digests et les enc_notes. C'est CE chiffre
+    // qui borne le nombre de transactions par bloc, pas la taille de la preuve.
+    let tx_bytes = tx.to_bytes().len();
     println!(
-        "Δ facteur vs côte-à-côte: {:.2}× génération, {:.2}× vérification, {:.3}× taille",
-        prove_ms / 1260.6,
-        verify_ms / 2.8,
-        bytes as f64 / 1024.0 / 89.3
+        "taille ProvedTx COMPLÈTE (ce qui part sur le fil) : {tx_bytes} o  ({:.1} Kio)",
+        tx_bytes as f64 / 1024.0
     );
-    println!("(< 1 en taille = le segmenté gagne ; la taille est le coût PERMANENT,");
-    println!(" payé par chaque nœud qui stocke et relaie chaque transaction)");
+    println!();
+    println!("=== RÉFÉRENCE : avant le durcissement de soundness (32 requêtes) ===");
+    println!("taille preuve        : 68,3 Kio  — mais 62 bits PROUVÉS seulement");
+    println!(
+        "aujourd'hui (48 req.) : {:.1} Kio — 78 à 82 bits prouvés selon la forme",
+        bytes as f64 / 1024.0
+    );
+    println!();
+    println!("Le surcoût est le PRIX de la soundness prouvée, pas une régression :");
+    println!("la taille est le coût PERMANENT, payé par chaque nœud qui stocke et");
+    println!("relaie chaque transaction, pour toujours. Cf. docs/POST_QUANTIQUE.md §5.");
 }

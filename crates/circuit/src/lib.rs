@@ -106,11 +106,24 @@ pub(crate) fn proof_options() -> ProofOptions {
     )
 }
 
+/// Nombre de requêtes FRI de la preuve de CONSENSUS.
+///
+/// 48 et non 32 : à 32, la sécurité PROUVÉE (sans la conjecture 1 de eprint
+/// 2021/582) n'est que de 62 bits en décodage par liste — insuffisant pour une
+/// monnaie. 48 atteint **80 bits**, qui est le PLAFOND de ce régime avec
+/// Goldilocks + extension quadratique + blowup 16 : au-delà, seul le régime de
+/// décodage unique progresse, et chaque requête coûte ~1,8 Kio de preuve pour
+/// zéro bit prouvé de plus. Mesuré, pas estimé (cf. docs/POST_QUANTIQUE.md §5).
+///
+/// ⚠️ Le prouveur ne suffit pas : le VÉRIFIEUR doit refuser les preuves moins
+/// chères (cf. `verify_seg_monolith`), sinon rien n'empêche de produire à 32.
+pub(crate) const REQUETES_CONSENSUS: usize = 48;
+
 /// Paramètres à blowup 16 pour les AIR dont les contraintes gatées montent en degré
 /// (chemin de Merkle, monolithe). Partagé pour éviter la divergence de facteurs.
 pub(crate) fn proof_options_hi() -> ProofOptions {
     ProofOptions::new(
-        32,
+        REQUETES_CONSENSUS,
         16,
         0,
         winterfell::FieldExtension::Quadratic,

@@ -78,20 +78,26 @@ la gouvernance du remplacement d'autorité. **Prototype non audité — testnet 
   PROTOCOL.md) et l'identité de transport d'un wallet qui soumet à un nœud
   (**éphémère**, sinon le nœud d'entrée relie toutes nos soumissions).
 
-## La soundness PROUVÉE de la preuve est de 62 bits (mesurée, T3)
+## La soundness PROUVÉE de la preuve est de 78 bits (durcie le 2026-07-22)
 
-Annoncé par winterfell sur une preuve réelle (2/2, profondeur 32) : sécurité
-**conjecturée 127 bits**, **prouvée 62 bits** en décodage par liste (29 en décodage
-unique). La conjecturée suppose vraie une conjecture FRI non démontrée ; la prouvée
-est ce qui tient sans elle.
+Annoncé par winterfell sur des preuves réelles (profondeur 32) : sécurité
+**conjecturée 127 bits**, **prouvée 78 à 82 bits** en décodage par liste selon la
+forme (43 en décodage unique). La conjecturée suppose vraie une conjecture FRI non
+démontrée ; la prouvée est ce qui tient sans elle.
 
 C'est la borne de SOUNDNESS — la difficulté de forger une preuve invalide, donc au
-pire de **créer de la monnaie**. 62 bits n'est pas un niveau de production. Le
-remède est paramétrique (`num_queries` = 32 aujourd'hui ; la sécurité prouvée
-demande 2× à 3× plus de requêtes) et coûte directement de la taille de preuve.
-**Arbitrage ouvert, à trancher avant que la chaîne ait de la valeur.** Ce chiffre
-vaut déjà contre un adversaire CLASSIQUE — il n'a rien de quantique. Détail :
-docs/POST_QUANTIQUE.md §5 et STARK_STATEMENT.md, « Soundness ».
+pire de **créer de la monnaie**. Elle valait **62 bits** avant le durcissement
+(32 → 48 requêtes FRI) et, surtout, le vérifieur n'exigeait qu'un niveau CONJECTURÉ,
+qui ne distinguait pas une preuve économique d'une preuve conforme : n'importe qui
+pouvait produire à 32 requêtes et le réseau acceptait. Le verrou est désormais
+`MinProvenSecurity(78)`, côté VÉRIFIEUR.
+
+⚠️ 78 est le niveau de la PIRE forme (4-in/4-out, trace 4096) : la sécurité prouvée
+décroît avec la longueur de trace, donc **le réseau ne vaut que ce que vaut sa plus
+grande transaction**. Si `MAX_IN`/`MAX_OUT` grandissaient, ce seuil baisserait.
+Prix payé : la transaction passe de 68 à 105 Kio sur le fil, et un bloc diffusable
+porte ~9 transactions au lieu de ~15. Ce chiffre vaut déjà contre un adversaire
+CLASSIQUE — il n'a rien de quantique. Détail : docs/POST_QUANTIQUE.md §5.
 
 ## Ce que le wallet ne protège PAS (état actuel)
 
