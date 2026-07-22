@@ -248,7 +248,7 @@ reproduira :
    quiconque - partition definitive, l'etat etant append-only. Regle qui en decoule :
    *toute borne de `from_bytes` doit exister aussi dans le constructeur*.
    **La variante OCTETS du meme defaut a ete fermee depuis** : `MAX_TX_PAR_BLOC` borne
-   le NOMBRE, pas le POIDS (a ≈ 68 Kio la transaction, une quinzaine suffit a depasser
+   le NOMBRE, pas le POIDS (a ≈ 104 Kio la transaction, une dizaine suffit a depasser
    le cadre reseau de 1 Mio). `MAX_OCTETS_BLOC` (cadre − surcout AEAD − marge message)
    est desormais verifie au scellement ET au decodage — et comme le cadre borne le
    CHIFFRE, le surcout de la cascade est soustrait du budget, sinon un bloc scelle a la

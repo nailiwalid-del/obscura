@@ -328,6 +328,14 @@
 > **Re-bench profondeur 32** (par forme) : 1/1 → 55,7 Kio / 1,6 ms ; 1/2 → 55,9 Kio ;
 > 2/2 → 67,7 Kio / 3,8 ms (inchangé, non-régression) ; 4/4 → 80,3 Kio / 12,6 ms. La
 > taille croît doucement avec la forme, la vérification reste sous 13 ms au pire cas.
+> ⚠️ **Ces tailles sont CADUQUES depuis le durcissement de soundness du 2026-07-22**
+> (32 → 48 requêtes FRI, cf. « Le chiffre inconfortable » plus bas). Mesures
+> COURANTES, même commande (`cargo test -p circuit --release --lib mesure_formes --
+> --ignored --nocapture`) : 1/1 → **78,5 Kio** / 1,9 ms ; 1/2 → 78,4 Kio ; 2/2 →
+> **96,1 Kio** / 4,0 ms ; 4/4 → **114,3 Kio** / 12,3 ms. Sur le fil, une `ProvedTx`
+> 2/2 complète pèse **≈104 Kio**. Les temps, eux, n'ont pas bougé : le durcissement
+> se paie en OCTETS — le coût permanent, supporté par chaque nœud qui stocke et
+> relaie, pour toujours.
 >
 > **C2-T8 — le côte-à-côte est SUPPRIMÉ** : `monolith/{air,layout,trace}.rs`
 > (~2 600 lignes) sont effacés. Ce que les deux implémentations PARTAGEAIENT — la

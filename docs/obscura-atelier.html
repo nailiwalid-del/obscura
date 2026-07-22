@@ -132,6 +132,18 @@
   .bloc.fresh{animation:pop .5s ease}
   .chainlink{color:var(--accent); font-weight:700}
 
+  /* Comité d'autorités et certificat de quorum */
+  .comite{border:1px dashed var(--line); border-radius:12px; padding:12px 16px; margin:14px 0; background:var(--surface-2)}
+  .comite .lab{font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); display:block; margin-bottom:8px}
+  .autorites{display:flex; gap:8px; flex-wrap:wrap}
+  .autorite{flex:1 1 120px; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:8px 12px; font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--muted); transition:background .25s ease,border-color .25s ease,color .25s ease}
+  .autorite .an{display:block; font-size:10px; letter-spacing:.08em; text-transform:uppercase}
+  .autorite.producteur{border-color:var(--secret); color:var(--secret); background:var(--secret-soft)}
+  .autorite.vote{border-color:var(--accent); color:var(--accent-ink); background:var(--accent-soft); animation:pop .4s ease}
+  .quorum-jauge{font-family:ui-monospace,Menlo,monospace; font-size:12.5px; margin-top:10px; color:var(--muted)}
+  .quorum-jauge b{color:var(--ink)}
+  .quorum-jauge.atteint b{color:var(--done)}
+
   /* Formulaire de dépense */
   .spendform{display:flex; flex-wrap:wrap; gap:14px; align-items:flex-end; margin:12px 0}
   .field label{display:block; font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin-bottom:5px}
@@ -260,9 +272,18 @@
   <section class="step locked" id="s4">
     <h2><span class="n">4</span> Scelle un bloc — la finalité</h2>
     <p class="why">Une transaction au mempool n'a rien changé à l'état : si chaque nœud appliquait dans son coin, les arbres divergeraient. Un nœud <strong>scelle</strong> donc un <strong>bloc</strong> : un lot <em>ordonné</em> (tri par digest — deux nœuds honnêtes produisent le MÊME bloc), <em>chaîné</em> à son parent, appliqué <em>atomiquement</em>. C'est là que le nullifier devient public et que les sorties entrent dans l'arbre. Le bloc est aussi <em>borné en octets</em> au scellement : un bloc valide doit tenir dans un cadre réseau, sinon son producteur serait le seul à pouvoir l'appliquer. (Vrai prototype : <code>obscura-node --sceller</code>.)</p>
+    <p class="why">Mais <strong>qui</strong> a le droit de sceller ? Pas n'importe qui : la genèse grave une liste d'<strong>autorités</strong>, et celle du tour produit le bloc. Surtout, son bloc ne compte que s'il réunit un <strong>quorum</strong> — <code>2f+1</code> signatures sur <code>n = 3f+1</code> autorités, soit <strong>3 sur 4</strong> ici. C'est ce qui donne la <em>finalité</em> : contredire un bloc certifié exigerait que deux autorités signent deux blocs à la même hauteur, une faute <em>prouvable</em>. Regarde les votes arriver.</p>
+
+    <div class="comite">
+      <span class="lab">🏛 Comité — 4 autorités, quorum 2f+1 = 3</span>
+      <div class="autorites" id="autorites"></div>
+      <div class="quorum-jauge" id="quorum-jauge">votes : <b>0</b> / 3 requis</div>
+    </div>
+
     <div class="btnrow"><button class="primary" id="btn-seal">⛏ Sceller le bloc</button></div>
     <div class="chain" id="chain" aria-label="Chaîne de blocs"></div>
     <div class="verdict" id="verdict-seal"></div>
+    <p class="why" style="margin-top:14px">⚠️ <strong>Dans le vrai prototype, cette étape s'arrête à mi-chemin.</strong> Le format du certificat et sa vérification sont livrés ; le protocole qui fait <em>circuler</em> les votes ne l'est pas encore (jalon J1-b). Un producteur ne rassemble donc que son propre vote — et une vraie chaîne à quatre autorités ne produit aujourd'hui aucun bloc. Ici, l'atelier simule les trois votes pour montrer où l'on va.</p>
   </section>
 
   <!-- ÉTAPE 5 -->
@@ -297,6 +318,7 @@
           <li>la <strong>chaîne</strong> : <span id="obs-h">0</span> bloc(s) scellé(s), racine <span class="hash" id="obs-root"></span></li>
           <li><span id="obs-cm-count">0</span> commitments — des enveloppes scellées, indistinguables</li>
           <li><span id="obs-nf-count">0</span> nullifiers — « une note a été dépensée », sans savoir laquelle</li>
+          <li>les <strong>votes du quorum</strong> — qui a certifié chaque bloc est public, et c'est voulu : l'accord doit être vérifiable par tous. Ce que le certificat ne dit pas, c'est ce que les blocs contiennent.</li>
           <li>les <strong>frais</strong> de chaque transaction</li>
         </ul>
         <p class="none">Ni montants, ni expéditeur, ni destinataire, ni lien nullifier→feuille.</p>
@@ -449,6 +471,34 @@ function dessinerChaine(neuf){
   });
   $("obs-h").textContent = etat.chaine.length;
 }
+
+/* --- Comité d'autorités et certificat de quorum.
+   n = 4 ⇒ f = 1 ⇒ quorum 2f+1 = 3. Le producteur de la hauteur h est
+   l'autorité (h−1) mod n : c'est un TOUR DE RÔLE, pas une course. */
+const N_AUTORITES = 4;
+const QUORUM = 2 * Math.floor((N_AUTORITES - 1) / 3) + 1;
+function producteurDe(h){ return (h - 1) % N_AUTORITES; }
+function dessinerComite(h, votes){
+  const cont = $("autorites"); cont.innerHTML = "";
+  const prod = producteurDe(h);
+  for (let i = 0; i < N_AUTORITES; i++){
+    const d = document.createElement("div");
+    let cls = "autorite";
+    if (votes && votes.includes(i)) cls += " vote";
+    else if (i === prod) cls += " producteur";
+    d.className = cls;
+    const role = votes && votes.includes(i) ? "✓ a voté"
+               : i === prod ? "⛏ producteur" : "en attente";
+    d.innerHTML = '<span class="an">autorité n° ' + i + '</span>' + role;
+    cont.appendChild(d);
+  }
+  const n = votes ? votes.length : 0;
+  const j = $("quorum-jauge");
+  j.className = "quorum-jauge" + (n >= QUORUM ? " atteint" : "");
+  j.innerHTML = "votes : <b>" + n + "</b> / " + QUORUM + " requis"
+    + (n >= QUORUM ? " — <b>quorum atteint, le bloc est FINAL</b>" : "");
+}
+
 function journal(msg){
   const j = $("journal");
   if (j.firstChild && j.firstChild.textContent.startsWith("—")) j.innerHTML = "";
@@ -575,7 +625,7 @@ async function prouverEtSoumettre(note, montant, frais, rejouer){
     etat.derniereDepense = { note, montant, frais };
     journal("+ tx " + digest + " admise au mempool (rien d'appliqué)");
     verdict.className = "verdict ok show";
-    verdict.textContent = "✓ Preuve vérifiée (~4 ms pour ~68 Kio dans le vrai prototype) — transaction admise au MEMPOOL. L'arbre n'a pas bougé : il faut un bloc pour rendre cela définitif.";
+    verdict.textContent = "✓ Preuve vérifiée (~4 ms pour ~96 Kio dans le vrai prototype) — transaction admise au MEMPOOL. L'arbre n'a pas bougé : il faut un bloc pour rendre cela définitif.";
     noteChoisie = null;
     marquerFait("s3"); deverrouiller("s4");
   }
@@ -596,8 +646,33 @@ $("btn-seal").onclick = async () => {
   etat.occupe = true; $("btn-seal").disabled = true;
   const v = $("verdict-seal");
   v.className = "verdict ok show";
-  v.textContent = "⛏ tri des transactions par digest… chaînage au parent… application atomique…";
+  const hauteur = etat.chaine.length + 1;
+  const prod = producteurDe(hauteur);
+
+  // ÉLECTION puis QUORUM, avant toute application. L'ordre compte : un bloc
+  // sans quorum n'est pas un bloc « en attente », c'est un bloc REFUSÉ.
+  v.textContent = "⛏ hauteur " + hauteur + " — c'est le tour de l'autorité n° " + prod
+    + ". Elle trie par digest, chaîne au parent, et signe son scellement…";
+  const votes = [];
+  dessinerComite(hauteur, votes);
   await attendre(900);
+
+  // Le producteur vote pour son propre bloc — sans cela, il produirait un bloc
+  // que lui-même refuserait. Puis les autres se rangent, un par un.
+  const ordreDesVotes = [prod];
+  for (let i = 0; i < N_AUTORITES; i++) if (i !== prod) ordreDesVotes.push(i);
+  for (const a of ordreDesVotes){
+    if (votes.length >= QUORUM) break;
+    votes.push(a);
+    dessinerComite(hauteur, votes);
+    journal("🗳 vote de l'autorité n° " + a + " sur le bloc #" + hauteur);
+    v.textContent = votes.length < QUORUM
+      ? "🗳 " + votes.length + " vote(s) sur " + QUORUM + " — le bloc n'est pas encore applicable."
+      : "✓ quorum " + QUORUM + "/" + N_AUTORITES + " atteint — application atomique…";
+    await attendre(700);
+  }
+  await attendre(400);
+
   const txs = etat.mempool.splice(0).sort((a,b) => a.digest < b.digest ? -1 : 1);
   const nouvellesFeuilles = [];
   txs.forEach(tx => {
@@ -624,7 +699,10 @@ $("btn-seal").onclick = async () => {
   }
   await attendre(900);
   dessinerArbre();
-  v.textContent = "✓ Bloc #" + h + " scellé et appliqué ATOMIQUEMENT : nullifier publié, sorties insérées, nouvelle racine. Deux nœuds honnêtes scellant ce mempool produisent EXACTEMENT ce bloc — ils convergent.";
+  v.textContent = "✓ Bloc #" + h + " scellé par l'autorité n° " + prod + ", certifié par "
+    + QUORUM + " votes sur " + N_AUTORITES + ", et appliqué ATOMIQUEMENT : nullifier publié, "
+    + "sorties insérées, nouvelle racine. Il est FINAL — le contredire exigerait que deux "
+    + "autorités signent deux blocs à cette hauteur, ce qui est une faute prouvable.";
   marquerFait("s4"); deverrouiller("s5"); deverrouiller("s6");
   etat.occupe = false; $("btn-seal").disabled = false;
 };
@@ -671,7 +749,7 @@ $("btn-sync").onclick = async () => {
 $("btn-reset").onclick = () => location.reload();
 
 // Premier rendu (arbre vide, avant même l'étape 1 — donne envie).
-dessinerArbre(); dessinerChaine(false);
+dessinerArbre(); dessinerChaine(false); dessinerComite(1, []);
 </script>
 
 </body>
