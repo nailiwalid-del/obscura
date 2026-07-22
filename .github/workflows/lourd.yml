@@ -1,44 +1,82 @@
-# Travaux LOURDS, plantés la nuit — trop lents pour une pull request (plan
-# Testnet 0, T0.2/T0.3). Tout crash de fuzzing doit être reversé en test de
-# non-régression dans le crate concerné.
+# Travaux LOURDS — HEBDOMADAIRES, et non plus nocturnes.
+#
+# ⚠️ LEÇON PAYÉE : sur un dépôt PRIVÉ, les minutes sont facturées et Windows
+# compte DOUBLE. Une exécution quotidienne de ce fichier (fuzzing + benchs), en
+# plus d'une CI à deux OS sur chaque PR, a épuisé le quota mensuel en une nuit.
+# L'hebdomadaire garde la valeur — ces travaux cherchent des régressions RARES,
+# pas des régressions du jour — pour un cinquième du coût.
+#
+# À lancer à la demande avant une échéance (gel de genèse, release) :
+#   gh workflow run lourd.yml
+#
+# Tout crash de fuzzing doit être reversé en test de non-régression dans le
+# crate concerné.
 name: lourd
 
 on:
   schedule:
-    - cron: "17 2 * * *" # chaque nuit, 02:17 UTC
+    # Dimanche 02:17 UTC.
+    - cron: "17 2 * * 0"
   workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # La vérification WINDOWS, retirée de la CI de tous les jours : le code a des
+  # chemins `#[cfg(unix)]` (permissions 0600) dont l'absence doit être vérifiée
+  # quelque part, mais le développement quotidien se fait SOUS Windows en local —
+  # la CI Windows était une redondance coûteuse (minutes ×2), pas un filet.
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --release --all-features -- -D warnings
+      - run: cargo test --workspace --release --all-features
+
+  # Benchs et mesures à la profondeur de CONSENSUS (32), ignorés par défaut :
+  # tailles de preuve par forme, sécurité annoncée par winterfell.
   profondeur-consensus:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # Les tests profondeur 32 ignorés par défaut (benchs) : mesure_formes est le
-      # bench vivant des tailles de preuve par forme.
       - run: cargo test -p circuit --release --lib -- --ignored --nocapture
 
   fuzz:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-fuzz --locked
-      # Anneau 1 : les décodeurs atteignables par un INCONNU (priorité absolue).
-      # Budget par cible ; -rss_limit_mb par sécurité (les bornes anti-DoS des
-      # décodeurs doivent tenir l'allocation bien en dessous).
-      - name: fuzz des décodeurs de l'anneau 1
+
+      # Anneau 1 : les décodeurs atteignables par un INCONNU sur le réseau, donc
+      # le budget le plus large. -rss_limit_mb par sécurité : les bornes anti-DoS
+      # des décodeurs doivent tenir l'allocation bien en dessous.
+      - name: fuzz de l'anneau 1 (réseau)
         run: |
           for cible in message proved_tx bloc reponse_historique; do
-            cargo fuzz run "$cible" -- -max_total_time=600 -rss_limit_mb=4096
+            cargo fuzz run "$cible" -- -max_total_time=420 -rss_limit_mb=4096
           done
+
+      # Anneau 2 : les décodeurs de DISQUE. L'entrée ne vient pas d'un adversaire
+      # mais d'un fichier abîmé — sans être symbolique pour autant : c'est ce
+      # fuzzing qui a trouvé la panique au démarrage de `ProvedLedgerState`.
+      - name: fuzz de l'anneau 2 (disque)
+        run: |
+          for cible in etat historique wallet_fichier merkle_tree merkle_frontier; do
+            cargo fuzz run "$cible" -- -max_total_time=180 -rss_limit_mb=4096
+          done
+
       - name: conserver les artefacts de crash éventuels
         if: failure()
         uses: actions/upload-artifact@v4

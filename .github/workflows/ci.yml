@@ -1,10 +1,19 @@
-# CI — plan Testnet 0, T0.2 (spec : docs/superpowers/specs/2026-07-22-testnet-public-0-design.md).
+# CI de tous les jours — pensée pour un dépôt PRIVÉ, où les minutes sont facturées.
 #
-# Deux principes structurent ce fichier :
-# - CHAQUE passe clippy/test tourne DEUX fois : par défaut (la surface CONSENSUS
-#   seule — c'est un invariant du dépôt) puis --all-features (les chemins de dev).
-# - Matrice ubuntu + windows : le développement se fait sous Windows et le code de
-#   permissions 0600 est gaté Unix — une seule plateforme laisserait pourrir l'autre.
+# ⚠️ LEÇON PAYÉE : la première version faisait tourner la suite complète sur
+# ubuntu ET windows, en deux passes (défaut puis --all-features). Coût réel
+# mesuré : ~85 minutes FACTURÉES par run, dont ~56 pour le seul job Windows —
+# GitHub compte les minutes Windows **au double**. 23 runs ont suffi à épuiser le
+# quota mensuel, et plus aucun job ne démarrait.
+#
+# Architecture retenue :
+#   - ici (chaque PR, chaque push)  : Ubuntu seul, une passe de tests   → ~20 min
+#   - lourd.yml (hebdomadaire)      : Windows, fuzzing, benchs de preuve
+#
+# Ce qu'on perd : la vérification Windows à chaque PR. Acceptable — le
+# développement se fait SOUS Windows, donc le code y est compilé et testé en
+# permanence en local ; la CI Windows était une redondance, pas un filet.
+# Elle reste dans l'hebdomadaire pour attraper ce que le local raterait.
 name: ci
 
 on:
@@ -12,49 +21,58 @@ on:
     branches: [master]
   pull_request:
 
+# Un push qui remplace un autre annule le run précédent : inutile de payer pour
+# vérifier un commit déjà dépassé.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  fmt:
+  # Les trois contrôles rapides tiennent dans un seul job : trois runners qui
+  # démarrent, c'est trois fois le coût fixe de démarrage et de cache pour
+  # quelques secondes de travail utile.
+  rapide:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
-      - run: cargo fmt --all --check
-
-  clippy:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+
+      - name: format
+        run: cargo fmt --all --check
+
       # Passe PAR DÉFAUT d'abord : elle garde l'invariant « build nu = surface
-      # consensus seule » (un warning qui n'apparaît qu'ici est un warning du
-      # chemin de consensus).
-      - run: cargo clippy --workspace --all-targets --release -- -D warnings
-      - run: cargo clippy --workspace --all-targets --release --all-features -- -D warnings
+      # consensus seule ». Un warning qui n'apparaît qu'ici est un warning du
+      # chemin de consensus.
+      - name: clippy (défaut)
+        run: cargo clippy --workspace --all-targets --release -- -D warnings
+      - name: clippy (toutes features)
+        run: cargo clippy --workspace --all-targets --release --all-features -- -D warnings
+
+      # L'invariant que CLAUDE.md énonce : aucune feature de dev activée par une
+      # arête de dépendance dans le build par défaut.
+      - name: invariant des features
+        run: |
+          if cargo tree -e features --workspace | grep -E 'feature "dev-(transparent|circuits)"'; then
+            echo "::error::une feature de dev est active dans le build par défaut"
+            exit 1
+          fi
 
   test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # UNE seule passe, en --all-features : c'est le sur-ensemble. La surface
+      # consensus seule est déjà vérifiée par `clippy (défaut)` et par le job
+      # d'invariant ci-dessus, qui coûtent une fraction du temps.
       # --release : les preuves STARK sont gatées release (tests #[ignore] en debug).
-      - run: cargo test --workspace --release
       - run: cargo test --workspace --release --all-features
 
   msrv:
@@ -74,20 +92,3 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check advisories licenses
-
-  # L'invariant que CLAUDE.md énonce et que rien ne faisait respecter : le build
-  # PAR DÉFAUT ne doit activer aucune feature de dev (dev-transparent,
-  # dev-circuits). `cargo tree -e features` liste les features réellement
-  # activées ; la moindre occurrence fait échouer le job.
-  invariant-features:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: le build par défaut n'active aucune feature de dev
-        run: |
-          if cargo tree -e features --workspace | grep -E "dev-transparent|dev-circuits"; then
-            echo "::error::une feature de dev est active dans le build par défaut"
-            exit 1
-          fi
