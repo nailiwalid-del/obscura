@@ -1,10 +1,16 @@
-# CI de tous les jours — pensée pour un dépôt PRIVÉ, où les minutes sont facturées.
+# CI de tous les jours — sobre par CONCEPTION, pas par contrainte.
 #
-# ⚠️ LEÇON PAYÉE : la première version faisait tourner la suite complète sur
-# ubuntu ET windows, en deux passes (défaut puis --all-features). Coût réel
-# mesuré : ~85 minutes FACTURÉES par run, dont ~56 pour le seul job Windows —
-# GitHub compte les minutes Windows **au double**. 23 runs ont suffi à épuiser le
-# quota mensuel, et plus aucun job ne démarrait.
+# ⚠️ LEÇON PAYÉE (2026-07-22) : la première version faisait tourner la suite
+# complète sur ubuntu ET windows, en deux passes (défaut puis --all-features).
+# Coût réel mesuré : ~85 minutes FACTURÉES par run, dont ~56 pour le seul job
+# Windows — GitHub compte les minutes Windows **au double** sur un dépôt privé.
+# 23 runs ont suffi à épuiser le quota mensuel, et plus aucun job ne démarrait.
+#
+# Le dépôt est PUBLIC depuis, donc les minutes sont redevenues gratuites et la
+# contrainte a disparu. **On garde cette architecture quand même** : une CI qui
+# rend son verdict en ~20 minutes est meilleure qu'une CI qui met une heure et
+# demie, indépendamment de son prix. La gratuité n'est pas une raison de faire
+# attendre celui qui relit.
 #
 # Architecture retenue :
 #   - ici (chaque PR, chaque push)  : Ubuntu seul, une passe de tests   → ~20 min
