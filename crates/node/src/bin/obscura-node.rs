@@ -284,9 +284,16 @@ fn main() {
     ));
     // Une LIGNE à comparer entre opérateurs. Elle vaut mieux qu'un diagnostic
     // a posteriori sur « pourquoi mes blocs sont refusés ».
+    //
+    // L'identifiant de genèse est imprimé ENTIER, jamais tronqué : c'est l'ancre
+    // d'authentification de la chaîne — rien n'atteste qui a écrit la genèse
+    // (cf. THREAT_MODEL, « le fichier n'est ni signé ni authentifié »), donc la
+    // seule défense est la comparaison avec une valeur publiée hors bande, et
+    // elle a lieu ICI. 64 bits n'y suffisent pas. La tête courante, elle, reste
+    // courte : c'est un diagnostic qui change à chaque bloc, pas une ancre.
     journal.info(&format!(
         "genèse {} ({} émissions) — tête courante {}",
-        hex::encode(&id_genese[..8]),
+        hex::encode(id_genese),
         genese.emissions.len(),
         hex::encode(&etat.tete()[..8])
     ));
