@@ -45,6 +45,36 @@ simplement pas amorcer de wallet. **À activer dès l'amorçage** : rien ne sait
 reconstruire un préfixe manquant, et activer trop tard est refusé plutôt que
 servi de travers.
 
+## Créer la genèse (une fois, avant tout le reste)
+
+Rien ne peut démarrer sans elle, et **rien ne peut la remplacer après coup**.
+
+```sh
+# Chaîne fédérée : autorités + allocation initiale
+obscura-genese --sortie genese.bin     --autorite-hex <clé publique de l'autorité A>     --autorite-hex <clé publique de l'autorité B>     --allocation obs1…:1000000
+```
+
+| Option | Rôle |
+|---|---|
+| `--sortie <fichier>` | fichier à écrire (**refuse d'écraser**) |
+| `--autorite <identite.cle>` | autorité, lue depuis un fichier d'identité de nœud |
+| `--autorite-hex <hex>` | autorité, depuis une clé publique — **la bonne voie pour une fédération** : chacun publie sa clé, personne ne transmet son fichier |
+| `--allocation <adr>:<n>` | alloue `n` unités à une adresse `obs1…` |
+
+L'outil **relit et réamorce** ce qu'il vient d'écrire avant de vous le rendre : un
+artefact que son auteur ne sait pas relire ne doit jamais atteindre un opérateur.
+
+Il imprime ensuite l'**identifiant court**. **Comparez-le entre opérateurs avant
+de démarrer quoi que ce soit** — c'est le seul contrôle qui détecte une chaîne
+divergente *avant* qu'elle ne diverge.
+
+Sans `--autorite`, la chaîne est **ouverte** : n'importe quel nœud avec
+`--sceller` produit des blocs. Testnet local uniquement.
+
+⚠️ Le **nombre** d'allocations est public à jamais (les montants et les
+bénéficiaires, non). Une allocation unique désigne son bénéficiaire par sa seule
+position.
+
 ## Surveiller
 
 Le nœud journalise sur **stderr**, avec l'uptime et un niveau. `systemd` et

@@ -215,6 +215,14 @@ round-3 (0x01) est REFUSÉ PAR SON NOM (`CryptoError::AlgoPerime`), jamais cohab
   ou décroché servant sinon un historique cohérent mais tronqué. Déploiement :
   `deploiement/{obscura-node.service,Dockerfile}` (systemd durci, image non-root
   en deux étapes) et `docs/OPERATEUR.md`.
+  **`obscura-genese`** (4e binaire) : fabrique le bloc 0 — autorités
+  (`--autorite <identite.cle>` ou `--autorite-hex`, la bonne voie en fédération) et
+  allocations chiffrées vers des adresses `obs1…`. REFUSE d'écraser (une genèse
+  remplacée = chaîne perdue), AUTO-VÉRIFIE (relit + réamorce ce qu'il écrit), borne
+  les montants à 2^60 (au-delà la note serait INDÉPENSABLE — range-check), et
+  imprime l'identifiant court À COMPARER entre opérateurs avant démarrage. Sans lui,
+  geler une chaîne exigeait d'écrire du Rust ad hoc pour l'artefact le moins
+  rattrapable du projet.
   **Binaires** : `obscura-node` (nœud autonome) et `obscura-demo` (démonstration
   locale : wallet → preuve → handshake PQ → socket → mempool, chaque étape
   annoncée). **Persistance** (`node::persistance`) : identité + état survivent aux
