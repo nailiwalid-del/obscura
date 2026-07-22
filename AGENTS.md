@@ -54,7 +54,7 @@ round-3 (0x01) est REFUSÉ PAR SON NOM (`CryptoError::AlgoPerime`), jamais cohab
   consigne à la compilation qu'un bloc plein dépasse 30× le cadre réseau).
   **Plafond de scellement en OCTETS** : `MAX_OCTETS_BLOC` = cadre réseau −
   `crypto::aead::SURCOUT` − marge message (≈ 1 Mio), vérifié au scellement ET au
-  décodage — MAX_TX_PAR_BLOC borne le NOMBRE, pas le POIDS (~15 tx de 68 Kio
+  décodage — MAX_TX_PAR_BLOC borne le NOMBRE, pas le POIDS (~9 tx de 104 Kio
   suffisent à déborder le cadre), et le cadre borne le CHIFFRÉ, d'où la soustraction
   du surcoût AEAD (sans elle, un bloc scellé à la borne était indiffusable de 5 o).
   **Émission (genèse seule)** : `Bloc` porte `emissions: Vec<Emission>` et la règle est
@@ -136,7 +136,7 @@ round-3 (0x01) est REFUSÉ PAR SON NOM (`CryptoError::AlgoPerime`), jamais cohab
   irrécupérable). `adopter_historique` confronte hauteur, nombre de feuilles et racine ;
   un écart n'est JAMAIS réparé en silence (mode dégradé explicite, fichier intact).
   **Mempool** (phase 4, brique 3) : contrôles ordonnés du MOINS au PLUS coûteux —
-  l'asymétrie de coût (~4 ms de vérification STARK pour ~68 Kio envoyés) est LE
+  l'asymétrie de coût (~4 ms de vérification STARK pour ~104 Kio envoyés) est LE
   vecteur de DoS du projet, donc les 5 filtres O(1) précèdent la vérification.
   Capacité bornée SANS éviction (une éviction permettrait de chasser les tx
   honnêtes). `Refus::couteux()` distingue les refus gratuits de celui qui a brûlé
@@ -156,8 +156,10 @@ round-3 (0x01) est REFUSÉ PAR SON NOM (`CryptoError::AlgoPerime`), jamais cohab
   3z-b1, re-vérifié sur 1/1 et 4/4 (le gating `blind_off` couvre toute porteuse
   nouvelle sans liste). Soundness variable (C2-T4) : 3 forges D7 (forme liée, fin
   d'équilibre variable, ordre publics↔segments), RED sur chacune. Re-bench prof. 32 :
-  1/1 = 55,7 Kio / 1,6 ms ; 2/2 = 67,7 Kio / 3,8 ms (non-régression) ; 4/4 =
-  80,3 Kio / 12,6 ms. Le **côte-à-côte** (201 col, oracle de parité 2/2) est
+  1/1 = 78,5 Kio / 1,9 ms ; 2/2 = 96,1 Kio / 4,0 ms ; 4/4 = 114,3 Kio / 12,3 ms
+  (une `ProvedTx` 2/2 complète pèse ≈104 Kio sur le fil). ⚠️ Ces tailles intègrent le
+  DURCISSEMENT de soundness du 2026-07-22 (32 → 48 requêtes FRI) : les chiffres
+  antérieurs (55,7 / 67,7 / 80,3) sont CADUQUES — ils valaient 62 bits prouvés. Le **côte-à-côte** (201 col, oracle de parité 2/2) est
   SUPPRIMÉ (C2-T8) : ses helpers partagés (`MonolithPublicInputs`, `push_preamble`,
   `key_rows`/`sponge_rows_for`, témoins de test) vivent dans `monolith/socle.rs`
   (module SANS layout — pur déplacement, zéro octet de comportement changé), et la
@@ -224,7 +226,7 @@ round-3 (0x01) est REFUSÉ PAR SON NOM (`CryptoError::AlgoPerime`), jamais cohab
   `node::client` et `obscura-wallet synchroniser` sous `crates/node`).
 - `crates/node` : **câblage** des briques réseau et consensus (phase 5). `message`
   = protocole applicatif (Annonce/Demande/Transaction) : on annonce des DIGESTS
-  (~64 o), jamais les transactions (~68 Kio) — envoyer spontanément la tx à chaque
+  (~64 o), jamais les transactions (~104 Kio) — envoyer spontanément la tx à chaque
   pair offrirait une amplification à l'attaquant. Décodage borné (MAX_DIGESTS)
   vérifié AVANT allocation. Il dépend de `net` ET du consensus, ce qui garde
   justement `net` PUR TRANSPORT. `orchestration` = ce qu'un nœud FAIT d'un message,

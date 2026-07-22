@@ -62,6 +62,13 @@ jobs:
       # Anneau 1 : les décodeurs atteignables par un INCONNU sur le réseau, donc
       # le budget le plus large. -rss_limit_mb par sécurité : les bornes anti-DoS
       # des décodeurs doivent tenir l'allocation bien en dessous.
+      #
+      # ⚠️ `fuzz/corpus/<cible>/` est VERSIONNÉ et `cargo fuzz run` le prend
+      # automatiquement. Ne pas le supprimer en croyant nettoyer : sans graines,
+      # les chemins profonds du décodeur (émission bien formée, certificat dont le
+      # masque concorde avec le nombre de signatures) sont hors de portée d'une
+      # mutation aveugle, et le fuzzing devient superficiel sans le dire.
+      # Régénérer : cargo run -p node --example semer-corpus-fuzz --release
       - name: fuzz de l'anneau 1 (réseau)
         run: |
           for cible in message proved_tx bloc reponse_historique; do

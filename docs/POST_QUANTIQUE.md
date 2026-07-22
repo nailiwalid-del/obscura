@@ -18,7 +18,7 @@ survive à un ordinateur quantique cryptographiquement pertinent (CRQC).
 **Ce que la thèse ne dit pas** — et qu'aucun document public ne doit laisser croire :
 
 - qu'Obscura est plus petite, plus rapide ou plus mature que Zcash ou Monero
-  (elle est **plus grosse** : ~68 Kio par transaction, cf. §6) ;
+  (elle est **plus grosse** : ~104 Kio par transaction, cf. §6) ;
 - qu'elle est auditée (elle ne l'est pas) ;
 - que sa soundness est prouvée au niveau qu'on lui souhaite (cf. §5, le point le
   plus inconfortable de ce document) ;
