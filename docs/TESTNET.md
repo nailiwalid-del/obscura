@@ -1,4 +1,4 @@
-# Testnet public Obscura — limites, reset, et réaction à la valeur
+# Testnet Obscura — limites, reset, et réaction à la valeur
 
 **À lire avant d'utiliser ce réseau.** Ce document doit être publié **avant**
 l'ouverture, et il fait partie des critères de sortie du jalon.
@@ -6,6 +6,30 @@ l'ouverture, et il fait partie des critères de sortie du jalon.
 > **Ce réseau est expérimental et sans valeur. Les jetons qu'il distribue n'en
 > ont aucune, n'en auront aucune, et la chaîne sera remise à zéro.** Ce n'est pas
 > une clause de style : c'est le mode de fonctionnement prévu, décrit en §2.
+
+---
+
+## 0. Ce réseau fonctionne SUR INVITATION
+
+**Il n'existe aucun bootnode public, aucun faucet, aucun explorateur.** C'est une
+décision, pas un manque de temps : héberger un archiviste engage un disque qui
+croît sans borne et une disponibilité que ce projet ne promet pas.
+
+Conséquences, toutes assumées :
+
+- **Les participants sont les opérateurs.** Chacun fait tourner son propre nœud ;
+  les adresses de pairs circulent directement entre participants.
+- **Les fonds viennent des allocations de genèse**, pas d'un robinet. Pour
+  rejoindre, un participant transmet son adresse `obs1…` (`obscura-wallet
+  adresse`) et, s'il doit sceller, l'empreinte de son identité de nœud
+  (`obscura-node --identite`). Elles sont gravées dans la genèse par
+  `obscura-genese` — donc **rejoindre après le gel exige une nouvelle chaîne**.
+- **`--temoin` n'a de valeur que si au moins deux participants archivent.** Sur
+  une source unique, un nœud peut mentir par omission sans qu'aucun contrôle
+  local ne le démente (§1.3). À une seule archive, la synchronisation est un
+  point de confiance, et il faut le savoir.
+- **Aucune disponibilité n'est promise.** Le réseau s'arrête quand ses
+  participants s'arrêtent.
 
 ---
 
@@ -63,10 +87,14 @@ de décisions écrites, et chacune renvoie à son document de référence.
 
 - **L'archiviste est le point de centralisation réel du réseau.** Tout wallet qui
   se synchronise en dépend, et son disque croît sans borne (≈1,4 Kio par sortie,
-  jamais élagué).
+  jamais élagué). Sur un réseau sur invitation, cela veut dire : **celui qui
+  archive voit passer les demandes de tous les autres** (§1.3).
 - **La genèse n'est pas authentifiée par elle-même.** Rien dans le fichier
-  n'atteste qui l'a écrite. → **Comparez l'identifiant complet imprimé au
-  démarrage de votre nœud avec celui publié hors bande.** 32 octets, pas 8.
+  n'atteste qui l'a écrite.
+  → **Vérification :** l'identifiant complet (32 octets) est publié dans le
+  README du dépôt, et les releases sont **signées**. Comparez-le avec celui
+  imprimé au démarrage de votre nœud. 32 octets, pas 8 — la forme courte est un
+  diagnostic, pas une ancre.
 - **Le mempool n'est pas persisté** (sans gravité : les pairs réannoncent).
 - **La clé d'identité d'un nœud n'est pas chiffrée au repos.**
 - **L'arbre du wallet est en O(n)** : pas de client léger, la mémoire croît avec
@@ -98,7 +126,8 @@ découvrir au moment des faits.
 1. **Annonce préalable** sur les canaux d'ouverture, avec la raison et la date.
 2. **Publication de la nouvelle genèse** et de son **identifiant complet**
    (32 octets) hors bande.
-3. **Arrêt des bootnodes de l'ancienne chaîne.** Ils ne servent pas les deux.
+3. **Arrêt des nœuds de l'ancienne chaîne.** Un nœud ne sert pas les deux : son
+   répertoire de données grave sa genèse et refuse l'autre.
 4. **Redémarrage** : chaque opérateur repart d'un répertoire de données **neuf**
    et de la nouvelle genèse.
 
@@ -126,12 +155,13 @@ Escalade, du moins grave au plus grave :
 
 1. **Constat public.** Rappel écrit que la chaîne est sans valeur et consommable,
    sur les mêmes canaux que l'annonce d'ouverture.
-2. **Pause du faucet.** Il est le robinet ; le fermer coupe l'entrée de « stock »
-   sans toucher au réseau.
+2. **Arrêt des invitations.** Il n'y a pas de faucet à fermer : l'entrée de
+   « stock » passe par les allocations de genèse. Cesser d'inviter tarit donc la
+   source sans toucher au réseau existant.
 3. **Reset annoncé** (§2). C'est l'usage prévu — et **le simple fait qu'il soit
    connu d'avance décourage la spéculation** : personne ne valorise ce qui sera
    remis à zéro.
-4. **Fermeture.** Arrêt des bootnodes et de l'archiviste, dépôt archivé.
+4. **Fermeture.** Chaque participant arrête son nœud, dépôt archivé.
 
 ⚠️ **Cette escalade fait partie des limites publiées.** Un réseau dont on sait
 qu'il peut être remis à zéro à tout moment n'acquiert pas de valeur par accident.
@@ -140,9 +170,15 @@ qu'il peut être remis à zéro à tout moment n'acquiert pas de valeur par acci
 
 ## 4. Signaler un problème
 
-Vulnérabilité, divergence de chaîne, comportement inattendu d'un nœud : voir le
-canal d'incident indiqué sur la page d'ouverture du testnet.
+| Quoi | Où |
+|---|---|
+| **Vulnérabilité** | **GitHub Security Advisories** du dépôt — canal privé, qui permet une divulgation coordonnée |
+| Divergence de chaîne, bug, comportement inattendu | **GitHub Issues**, en public |
 
-⚠️ **Ce projet n'a pas de programme de bug bounty** et ne promet aucun délai de
-réponse. Les fonds n'ayant aucune valeur, aucun signalement ne porte sur un
+Le choix du canal privé pour les vulnérabilités n'est pas une promesse de
+confidentialité durable : c'est simplement ce qui laisse la possibilité d'un
+correctif avant publication. Rien n'oblige personne à l'emprunter.
+
+⚠️ **Ce projet n'a pas de programme de bug bounty** et ne promet **aucun délai de
+réponse**. Les fonds n'ayant aucune valeur, aucun signalement ne porte sur un
 préjudice financier.
