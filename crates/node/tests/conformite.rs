@@ -6,10 +6,11 @@
 //! racines attendus, soit elle ne les sort pas.
 //!
 //! Contenu : une genèse à UNE autorité (donc une chaîne fermée, où le scellement
-//! est obligatoire) et un bloc VIDE de hauteur 1, scellé par cette autorité.
-//! Aucune transaction, donc aucune preuve STARK — la fixture reste petite et
-//! rapide, tout en exerçant chaînage, élection de producteur, vérification de
-//! scellement et avancée de la tête.
+//! est obligatoire) et un bloc VIDE de hauteur 1, scellé ET certifié par cette
+//! autorité — à `n = 1`, `f = 0` et le quorum vaut 1. Aucune transaction, donc
+//! aucune preuve STARK — la fixture reste petite et rapide, tout en exerçant
+//! chaînage, élection de producteur, vérification de scellement, certificat de
+//! quorum et avancée de la tête.
 //!
 //! Le générateur (`generer_la_fixture`, `#[ignore]`) produit les fichiers ; il
 //! n'est lancé qu'à la main, et son résultat est versionné.
@@ -79,12 +80,31 @@ fn la_fixture_se_rejoue() {
     let bloc1 = Bloc::from_bytes(&lire("bloc-1.bin")).expect("bloc 1 indécodable");
     assert_eq!(hex::encode(bloc1.id()), att["bloc1_id"], "id du bloc 1");
     let autorite = etat
-        .producteur_attendu(1)
+        .producteur_attendu(1, 0)
         .expect("chaîne à autorités attendue")
         .clone();
+    assert_eq!(
+        bloc1.vue, 0,
+        "vue 0 : le protocole de vue est J1-b, pas J1-a"
+    );
     assert!(
         bloc1.verifier_scellement(&autorite),
         "le scellement du bloc 1 n'est pas celui de l'autorité du tour"
+    );
+
+    // 3 bis. Il porte un CERTIFICAT DE QUORUM. À n = 1, f = 0 et le quorum vaut 1 :
+    //        l'unique autorité se certifie elle-même. Sans certificat, le bloc
+    //        serait refusé pour `QuorumInsuffisant` — la vérification est faite en
+    //        4, celle-ci nomme ce qu'on exige.
+    assert_eq!(etat.quorum_requis(), 1, "n = 1 ⇒ f = 0 ⇒ quorum 1");
+    let cert = bloc1
+        .certificat
+        .as_ref()
+        .expect("bloc 1 sans certificat de quorum");
+    assert_eq!(
+        cert.votants().collect::<Vec<_>>(),
+        vec![0],
+        "l'unique votant attendu est l'autorité d'index 0"
     );
 
     // 4. Il s'applique, et l'état avance exactement comme publié.
@@ -130,6 +150,12 @@ fn generer_la_fixture() {
 
     let mut bloc1 = Bloc::sceller(&genese.id(), 1, Vec::new()).expect("scellement refusé");
     bloc1.signer_scellement(&autorite);
+    // CERTIFICAT DE QUORUM (ADR J1). À n = 1, f = 0 et le quorum vaut 1 : l'unique
+    // autorité se certifie elle-même. Sans lui, le bloc serait refusé pour
+    // QuorumInsuffisant. Le vote est signé APRÈS le scellement, sur un domaine
+    // distinct : ni l'un ni l'autre n'entre dans l'identifiant, donc l'ordre des
+    // deux gestes ne change pas `bloc1_id`.
+    bloc1.signer_vote(0, &autorite);
     std::fs::write(dir.join("bloc-1.bin"), bloc1.to_bytes()).expect("écriture bloc 1");
 
     let bloc1_id = hex::encode(bloc1.id());
@@ -137,7 +163,7 @@ fn generer_la_fixture() {
     let racine_bloc1 = hex::encode(etat.tree.root().to_bytes());
 
     let contenu = format!(
-        "# Valeurs attendues — fixture de conformité v1.\n\
+        "# Valeurs attendues — fixture de conformité v2.\n\
          # Produites par : cargo test -p node --test conformite -- --ignored generer_la_fixture\n\
          # Vérifiées par : cargo test -p node --test conformite\n\
          genese_id={genese_id}\n\

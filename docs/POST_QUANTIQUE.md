@@ -179,6 +179,15 @@ n'accepte pas ce prix n'a pas besoin d'Obscura — et le document doit le lui di
 - **La gouvernance** : la chaîne est fédérée (autorités gravées en genèse), une
   autorité absente fige la chaîne à son tour. Rien de tout cela n'est quantique,
   et tout cela compte davantage pour un utilisateur réel, aujourd'hui.
+- **En revanche, une limite du consensus EST quantique** : il n'existe aucune
+  **agrégation de signatures post-quantique**. L'astuce qui rend les BFT modernes
+  bon marché — l'agrégation BLS — repose sur des couplages sur courbes
+  elliptiques, cassés par Shor. Le certificat de quorum porte donc ses `2f+1`
+  signatures **linéairement, pour toujours** : 1,0 % du bloc à 4 autorités,
+  13,8 % à 64. **La taille du comité est bornée par le budget du bloc** — une
+  conséquence directe de la thèse post-quantique, pas un choix d'implémentation.
+  Le jour où une agrégation post-quantique pratique existera, tout ce calcul
+  change ; rien n'indique que ce soit proche (cf. ADR-001, THREAT_MODEL).
 
 ## 8. Résumé pour un lecteur pressé
 
@@ -187,7 +196,14 @@ nulle part où la confidentialité en dépendrait de façon rétroactive.** Sign
 et KEM sont hybrides (une moitié FIPS), les preuves sont des STARK (hachage seul),
 et le hachage de consensus combine deux familles.
 
-Ce pari coûte cher (≈68 Kio par transaction) et laisse deux chantiers ouverts qui
-ne sont pas des détails : la **soundness prouvée à 62 bits** (§5) et l'argument de
-masquage **non porté en QROM** (§7). Les deux sont écrits ici plutôt que découverts
-par un auditeur.
+Ce pari coûte cher — ≈105 Kio par transaction depuis le durcissement — et laisse
+deux chantiers ouverts qui ne sont pas des détails : la **soundness prouvée à 78
+bits** dans le régime de décodage par liste (§5, contre 62 avant durcissement) et
+l'argument de masquage **non porté en QROM** (§7). Les deux sont écrits ici plutôt
+que découverts par un auditeur.
+
+Il coûte aussi une chose plus récente et tout aussi structurelle : **le consensus
+lui-même paie la thèse**. L'absence d'agrégation de signatures post-quantique rend
+le certificat de quorum linéaire en la taille du comité, ce qui **borne le nombre
+d'autorités par le budget du bloc** (§7, dernier point). Ce n'est pas un défaut
+d'implémentation — c'est le prix du pari, appliqué au consensus.

@@ -69,7 +69,9 @@ Deux options méritent d'être comprises avant d'être tapées :
 
 - **`--sceller <ms>` est OFF par défaut.** Produire des blocs est une décision
   d'opérateur, pas un défaut. Sur une chaîne à autorités, un nœud qui n'en est pas une
-  refuse de sceller et le dit.
+  refuse de sceller et le dit. ⚠️ **Gravez au plus 3 autorités pour l'instant** : au
+  delà, le quorum `2f+1` dépasse le seul vote du producteur, et les votes ne circulent
+  pas encore sur le fil (jalon J1-b) — la chaîne n'avancerait pas.
 - **`--noeud-synchro` doit être DIFFÉRENT de `--noeud`.** Se synchroniser puis payer
   depuis la même adresse relie les deux et désigne l'émetteur : un relais Dandelion++
   ne vient jamais de se synchroniser. Le CLI avertit quand ils coïncident.
@@ -125,7 +127,11 @@ la profondeur de consensus tournent une fois par semaine (`.github/workflows/lou
 5. ✅ Nœud, wallet CLI, testnet local multi-nœuds
 6. ✅ **Finalité** : bloc + application atomique + convergence entre nœuds ;
    synchronisation wallet ↔ nœud (le wallet REÇOIT) ; **élection du producteur**
-7. ⬜ Ouverture d'une chaîne publique : gel de genèse, points de contrôle hors bande
+7. 🔶 **Consensus BFT** (ADR-001 accepté) : format `0x04` — vue dans l'identifiant,
+   **certificat de quorum `2f+1` vérifié avant tout STARK** (J1-a ✅) ; protocole de
+   vue, votes sur le fil et changement de vue (J1-b ⬜) ; changement d'ensemble
+   d'autorités (J1-c ⬜)
+8. ⬜ Ouverture d'une chaîne publique : gel de genèse, points de contrôle hors bande
 
 > Phase 3 : intégrité prouvée (P1–P7, monolithe **m-in/n-out**, `1..=4`) ; depuis 3z-b1
 > la preuve de consensus est **witness-hiding (HVZK dans le modèle de l'oracle
@@ -149,14 +155,23 @@ bénéficiaire la découvre en rejouant l'historique — monnaie rendue comprise
 Ce qui reste ouvert, en détail dans [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) :
 
 1. **L'autorité de sceller est FÉDÉRÉE, pas décentralisée.** La genèse peut graver une
-   liste d'autorités (≤ 64) ; le producteur légitime de la hauteur `h` est
-   `autorites[(h−1) mod n]`, et son bloc est signé. Un scellement manquant, hors tour ou
-   étranger est sanctionné. Mais cette liste est **figée dans l'identifiant de la
-   chaîne** — en changer, c'est changer de chaîne — et une autorité absente **fige la
-   chaîne à son tour** (liveness assumée, option A). Une genèse SANS autorités donne une
-   chaîne OUVERTE : l'ordre y est *convenu* entre participants coopératifs, jamais
-   *défendu*. C'est le défaut, et c'est bon pour un testnet local, pas pour un réseau
-   public.
+   liste d'autorités (≤ 64) ; le producteur légitime de `(h, vue)` est
+   `autorites[(h−1+vue) mod n]`, son bloc est signé, et il n'est valide que muni d'un
+   **certificat de quorum `2f+1`** (`n = 3f+1`) vérifié après le chaînage et **avant
+   tout STARK**. C'est ce qui donne la finalité : contredire un bloc certifié exigerait
+   que `f+1` participants signent deux blocs à la même hauteur — une faute *prouvable*.
+   Mais cette liste est **figée dans l'identifiant de la chaîne** — en changer, c'est
+   changer de chaîne (J1-c le lèvera) — et une autorité absente **fige la chaîne à son
+   tour**. Une genèse SANS autorités donne une chaîne OUVERTE : l'ordre y est *convenu*
+   entre participants coopératifs, jamais *défendu*. C'est le défaut, et c'est bon pour
+   un testnet local, pas pour un réseau public.
+   ⚠️ **Le protocole de vue n'est pas livré (J1-b).** Les votes ne circulent pas encore
+   sur le fil, donc **une chaîne à `n ≥ 4` ne produit aujourd'hui aucun bloc** : le
+   producteur refuse le sien pour quorum insuffisant. Seules les chaînes à `n ≤ 3`
+   (`f = 0`, quorum 1) et les chaînes ouvertes avancent.
+   ⚠️ **Le certificat ne s'agrège pas** — aucune signature post-quantique ne l'offre :
+   son coût est linéaire en la taille du comité (1,0 % du bloc à `n = 4`, 13,8 % à
+   `n = 64`), qui se trouve donc **borné par le budget du bloc**, définitivement.
 2. **Le nœud qui sert l'historique en apprend long, et l'omission demande maintenant
    une COLLUSION.** Il voit l'IP du wallet, la CADENCE de ses demandes et sa POSITION
    de chaîne. Taire une sortie donnait une chaîne parfaitement close dont la racine est

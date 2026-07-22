@@ -1,7 +1,7 @@
 //! CHAOS — le producteur s'arrête, puis revient. La chaîne reprend-elle ?
 //!
 //! Défaut n°1 de la porte D (cf. `docs/superpowers/specs/2026-07-22-portes-vers-le-mainnet-design.md`).
-//! Sur une chaîne à autorités, `producteur_attendu(h) = autorites[(h−1) mod n]` est
+//! Sur une chaîne à autorités, `producteur_attendu(h, vue) = autorites[(h−1+vue) mod n]` est
 //! une fonction PURE de la hauteur : si l'autorité du tour est absente, **personne**
 //! ne peut produire `h`. Le gel est donc **SUSPENSIF**, pas définitif — l'autorité
 //! qui revient produit `h` et la chaîne repart.
@@ -218,6 +218,10 @@ fn arret_et_reprise_du_producteur() {
         bloc2.parent,
         bloc1.id(),
         "le bloc 2 s'enchaîne sur le bloc 1, pas sur la genèse"
+    );
+    assert_eq!(
+        bloc2.vue, 0,
+        "aucun changement de vue dans ce scénario : la reprise se fait au même tour"
     );
     assert!(
         bloc2.verifier_scellement(&genese.autorites[0]),

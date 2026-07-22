@@ -544,6 +544,34 @@ impl Bloc {
         self.scellement = Some(identite.sign(DOMAINE_SCELLEMENT, &id));
     }
 
+    /// Ajoute le VOTE de l'autorité d'index `index` au certificat du bloc.
+    ///
+    /// Les votes sont rangés dans l'ordre croissant des index, et le masque garantit
+    /// qu'un même index ne peut pas voter deux fois — un second appel avec le même
+    /// index remplace le vote plutôt que de le dupliquer.
+    ///
+    /// ⚠️ À appeler APRÈS `sceller` : le vote porte sur l'identifiant, qui n'inclut
+    /// ni le scellement ni le certificat. Ajouter un vote ne change donc pas l'`id`,
+    /// et les votes des autres restent valides.
+    pub fn signer_vote(&mut self, index: usize, identite: &SigKeypair) {
+        debug_assert!(index < MAX_AUTORITES, "index de votant hors borne");
+        let id = self.id();
+        let sig = identite.sign(DOMAINE_VOTE, &id);
+        let mut c = self.certificat.take().unwrap_or(Certificat {
+            masque: 0,
+            signatures: Vec::new(),
+        });
+        // Rang d'insertion = nombre de bits déjà mis SOUS `index`.
+        let rang = (c.masque & ((1u64 << index) - 1)).count_ones() as usize;
+        if c.masque & (1u64 << index) != 0 {
+            c.signatures[rang] = sig;
+        } else {
+            c.masque |= 1u64 << index;
+            c.signatures.insert(rang, sig);
+        }
+        self.certificat = Some(c);
+    }
+
     /// Vérifie le scellement contre la clé d'UN producteur attendu.
     pub fn verifier_scellement(&self, attendu: &SigPublicKey) -> bool {
         match &self.scellement {

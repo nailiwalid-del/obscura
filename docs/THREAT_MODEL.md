@@ -167,14 +167,60 @@ tout nœud peut sceller, ordre convenu, pas défendu — mode testnet local, et 
 scellement y est REFUSÉ (deux encodages valides du même bloc casseraient la
 canonicité).
 
-Ce que cela ne ferme PAS : la **liveness** (option A assumée : une autorité absente
-FIGE la chaîne à son tour — les transactions attendent au mempool ; l'évolution
-« certificat de saut à quorum » est décrite dans la spec) ; le **remplacement
-d'autorité** (liste statique : en changer = nouvelle genèse = nouvelle chaîne — c'est
-une fédération, assumée) ; la **censure par le producteur du tour** (il choisit ses
-transactions ; le tri par `tx_digest` est une convention de reproductibilité, pas une
-défense — la tx censurée attend le producteur suivant). Spec :
+Ce que cela ne ferme PAS : le **remplacement d'autorité** (liste statique : en changer
+= nouvelle genèse = nouvelle chaîne — c'est une fédération, assumée ; le changement
+d'ensemble certifié par l'ANCIENNE liste est prévu par l'ADR, jalon J1-c) ; la
+**censure par le producteur du tour** (il choisit ses transactions ; le tri par
+`tx_digest` est une convention de reproductibilité, pas une défense — la tx censurée
+attend le producteur suivant). Spec :
 `docs/superpowers/specs/2026-07-21-election-producteur-design.md`.
+
+### Le certificat de quorum — finalité, et ce qu'elle défend (J1-a, format livré)
+
+L'ADR-001 (`docs/superpowers/specs/2026-07-22-j1-consensus-adr.md`, ACCEPTÉ le
+2026-07-22) a tranché le modèle de consensus : **BFT à finalité instantanée, à comité
+borné, sans réorganisation**. Le format `VERSION_BLOC 0x04` et sa vérification sont
+livrés ; le protocole qui fait circuler les votes ne l'est pas (voir plus bas).
+
+Un bloc porte désormais une **vue** (dans l'identifiant) et un **certificat de quorum**
+(hors de l'identifiant, comme le scellement — une signature sur l'id ne peut pas y
+entrer). `appliquer_bloc` exige `2f + 1` signatures valides et **distinctes** sur
+l'identifiant, avec `n = 3f + 1`.
+
+Ce que cela défend, et qui n'était pas défendu avant :
+
+- **L'absence de réorganisation devient un argument, pas un aveu.** Un bloc finalisé
+  par `2f + 1` ne peut être contredit sans que `f + 1` participants signent deux blocs
+  à la même `(hauteur, vue)` — une faute **prouvable**, pas une ambiguïté. Sur un
+  ledger append-only, où toute divergence est irréparable, **on préfère l'arrêt à la
+  divergence** : une partition qui ne réunit pas `2f + 1` ne produit rien, donc ne peut
+  pas diverger, et rattrape par `Message::DemandeBloc` au retour.
+- **Un scellement ne peut pas être rejoué comme un vote.** `DOMAINE_VOTE` est distinct
+  de `DOMAINE_SCELLEMENT` alors que les deux signent le même identifiant. Sans cette
+  séparation, le scellement du producteur aurait compté comme un vote et `2f` votes
+  réels auraient suffi à en afficher `2f+1`. Un test rejoue précisément cette forge.
+- **Les votants comptés sont distincts par construction.** Le masque de bits rend le
+  doublon impossible — un bit est mis ou ne l'est pas — plutôt que de le faire chasser
+  par une déduplication qu'on pourrait oublier.
+- **Le coût reste devant la preuve.** Le certificat est vérifié APRÈS le chaînage (un
+  bloc d'une autre chaîne ne coûte rien) et AVANT tout STARK. L'inverser offrirait à un
+  pair hostile de déclencher la vérification de preuves avec un certificat bidon.
+
+Ce que cela COÛTE, et qui ne se rattrapera pas : **il n'existe aucune agrégation de
+signatures post-quantique** — l'astuce BLS des BFT modernes repose sur des couplages,
+cassés par Shor. Le certificat pèse donc `2f+1 × 3374` octets, **linéairement, pour
+toujours** : 1,0 % du bloc à `n = 4`, 13,8 % à `n = 64`. **La taille du comité est
+bornée par le budget du bloc**, et `MAX_AUTORITES = 64` devra probablement descendre.
+Toute migration de backend PQ change ce calcul (`docs/BACKEND_PQ.md`) ; l'outil de
+mesure existe (`cargo run -p node --example dimensionner-quorum --release`).
+
+⚠️ **Ce que J1-a ne ferme PAS — la liveness.** Aucun vote ne circule sur le fil, aucun
+délai n'existe, la vue reste à 0. Le producteur ne rassemble que son propre vote, donc
+**sur une chaîne à `n ≥ 4` aucun bloc n'est produit** : il en fabrique un, le refuse
+lui-même pour `QuorumInsuffisant`, et rien n'est diffusé. Seules les chaînes à `n ≤ 3`
+(`f = 0`, quorum 1) et les chaînes ouvertes avancent aujourd'hui. Le changement de vue
+— le mécanisme qui empêchera une autorité absente de figer la chaîne — est le jalon
+**J1-b**. Le dire évite de croire la liveness fermée par le format.
 
 L'ordre interne d'un bloc est le tri par `tx_digest` : deux nœuds scellant le même
 mempool produisent le même bloc, ce qui rend les collisions inoffensives. Ce critère est

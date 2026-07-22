@@ -90,6 +90,36 @@ divergente *avant* qu'elle ne diverge.
 Sans `--autorite`, la chaîne est **ouverte** : n'importe quel nœud avec
 `--sceller` produit des blocs. Testnet local uniquement.
 
+### Combien d'autorités ? — le quorum décide, et il se paie en octets
+
+Un bloc n'est valide que muni d'un **certificat de quorum** : `2f + 1` signatures
+d'autorités distinctes, avec `n = 3f + 1`. Le nombre d'autorités gravées n'est
+donc pas cosmétique — il fixe à la fois ce que la chaîne tolère et ce que chaque
+bloc pèse.
+
+| `n` autorités | pannes tolérées `f` | quorum `2f+1` | certificat | part du bloc |
+|---|---|---|---|---|
+| 1 à 3 | **0** | 1 | 3 374 o | 0,3 % |
+| **4** | **1** | 3 | 10 122 o | **1,0 %** |
+| 7 | 2 | 5 | 16 870 o | 1,6 % |
+| 10 | 3 | 7 | 23 618 o | 2,3 % |
+| 64 (max) | 21 | 43 | 145 082 o | **13,8 %** |
+
+**Recommandation : `n = 4`.** C'est le premier point qui tolère réellement une
+panne, pour 1 % du budget du bloc. À `n ≤ 3`, `f = 0` : la chaîne exige un quorum
+qu'une seule autorité atteint, ce qui n'est pas une faiblesse du calcul — c'est ce
+que « tolérer zéro faute » signifie.
+
+⚠️ **Le certificat ne s'agrège pas et ne s'agrègera pas** : aucune signature
+post-quantique ne l'offre. Son coût croît **linéairement** avec le comité, pour
+toujours. À `n = 64` il vaut l'équivalent de deux transactions par bloc. Mesurez
+avant de graver : `cargo run -p node --example dimensionner-quorum --release`.
+
+⚠️ **Aujourd'hui, ne gravez pas plus de 3 autorités si vous voulez des blocs.**
+Le protocole qui fait circuler les votes est le jalon **J1-b** ; tant qu'il
+n'existe pas, un producteur ne rassemble que son propre vote et **une chaîne à
+`n ≥ 4` ne produit rien** (voir « `--sceller` ne produit aucun bloc »).
+
 ⚠️ Le **nombre** d'allocations est public à jamais (les montants et les
 bénéficiaires, non). Une allocation unique désigne son bénéficiaire par sa seule
 position.
@@ -157,12 +187,21 @@ doit se stabiliser), ou il est sur une **autre chaîne** (comparez l'identifiant
 de genèse). Le second cas ne se répare pas : l'état est *append-only*, il faut
 repartir d'un répertoire de données vide, avec la bonne genèse.
 
-**`--sceller` ne produit aucun bloc.** Sur une chaîne à autorités, seul le
-producteur du tour scelle. Le démarrage le dit :
+**`--sceller` ne produit aucun bloc.** Trois causes, dans l'ordre où les écarter :
+
+1. **Vous n'êtes pas autorité.** Le démarrage le dit :
 
 ```
 [    0.002s] AVERT  --sceller sans être autorité : AUCUN bloc ne sera produit
 ```
+
+2. **Ce n'est pas votre tour.** Sur une chaîne à autorités, seul le producteur de
+   la hauteur scelle — attendez le tour suivant.
+3. **La chaîne a `n ≥ 4` autorités.** Alors c'est attendu, et ce n'est pas
+   réparable côté exploitation : le quorum vaut `2f+1 ≥ 3`, les votes ne
+   circulent pas encore sur le fil (jalon **J1-b**), et le producteur refuse son
+   propre bloc pour `QuorumInsuffisant`. **Une chaîne à `n ≤ 3` avance ; une
+   chaîne à `n ≥ 4` attend J1-b.**
 
 **« ARCHIVE INUTILISABLE ».** Le nœud démarre en mode **dégradé, sans archive** :
 il reste valide mais ne peut plus servir de wallet. **Aucun fichier n'est
@@ -174,9 +213,14 @@ n'est tenté : un nœud mal amorcé est indiscernable d'un nœud neuf en bonne s
 
 ## Limites connues
 
-- **Une autorité absente FIGE la chaîne à son tour** (liveness, option A
-  assumée). Les transactions attendent au mempool, rien n'est perdu.
-- **Aucune réorganisation n'est possible.** Une divergence est définitive.
+- **Une autorité absente FIGE la chaîne à son tour.** Les transactions attendent
+  au mempool, rien n'est perdu. Le **changement de vue** qui ferme ce trou est
+  décidé et le format du bloc le porte déjà ; son protocole est le jalon J1-b.
+- ⚠️ **Une chaîne à `n ≥ 4` autorités ne produit aucun bloc aujourd'hui** — les
+  votes du quorum ne circulent pas encore (J1-b). Voir « Combien d'autorités ? ».
+- **Aucune réorganisation n'est possible.** Une divergence est définitive — et
+  avec la finalité par quorum, c'est désormais une conséquence assumée du modèle
+  plutôt qu'un manque : un bloc certifié n'a rien à réorganiser.
 - **Le mempool n'est pas persisté** — sans gravité, les pairs réannoncent.
 - **Le nœud qui sert l'historique apprend** l'IP, la cadence et la position des
   wallets. Il peut aussi **mentir par omission** (taire une sortie : la racine

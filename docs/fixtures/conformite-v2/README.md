@@ -23,7 +23,7 @@ pas, et l'écart est nommé dans le message d'échec.
 | Fichier | Quoi |
 |---|---|
 | `genese.bin` | bloc 0 en **version `0x04`**, une autorité gravée, aucune allocation |
-| `bloc-1.bin` | bloc de hauteur 1, **vide**, vue 0, scellé par cette autorité |
+| `bloc-1.bin` | bloc de hauteur 1, **vide**, vue 0, scellé **et certifié** par cette autorité |
 | `attendu.txt` | identifiants et racines attendus, en hexadécimal **non tronqué** |
 | `autorite.cle` | clé d'autorité **jetable**, publiée pour la reproductibilité |
 
@@ -34,7 +34,13 @@ que pour régénérer la fixture. Ne jamais s'en servir sur une chaîne réelle.
 
 Décodage de bloc `0x04` · identifiant de genèse (**autorités comprises** — deux
 listes donnent deux chaînes) · amorçage d'état · chaînage parent → enfant ·
-élection de producteur · vérification de scellement · avancée de la tête.
+élection de producteur · vérification de scellement · **certificat de quorum** ·
+avancée de la tête.
+
+Le bloc 1 porte un certificat, et c'est ce qui le rend applicable : à `n = 1`,
+`f = 0` et le quorum vaut **1** — l'unique autorité se certifie elle-même. Le
+test l'exige explicitement (`quorum_requis() == 1`, votant `[0]`) plutôt que de
+le constater : sans certificat, le bloc serait refusé pour `QuorumInsuffisant`.
 
 Un détail qui est une assertion et non un hasard : `racine_apres_bloc1` est
 **égale** à `racine_apres_genese`. Un bloc vide n'insère aucune sortie, donc
@@ -46,9 +52,11 @@ deux, ce qui distingue « le bloc a été appliqué » de « le bloc a été ign
 Aucune transaction, donc **aucune preuve STARK**, aucun nullifier, aucune
 émission. C'est délibéré : un bloc vide reste déterministe, petit et rapide.
 
-**Aucun certificat de quorum non plus** : la vérification du quorum est livrée
-par J1-a, mais les votes ne circulent qu'à partir de J1-b. Une fixture avec
-certificat viendra avec le protocole.
+**Aucun quorum PLURIEL** : à `n = 1`, le certificat ne contient qu'une signature,
+donc la fixture n'exerce ni le masque à plusieurs bits, ni le comptage de votants
+distincts, ni le refus à `2f` votes — tout cela vit dans les tests unitaires de
+`ledger::proved_state`. Une fixture à plusieurs autorités suppose des votes qui
+circulent, donc J1-b.
 
 ## Régénérer
 

@@ -53,14 +53,28 @@ de décisions écrites, et chacune renvoie à son document de référence.
 
 - **Fédéré, pas décentralisé.** La liste des autorités de scellement est gravée
   dans la genèse. En changer = nouvelle genèse = **nouvelle chaîne**.
+- **Un bloc exige un quorum de `2f + 1` autorités** (`n = 3f + 1`) depuis le
+  format `0x04`. C'est ce qui donne la **finalité** : un bloc certifié ne peut
+  être contredit sans que `f + 1` participants signent deux blocs à la même
+  hauteur — une faute prouvable. Une partition qui ne réunit pas le quorum
+  **s'arrête** plutôt que de diverger.
+- ⚠️ **Le protocole de vue n'est pas encore livré (jalon J1-b), et cela se voit.**
+  Les votes ne circulent pas sur le fil : un producteur ne rassemble que le sien.
+  **Sur une chaîne à `n ≥ 4`, aucun bloc n'est donc produit aujourd'hui.** Seules
+  les chaînes à `n ≤ 3` (`f = 0`, quorum 1) avancent. Ce n'est pas une panne à
+  signaler : c'est l'état du jalon, et ce document existe pour qu'il ne soit pas
+  découvert au démarrage.
 - **Une autorité absente fige la chaîne jusqu'à son retour.** Les transactions
   s'accumulent en mempool, rien n'est perdu, mais **plus aucun bloc n'est
-  produit** tant que l'autorité du tour ne revient pas. Il n'existe aucun
-  certificat de saut : c'est un choix, et le fermer demande un changement de vue,
-  donc un autre modèle de consensus.
+  produit** tant que l'autorité du tour ne revient pas. Le mécanisme qui ferme ce
+  trou — le **changement de vue** — est décidé (ADR-001) et le format le porte
+  déjà (le champ `vue` est dans l'identifiant du bloc) ; c'est son protocole qui
+  reste à écrire.
 - **Aucune réorganisation n'est possible.** L'état est append-only de bout en
   bout. Toute divergence est **définitive** : un nœud qui diverge ne se répare
-  pas, il se réamorce.
+  pas, il se réamorce. Avec la finalité instantanée, cette limite devient une
+  conséquence assumée du modèle plutôt qu'un manque : il n'y a rien à
+  réorganiser.
 - **Aucune résistance à la censure du producteur.** L'ordre des transactions dans
   un bloc est une convention de reproductibilité, pas une défense.
 

@@ -166,6 +166,117 @@ attendant le circuit. Fonctions suffixées `_transparent` dans le code.
   (migrera vers Rescue-Prime avec le circuit).
 - Racines récentes conservées pour valider des tx construites sur un état légèrement ancien.
 
+## Finalité : le bloc (`VERSION_BLOC = 0x04`)
+
+L'unité d'application n'est pas la transaction isolée mais le **bloc** : un lot
+*ordonné* de transactions, chaîné à son parent, appliqué **atomiquement**
+(`ProvedLedgerState::appliquer_bloc`). L'état est **append-only de bout en bout :
+aucune réorganisation n'est possible**, et c'est la finalité instantanée décrite
+plus bas qui rend cette limite défendable plutôt que subie.
+
+### Contenu et identifiant
+
+```
+Bloc { parent, hauteur, vue, transactions[], emissions[], scellement?, certificat? }
+id = dual_hash("obscura/bloc/v1", encode_sans_signatures(bloc))   // 64 o, jamais tronqué
+```
+
+- **Entrent dans l'identifiant** : `parent`, `hauteur`, **`vue`**, les
+  transactions dans leur ordre, les émissions.
+- **N'entrent PAS dans l'identifiant** : `scellement` et `certificat` — ce sont
+  des signatures *sur* l'identifiant ; elles ne peuvent pas y entrer. Elles
+  voyagent néanmoins sur le fil.
+- **Émission** : `hauteur > 0 ⇒ emissions.is_empty()`. La création de monnaie est
+  confinée à la genèse (aucune coinbase).
+- **Bornes** : `MAX_TX_PAR_BLOC` borne le NOMBRE, `MAX_OCTETS_BLOC` (≈ 1 Mio =
+  cadre réseau − surcoût AEAD − marge message) borne le POIDS. Les deux sont
+  vérifiées **au scellement ET au décodage** — un bloc valide est toujours
+  diffusable en un cadre.
+
+**Versions périmées refusées par leur nom.** Un bloc `0x03` rend
+`BlocDecodeError::VersionPerimee`, jamais une réinterprétation. Même discipline
+que `CryptoError::AlgoPerime` et `VERSION_ETAT`. Aucune chaîne publique n'a
+existé en `0x03` : il n'y avait rien à migrer.
+
+### Élection de producteur et vue
+
+La genèse peut **graver une liste d'autorités de scellement** (≤ `MAX_AUTORITES`
+= 64, clés hybrides Ed25519 + ML-DSA-65), et cette liste entre dans
+**l'identifiant de genèse** : deux listes initiales = deux chaînes.
+
+```
+producteur_attendu(h, vue) = autorites[(h − 1 + vue) mod n]
+scellement = HybridSig("obscura/bloc/scellement/v1", id)   // du producteur du tour
+```
+
+La **vue** est le numéro de tentative à une hauteur donnée, et elle **entre dans
+l'identifiant**. C'est ce qui interdit qu'un même bloc soit présenté sous deux
+vues : deux vues donnent deux blocs *différents*, jamais deux encodages du même.
+Le certificat porte donc sur `(hauteur, vue)` sans ambiguïté.
+
+Une genèse **sans autorités** donne une chaîne **OUVERTE** : aucun scellement n'y
+est accepté (`ScellementInattendu`), aucun certificat non plus
+(`CertificatInattendu`) — la canonicité interdit deux encodages valides du même
+bloc.
+
+### Certificat de quorum
+
+```
+Certificat { masque: u64, signatures: [HybridSig] }
+vote = HybridSig("obscura/bloc/vote/v1", id)
+```
+
+- **Quorum** : `2f + 1` signatures valides et **distinctes**, avec `n = 3f + 1`
+  donc `f = (n − 1) / 3`. À `n = 4` (`f = 1`) il faut 3 votes ; à `n ≤ 3`
+  (`f = 0`) un seul suffit — c'est ce que « tolérer zéro faute » signifie, pas une
+  faiblesse du calcul.
+- **Masque de bits** plutôt que liste d'index : 8 octets pour 64 autorités, et
+  surtout les **doublons deviennent structurellement impossibles** — un bit est
+  mis ou ne l'est pas. C'est ce qui rend le comptage de votants distincts sûr
+  sans déduplication.
+- **Encodage canonique** : le nombre de signatures est **DÉRIVÉ du masque**,
+  jamais annoncé séparément ; les signatures sont rangées dans l'ordre croissant
+  des index. Deux encodages du même certificat sont impossibles, et le nombre est
+  borné avant toute allocation.
+- ⚠️ **`DOMAINE_VOTE` est distinct de `DOMAINE_SCELLEMENT`, et ce n'est pas
+  cosmétique** : les deux signent le même identifiant. Sans domaines séparés, le
+  scellement du producteur pourrait être compté comme un vote, et `2f` votes
+  réels suffiraient à afficher `2f+1`.
+- ⚠️ **Aucune agrégation** : aucune signature post-quantique n'en offre. Le
+  certificat pèse `popcount(masque) × 3374` octets — 1,0 % d'un bloc à `n = 4`,
+  13,8 % à `n = 64`. **La taille du comité est donc bornée par le budget du
+  bloc**, définitivement.
+
+### Ordre de vérification — non négociable
+
+`appliquer_bloc` va du moins cher au plus cher, et l'ordre est une défense
+anti-DoS, pas une élégance :
+
+1. contrôles O(1) (version, émission hors genèse, bornes) ;
+2. **chaînage** (parent, hauteur) — un bloc d'une autre chaîne tombe en
+   `ParentInattendu` sans rien coûter et **sans accusation** ;
+3. **scellement** du producteur du tour ;
+4. **certificat de quorum** — jusqu'à 43 vérifications hybrides au pire ;
+5. **puis seulement** les preuves STARK.
+
+Inverser 4 et 5 offrirait à un pair hostile de déclencher la vérification de
+preuves avec un certificat bidon.
+
+### État de la mise en œuvre (J1-a)
+
+Le **format et sa vérification** sont livrés : un bloc porte sa vue et son
+certificat, et un bloc sans quorum est refusé (`QuorumInsuffisant`,
+`VoteInvalide`, `VotantInconnu`).
+
+⚠️ **Le protocole de vue ne l'est pas encore (J1-b).** Aucun vote ne circule sur
+le fil, aucun délai n'existe, la vue reste à 0 et un producteur ne rassemble que
+son propre vote. **Conséquence directe : sur une chaîne à `n ≥ 4`, aucun bloc
+n'est produit** — le producteur en fabrique un, le refuse lui-même pour quorum
+insuffisant, et rien n'est diffusé. Seules les chaînes à `n ≤ 3` (quorum 1) et
+les chaînes ouvertes avancent aujourd'hui. Le dire évite de croire la liveness
+fermée par ce jalon. Modèle et arbitrages :
+`docs/superpowers/specs/2026-07-22-j1-consensus-adr.md` (ADR-001, accepté).
+
 ## Primitives (crate `crypto`) — inchangées en v0.2
 
 | Fonction | Construction | Sécurité |

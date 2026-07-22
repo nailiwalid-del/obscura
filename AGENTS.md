@@ -6,10 +6,11 @@
 > ici, pas là-bas. Les constantes et formats cités plus bas sont **informatifs** :
 > l'autorité est le code, décrit par `docs/PROTOCOL.md`.
 >
-> ⚠️ Ce fichier et `CLAUDE.md` ont **divergé** par le passé (principe directeur
-> resté en round-3, dette zeroize annoncée ouverte alors qu'elle est fermée).
-> Toute modification de l'un doit être répercutée sur l'autre, ou les deux
-> redériveront.
+> ⚠️ Ce fichier et `CLAUDE.md` ont **divergé** par le passé — la dernière fois de
+> plusieurs jalons (il annonçait encore `VERSION_BLOC` 0x02 et un circuit 2-in/2-out
+> figé). Il est désormais **dérivé de `CLAUDE.md`, contenu identique, seul cet
+> en-tête diffère.** Toute modification de l'un doit être répercutée sur l'autre le
+> jour même, ou les deux redériveront — et c'est l'agent suivant qui paiera.
 
 Monnaie numérique privée post-quantique. Prototype Rust — les phases 1 à 5 sont
 prototypées et testées : nœud persistant, cycle complet payer → sceller → recevoir
@@ -26,7 +27,10 @@ round-3 (0x01) est REFUSÉ PAR SON NOM (`CryptoError::AlgoPerime`), jamais cohab
 
 ## État
 
-- `crates/crypto` : hash, kem, sig, aead — testés
+- `crates/crypto` : hash, kem, sig, aead — testés. KEM **contributif** : les points
+  X25519 d'ordre faible sont rejetés à l'encapsulation ET à la décapsulation
+  (`CryptoError::NonContributif`) — sinon un pair hostile force un DH nul et la moitié
+  courbes disparaît en silence, ML-KEM portant seul la sécurité.
 - `crates/net` : **transport chiffré PQ** (phase 4, brique 1/4) — handshake hybride
   3 passes avec **forward secrecy** (éphémères jetés) et **masquage d'identité**
   (identités chiffrées sur le fil), machine à états en typestate, canal anti-rejeu
@@ -48,6 +52,11 @@ round-3 (0x01) est REFUSÉ PAR SON NOM (`CryptoError::AlgoPerime`), jamais cohab
   **`bloc`** (finalité) : lot ORDONNÉ chaîné au parent, id = `dual_hash` non tronqué,
   décodage borné (MAX_TX_PAR_BLOC vérifié AVANT allocation ; `const _: () = assert!`
   consigne à la compilation qu'un bloc plein dépasse 30× le cadre réseau).
+  **Plafond de scellement en OCTETS** : `MAX_OCTETS_BLOC` = cadre réseau −
+  `crypto::aead::SURCOUT` − marge message (≈ 1 Mio), vérifié au scellement ET au
+  décodage — MAX_TX_PAR_BLOC borne le NOMBRE, pas le POIDS (~15 tx de 68 Kio
+  suffisent à déborder le cadre), et le cadre borne le CHIFFRÉ, d'où la soustraction
+  du surcoût AEAD (sans elle, un bloc scellé à la borne était indiffusable de 5 o).
   **Émission (genèse seule)** : `Bloc` porte `emissions: Vec<Emission>` et la règle est
   `hauteur > 0 ⇒ emissions.is_empty()` (`BlocRefus::EmissionHorsGenese`), contrôle O(1)
   fait AVANT le chaînage, l'instantané et toute vérification STARK. `mint` est PRIVÉE :
@@ -61,8 +70,40 @@ round-3 (0x01) est REFUSÉ PAR SON NOM (`CryptoError::AlgoPerime`), jamais cohab
   jour d'une coinbase. Une émission sans bénéficiaire porte une enveloppe FACTICE
   chiffrée vers une clé KEM jetable (`proved_wallet::emission_factice`), de longueur
   identique à une vraie. `MAX_EMISSIONS_PAR_BLOC` vérifiée au décodage ET dans
-  `Bloc::genese_avec`. `VERSION_BLOC` = 0x02 et `VERSION_ETAT` = 0x02 (l'identifiant de
-  la genèse vide change, donc un ancien dump porte une tête périmée : refusé, pas relu).
+  `Bloc::genese_avec`. `VERSION_BLOC` = **0x04** et `VERSION_ETAT` = 0x04 (chaque bump
+  change l'identifiant de la genèse vide, donc un ancien dump porte une tête périmée :
+  refusé, pas relu ; un bloc 0x03 rend `BlocDecodeError::VersionPerimee`, refusé PAR SON
+  NOM). **Élection de producteur** : la genèse peut graver des
+  AUTORITÉS (`genese_avec_autorites`, ≤ 64, dans l'identifiant — deux listes = deux
+  chaînes) ; producteur légitime de (h, vue) = `autorites[(h−1+vue) mod n]`, bloc signé
+  (`signer_scellement`, signature sur l'ID, hors de l'id mais sur le fil), vérifié par
+  `appliquer_bloc` APRÈS le chaînage (bloc d'une autre chaîne = `ParentInattendu`, pas
+  d'accusation) et AVANT tout STARK. Scellement manquant/hors tour/étranger = faute
+  sanctionnée ; genèse SANS autorités = chaîne OUVERTE (défaut, testnet local — un
+  scellement y est refusé, canonicité). Coinbase toujours hors périmètre (l'élection en
+  est le prérequis, pas le début).
+  **Consensus BFT (ADR-001 accepté, J1-a livré)** : `vue: u32` DANS l'identifiant (deux
+  vues = deux blocs, jamais deux encodages du même — c'est ce qui permet au certificat
+  de porter sur `(hauteur, vue)` sans ambiguïté) et `certificat: Option<Certificat>`
+  HORS de l'identifiant (comme le scellement : une signature sur l'id ne peut pas y
+  entrer). `Certificat { masque: u64, signatures }` — MASQUE DE BITS, donc doublons de
+  votant structurellement impossibles, et nombre de signatures DÉRIVÉ du masque au
+  décodage (jamais annoncé : deux encodages du même certificat seraient possibles).
+  `appliquer_bloc` exige `quorum_requis() = 2f+1` avec `n = 3f+1`, APRÈS le chaînage et
+  AVANT tout STARK (`QuorumInsuffisant`/`VoteInvalide`/`VotantInconnu` ; un certificat
+  sur chaîne ouverte = `CertificatInattendu`, même raison de canonicité que le
+  scellement). ⚠️ `DOMAINE_VOTE` ≠ `DOMAINE_SCELLEMENT` et ce n'est PAS cosmétique :
+  les deux signent le même id, donc sans séparation le scellement du producteur
+  compterait comme un vote et `2f` votes réels afficheraient `2f+1` (test dédié :
+  `scellement_rejoue_comme_vote_refuse`). ⚠️ AUCUNE agrégation PQ n'existe : le
+  certificat pèse `2f+1 × 3374` o, LINÉAIREMENT et pour toujours (1,0 % du bloc à n=4,
+  13,8 % à n=64) — la taille du comité est BORNÉE par le budget du bloc.
+  ⚠️ **J1-a livre le FORMAT, pas le PROTOCOLE** : aucun vote ne circule sur le fil,
+  aucun délai, la vue reste à 0 et `sceller` ne rassemble que son propre vote — donc
+  **une chaîne à n ≥ 4 ne produit AUCUN bloc** (le producteur refuse le sien pour
+  quorum insuffisant). Seules n ≤ 3 (f = 0, quorum 1) et les chaînes ouvertes avancent.
+  La liveness reste OUVERTE ; le changement de vue est J1-b, le changement d'ensemble
+  d'autorités J1-c. Ne pas croire la porte D fermée par ce jalon.
   `ProvedLedgerState::appliquer_bloc` est ATOMIQUE — un bloc à moitié appliqué
   placerait le nœud dans un état qu'AUCUN autre n'a, et il refuserait ensuite tout
   pour « ancre inconnue » sans que rien ne désigne la cause. Restauration bon marché
@@ -84,7 +125,7 @@ round-3 (0x01) est REFUSÉ PAR SON NOM (`CryptoError::AlgoPerime`), jamais cohab
   ⚠️ **Décision tranchée** : `racine_apres`/`fin` n'entrent PAS dans `Bloc::to_bytes`,
   parce que le bloc engage DÉJÀ ses sorties (ses transactions entières y sont, donc
   leurs `output_commitments` et `enc_notes` dans l'ordre) — ce sont des valeurs DÉRIVÉES,
-  les inscrire ne coûterait qu'un `VERSION_BLOC` 0x03 et un scellement spéculatif pour
+  les inscrire ne coûterait qu'un bump de `VERSION_BLOC` et un scellement spéculatif pour
   zéro bit d'authentification. Ce qui reste ouvert est écrit : un wallet qui prend
   historique ET identifiants de blocs au MÊME nœud n'a rien vérifié.
   Coût chiffré : ≈1,4 Kio/sortie, ≈1,4 Mio/bloc plein, ≈12 Gio/jour sous charge ; jamais
@@ -101,19 +142,35 @@ round-3 (0x01) est REFUSÉ PAR SON NOM (`CryptoError::AlgoPerime`), jamais cohab
   honnêtes). `Refus::couteux()` distingue les refus gratuits de celui qui a brûlé
   du CPU, pour pénaliser le pair en conséquence.
 - `crates/circuit` : circuit STARK **monolithe** (`monolith/`) — P1–P7 d'une tx
-  2-in/2-out en UNE SEULE trace/preuve, publics minimaux (root, nullifiers,
-  output_commitments, fee), `ProvedTx` **v3** — **witness-hiding (HVZK en ROM)**
-  depuis 3z-b1 (lignes de blinding, gating global `blind_off`, aléa OsRng frais
-  par preuve) — testé et benché. ⚠️ **Deux dispositions coexistent** : le
-  **SEGMENTÉ** (`seg_*`, 92 col × 2048 lignes) est celui que `tx.rs` utilise
-  depuis la bascule 3z-c1 — ≈1783 ms génération, ≈4,1 ms vérification,
-  ≈67,9 Kio/preuve à profondeur 32 ; le **côte-à-côte** (201 col × 1024 lignes,
-  ≈1260 ms / 2,8 ms / 89,3 Kio) n'est plus sur le chemin de production et ne sert
-  plus qu'à l'oracle de parité.
+  en UNE SEULE trace/preuve, publics minimaux (root, nullifiers, output_commitments,
+  fee). Depuis **3z-c2** : FORME VARIABLE `m`-in/`n`-out (`1..=MAX = 4`). Une `Forme`
+  validée pilote schedule, colonnes (`seg_layout::Forme::{rho_c, vout_c, s_col,
+  width}`), trace (`SegWitness`), AIR (`seg_air`, sélecteurs + assertions + NOMBRE de
+  contraintes dérivés de la forme). ⚠️ **La forme est portée par les LONGUEURS des
+  publics et PRÉFIXÉE dans Fiat-Shamir** (`MonolithPublicInputs::to_elements`) : sans
+  ça, deux découpages des mêmes digests donneraient la même graine (preuve 1/3
+  rejouable en 2/2). Robustesse : l'AIR dérive sa forme de la LARGEUR de trace
+  commise (bijective, `forme_depuis_largeur`), pas des publics — une forme mentie est
+  rejetée, jamais un accès hors cadre. `ProvedTx` **v4** (Vec bornés, comptes au wire
+  + `tx_digest`, bornés avant allocation). **witness-hiding (HVZK en ROM)** depuis
+  3z-b1, re-vérifié sur 1/1 et 4/4 (le gating `blind_off` couvre toute porteuse
+  nouvelle sans liste). Soundness variable (C2-T4) : 3 forges D7 (forme liée, fin
+  d'équilibre variable, ordre publics↔segments), RED sur chacune. Re-bench prof. 32 :
+  1/1 = 55,7 Kio / 1,6 ms ; 2/2 = 67,7 Kio / 3,8 ms (non-régression) ; 4/4 =
+  80,3 Kio / 12,6 ms. Le **côte-à-côte** (201 col, oracle de parité 2/2) est
+  SUPPRIMÉ (C2-T8) : ses helpers partagés (`MonolithPublicInputs`, `push_preamble`,
+  `key_rows`/`sponge_rows_for`, témoins de test) vivent dans `monolith/socle.rs`
+  (module SANS layout — pur déplacement, zéro octet de comportement changé), et la
+  géométrie 2/2 reste ÉPINGLÉE par des constantes `#[cfg(test)]` de `seg_layout`
+  (`forme_2_2_identique_aux_constantes` : un refactor de `Forme` ne peut pas
+  déplacer un offset 2/2 en silence — la 2/2 est du consensus). Forges à
+  reconstruction d'arbre rejouées à la profondeur CONSENSUS (D8 soldée : arbre
+  synthétique index 0/3 + frères muets, RED × 5 forges à prof. 32).
   Caveat : honnête-vérifieur, prototype non audité (voir docs/STARK_STATEMENT.md,
   « Argument HVZK »). Les gadgets autonomes du crate restent validity-only.
-  `ProvedTx` v3 porte les `enc_notes` (enveloppes chiffrées des sorties, scan wallet
-  via `ledger::proved_wallet`), liées dans `tx_digest` v3 (anti-substitution) ; P8
+  `ProvedTx` v4 porte les `enc_notes` (enveloppes chiffrées des sorties, une par
+  sortie, scan wallet via `ledger::proved_wallet`), liées dans `tx_digest` v4
+  (anti-substitution + comptes m/n) ; P8
   différé, IK-CCA = phase 4. Sérialisation wire **canonique**
   `ProvedTx::{to_bytes, from_bytes}` (+`TxDecodeError`) : `from_bytes` = point
   d'entrée réseau validant (curseur borné sans panique, digests canoniques,
@@ -139,7 +196,10 @@ round-3 (0x01) est REFUSÉ PAR SON NOM (`CryptoError::AlgoPerime`), jamais cohab
   empreinte `dual_hash` NON tronquée (un octet retourné dans un montant donnerait
   sinon un solde faux sans erreur), cohérence croisée note↔arbre au chargement.
   Aucune variante « charger ou créer » : un fichier illisible ne doit jamais devenir
-  un wallet vide. ⚠️ NON chiffré au repos.
+  un wallet vide. Chiffré au repos (Argon2id + cascade AEAD, `Protection` obligatoire
+  et explicite — `Aucune` est un choix assumé, jamais un défaut) ; un fichier en clair
+  n'est relu QUE sous `Protection::Aucune` (phrase fournie ⇒ `FichierEnClair`, la
+  migration est un geste : `OBSCURA_WALLET_MIGRER=1` côté CLI).
   `oublier_depensees(&tx)` reconnaît nos notes en RECALCULANT leurs nullifiers —
   marche donc sur toute transaction observée, pas seulement les nôtres.
   **`synchro`** (rejeu de l'historique, synchronisation 3/3) : `Wallet::synchroniser`
@@ -179,6 +239,31 @@ round-3 (0x01) est REFUSÉ PAR SON NOM (`CryptoError::AlgoPerime`), jamais cohab
   décodage → admission (5 filtres O(1) puis STARK) → mempool.
   `Noeud::soumettre` = point d'entrée d'une transaction LOCALE (wallet) : part en
   TIGE Dandelion++, pas en diffusion — c'est là que l'origine est protégée.
+  **Exploitation (T4)** : `node::journal` — journalisation à NIVEAUX sur stderr
+  (`OBSCURA_LOG=erreur|avert|info|debug`, une valeur inconnue AVERTIT et retombe
+  sur info plutôt que de faire taire le nœud), horodatée en UPTIME et non en date
+  absolue (systemd/Docker horodatent déjà ; l'uptime, lui, n'est pas dérivable de
+  leurs logs). Aucune dépendance ajoutée. **Ligne de STATUT toutes les 30 s**
+  (hauteur, pairs, liens, mempool, désaccords) qui passe en AVERT si `liens = 0`
+  ou `désaccords > 0` — les deux pannes SILENCIEUSES du protocole, un nœud isolé
+  ou décroché servant sinon un historique cohérent mais tronqué. Déploiement :
+  `deploiement/{obscura-node.service,Dockerfile}` (systemd durci, image non-root
+  en deux étapes) et `docs/OPERATEUR.md`.
+  **`obscura-genese`** (4e binaire) : fabrique le bloc 0 — autorités
+  (`--autorite <identite.cle>` ou `--autorite-hex`, la bonne voie en fédération) et
+  allocations chiffrées vers des adresses `obs1…`. REFUSE d'écraser (une genèse
+  remplacée = chaîne perdue), AUTO-VÉRIFIE (relit + réamorce ce qu'il écrit), borne
+  les montants à 2^60 (au-delà la note serait INDÉPENSABLE — range-check), et
+  imprime l'identifiant court À COMPARER entre opérateurs avant démarrage. Sans lui,
+  geler une chaîne exigeait d'écrire du Rust ad hoc pour l'artefact le moins
+  rattrapable du projet.
+  **`obscura-node --identite`** (imprime la clé publique du nœud sur stdout, puis
+  SORT) : sans elle, `--autorite-hex` — la voie recommandée, celle où personne ne
+  transmet son fichier d'identité — n'avait AUCUNE source d'entrée, et la fédération
+  était donc inaccessible sans écrire du Rust. Les deux moitiés du geste vivent dans
+  `node::autorite` (`encoder`/`decoder`, utilisé par les DEUX binaires) précisément
+  pour qu'un test les confronte : séparées, un préfixe ou une majuscule les feraient
+  diverger, et l'échec n'apparaîtrait qu'au moment de graver une chaîne.
   **Binaires** : `obscura-node` (nœud autonome) et `obscura-demo` (démonstration
   locale : wallet → preuve → handshake PQ → socket → mempool, chaque étape
   annoncée). **Persistance** (`node::persistance`) : identité + état survivent aux
@@ -200,7 +285,26 @@ round-3 (0x01) est REFUSÉ PAR SON NOM (`CryptoError::AlgoPerime`), jamais cohab
   même pas) ; `DejaApplique` n'est PAS un pas (arrêt, sinon boucle sur place) ; le
   travail est BORNÉ par invocation (`MAX_BLOCS_PAR_INVOCATION`, abandon nommé plutôt que
   boucle sur un nœud qui sert sans fin). Débit réglé par la FRÉQUENCE des demandes,
-  jamais par un champ sur le fil. `envoyer` REFUSE si `prochaine_hauteur() == 0` (jamais
+  jamais par un champ sur le fil.
+  **TÉMOIN** (`synchroniser_avec_temoin`, `obscura-wallet synchroniser --temoin`) : un
+  SECOND nœud interrogé sur la MÊME hauteur, dont on ne retient que `racine_apres`. Ferme
+  le mensonge par OMISSION — qui était indétectable auprès d'un nœud unique, parce que
+  taire une sortie donne une chaîne close dont la racine annoncée est cohérente ; aucun
+  contrôle LOCAL ne pouvait le démentir, il fallait un identifiant venu d'AILLEURS. La
+  comparaison a lieu AVANT application (vérifier après coup laisserait l'arbre peuplé
+  d'index faux, et `synchroniser` ne défait que ce qu'il vient d'insérer). Un témoin MUET
+  n'est PAS un accord (`Arret::TemoinMuet` : arrêt sans appliquer — un nœud sans
+  `--archiver` ou à crédit épuisé se tait, et poursuivre serait un placebo). Toute
+  anomalie du témoin vaut MUET, jamais désaccord : `Arret::Desaccord` est le seul arrêt
+  qui accuse, et il dit qu'un des deux ment sans dire lequel. Ferme AUSSI la tête
+  RACCOURCIE : quand le servant se TAIT, la même question est reposée au témoin, et s'il
+  sert cette hauteur le wallet n'est pas à jour (`Arret::TeteRetenue`) — c'était le pire
+  mode d'échec, parce qu'un silence est indistinguable d'une chaîne épuisée et qu'un nœud
+  sans `--archiver` produisait « à jour, 0 bloc » avec l'air satisfait ; deux silences
+  valent à jour, sinon toute synchronisation finirait par un avertissement. ⚠️ N'a de
+  valeur que choisi INDÉPENDAMMENT (le protocole ne peut pas vérifier l'indépendance).
+  Le prix est le doublement de la BANDE PASSANTE, pas du scan (une seule décapsulation
+  KEM par sortie, côté servant). `envoyer` REFUSE si `prochaine_hauteur() == 0` (jamais
   synchronisé) et propose `--noeud-synchro` DISTINCT de `--noeud` (avertissement quand
   ils coïncident) : enchaîner synchro puis envoi depuis la même IP relie les deux et
   désigne l'émetteur, alors qu'un relais Dandelion++ ne vient jamais de se synchroniser.
@@ -213,13 +317,24 @@ round-3 (0x01) est REFUSÉ PAR SON NOM (`CryptoError::AlgoPerime`), jamais cohab
   chaîné = AUCUNE sanction — c'est le cas normal de deux scellements simultanés ou
   d'un retard ; seule une tx invalide dans un bloc bien chaîné pénalise).
   `obscura-node --sceller <ms>`, **OFF par défaut** : produire des blocs est une
-  décision d'opérateur. **Élection de producteur CÂBLÉE** (autorités en genèse, tour
-  de rôle, bloc signé — cf. THREAT_MODEL « Qui a autorité pour sceller ») ; une
-  genèse SANS autorités reste une chaîne OUVERTE : ordre CONVENU, pas DÉFENDU.
+  décision d'opérateur. **Élection de producteur CÂBLÉE** : sur une chaîne à
+  autorités, `Noeud::sceller` refuse hors de son tour (rien ne part) et SIGNE à son
+  tour de l'identité persistante du nœud (plus une identité jetable — une autorité
+  re-clefée à chaque démarrage ne serait jamais reconnue) ; `sur_bloc` sanctionne un
+  scellement manquant/hors tour/étranger comme une transaction invalide. Chaîne
+  ouverte (genèse sans autorités) : comportement historique, ordre CONVENU pas
+  DÉFENDU. Testé sur sockets (`finalite.rs::deux_autorites_alternent_sur_sockets`).
+  **Vote de quorum (J1-a)** : `sceller` ajoute NOTRE vote (`signer_vote`) après le
+  scellement — sans lui, on produirait un bloc que nous-mêmes refuserions. La vue est
+  câblée à 0 (le protocole de vue est J1-b, et n'accepter que la vue 0 est cohérent
+  tant que rien ne la fait avancer). ⚠️ À n ≥ 4 le quorum dépasse ce seul vote :
+  `appliquer_bloc` rejette juste en dessous, `sceller` rend `None`, rien n'est diffusé.
+  Comportement ATTENDU de J1-a — rassembler les votes des autres est J1-b.
   **Corrections issues de la revue adversariale** (détail : docs/THREAT_MODEL.md,
   « Défauts trouvés par revue adversariale ») : `sceller` PLAFONNE à MAX_TX_PAR_BLOC
-  (une borne de `from_bytes` doit exister aussi dans le CONSTRUCTEUR, sinon elle ne
-  protège que l'entrant) ; `RECENT_ROOTS_WINDOW` = 4 blocs pleins + assertion de
+  ET à MAX_OCTETS_BLOC (une borne de `from_bytes` doit exister aussi dans le
+  CONSTRUCTEUR, sinon elle ne protège que l'entrant — et la variante OCTETS du même
+  défaut est fermée par le plafond de scellement, cf. `crates/ledger`) ; `RECENT_ROOTS_WINDOW` = 4 blocs pleins + assertion de
   compilation (à 100, un bloc chargé purgeait toutes les ancres → transactions en vol
   refusées, et censure à coût nul par un scelleur adverse) ; une VERSION inconnue ne
   pénalise plus (sinon une mise à jour bannit les nœuds en arrière et effondre
@@ -241,11 +356,20 @@ round-3 (0x01) est REFUSÉ PAR SON NOM (`CryptoError::AlgoPerime`), jamais cohab
   ÉCHEC FRANC si absent/corrompu — aucun repli, un nœud mal amorcé est indiscernable
   d'un nœud neuf sain). Sans l'option : genèse VIDE par défaut, AFFICHÉE. L'identifiant
   de genèse (8 o hex) est imprimé au démarrage pour être comparé entre opérateurs.
-  `persistance::charger_ou_amorcer_etat(&genese)`. ⚠️ L'état ne mémorise PAS sa genèse :
-  sur un répertoire déjà peuplé, `--genese` est ignoré sans erreur.
+  `persistance::charger_ou_amorcer_etat(&genese)`. L'état GRAVE sa genèse (`VERSION_ETAT` 0x03,
+  puis 0x04 avec les autorités de scellement) :
+  un répertoire peuplé par une AUTRE chaîne est REFUSÉ au démarrage avec les deux
+  identifiants (`GeneseDifferente`) — plus de divergence silencieuse par mauvais
+  `--donnees`.
   **Archivage des sorties** : `obscura-node --archiver` (OFF par défaut, rôle
   d'opérateur), `persistance::charger_ou_amorcer_archive` + `historique.bin` écrit AVANT
-  `etat.bin`. Une archive absente ou désaccordée fait démarrer le nœud en mode DÉGRADÉ
+  `etat.bin` — en JOURNAL EN AJOUT (`VERSION_JOURNAL` 0x02, dump 0x01 migré une fois) :
+  seules les tranches nouvelles sont écrites, puis `sync_all`. Queue partielle (crash en
+  plein ajout) écartée + tronquée au chargement — inoffensif par l'ordre
+  historique-avant-état ; corruption interne = REFUS, jamais de troncature. Le test
+  anti-régression utilise un CANARI `.tmp` en lecture seule (une mesure de taille est
+  tautologique : réécriture et ajout produisent le même delta).
+  Une archive absente ou désaccordée fait démarrer le nœud en mode DÉGRADÉ
   (sans archive), bruyamment, sans rien tronquer. Activer l'archivage TROP TARD (état
   déjà avancé, pas de fichier) est REFUSÉ : une archive partielle servirait des index
   décalés de tout le préfixe manquant sans que rien ne le dise.
@@ -283,7 +407,7 @@ round-3 (0x01) est REFUSÉ PAR SON NOM (`CryptoError::AlgoPerime`), jamais cohab
 - `docs/PROTOCOL.md`, `docs/THREAT_MODEL.md` et `docs/STARK_STATEMENT.md` : spécification de référence
 - `cargo test --all-features --release` : suite verte (crypto/net/ledger/circuit/wallet/node)
 
-## Prochaine étape : 3z-c2, et industrialiser le nœud (persistance, wallet CLI)
+## Prochaine étape : J1-b — le protocole de vue (votes sur le fil, délais)
 
 **Tout ce qui précède est TERMINÉ** : phase 3 (validity P1–P7 + witness-hiding
 3z-b1 + monolithe segmenté 3z-c1 fusionné), durcissement pré-testnet (#7 bouclé :
@@ -293,11 +417,11 @@ dans un nœud réel, testnet local validé, binaires) — voir « État » ci-de
 pour le circuit, le journal de tête de docs/STARK_STATEMENT.md est LA référence.
 Cap actuel (décision utilisateur) : **complétude/cohérence protocole avant
 sophistication crypto**. Reste :
-1. **3z-c2 — variabilité M-in/N-out ≤ MAX** : la couture `SegKind`/schedule est
-   en place depuis 3z-c1 ; la bascule supprimera le côte-à-côte (aujourd'hui
-   conservé comme oracle de parité — mêmes publics, même témoin). Restent aussi
-   2 forges non portées (`PaddingMerkle`, `VaccInitial` fine) et les forges à
-   reconstruction d'arbre qui restent en profondeur 2.
+1. **3z-c2 — variabilité M-in/N-out ≤ MAX — LIVRÉE ET SOLDÉE (C2-T1..T8 + D8)** :
+   circuit, trace, AIR, soundness, masquage, ProvedTx v4, wallet (note unique paie,
+   `consolider`, défaut 2/2), la SUPPRESSION du côte-à-côte (C2-T8, helpers
+   extraits dans `monolith/socle.rs`) et les forges à reconstruction d'arbre
+   rejouées à la profondeur consensus (D8).
    ⚠️ Piège identifié à ne pas rejouer : mutualiser des colonnes peut SUPPRIMER
    une garantie que la redondance offrait gratuitement (cf. « Liaison de racine »
    dans STARK_STATEMENT.md) — auditer chaque fusion sous cet angle.
@@ -310,8 +434,24 @@ sophistication crypto**. Reste :
    privée) ; une coinbase reste hors périmètre. Ce qui reste ouvert (cf.
    docs/THREAT_MODEL.md) : le nœud servant apprend IP/cadence/position et peut MENTIR PAR
    OMISSION ; le rôle d'archiviste est coûteux ; l'arbre du wallet reste en O(n).
-3. Persistance du wallet ✅ / du nœud ✅ / CLI ✅ / genèse paramétrée ✅ (faits) ;
-   reste le chiffrement au repos du fichier de wallet (Argon2 + saisie interactive).
+3. Persistance du wallet ✅ / du nœud ✅ / CLI ✅ / genèse paramétrée ✅ /
+   chiffrement au repos du fichier de wallet ✅ (Argon2id + cascade AEAD, choix
+   explicite, migration par `OBSCURA_WALLET_MIGRER=1`) — tous faits.
+4. **CONSENSUS BFT (ADR-001 ACCEPTÉ le 2026-07-22, à faire AVANT le gel de genèse)** :
+   - **J1-a ✅ LIVRÉ** — format `0x04` : vue dans l'identifiant, type `Certificat`
+     (masque de bits, encodage canonique), vérification du quorum `2f+1` avant tout
+     STARK, fixture de conformité v2 régénérée (la v1 a échoué la première, c'est ce
+     pour quoi elle existait).
+   - **J1-b ⬜ SUIVANT** — protocole de vue : votes sur le fil, délais, changement de
+     vue. C'est ce qui FERME la liveness, et rien avant ne la ferme. **Tant qu'il
+     manque, une chaîne à n ≥ 4 ne produit aucun bloc.** `chaos_producteur.rs` devra
+     être étendu (f absents, partition, changement de vue).
+   - **J1-c ⬜** — changement d'ensemble d'autorités certifié par l'ANCIENNE liste,
+     effectif à `h + k` : sans lui, changer un participant impose une nouvelle chaîne.
+   ⚠️ **Calendrier tranché** : J1 passe AVANT le gel de genèse de T5, parce que `0x04`
+   change l'identifiant de genèse — le faire après obligerait chaque participant à
+   re-transmettre son adresse. Le coût du réordonnancement est nul tant que rien n'est
+   gravé.
 
 ## Décisions v0.2 (revue intégrée — ne pas régresser)
 
@@ -348,6 +488,20 @@ sophistication crypto**. Reste :
   acheté qu'une surface de confusion. Autorité : `docs/PROTOCOL.md`, versioning.
   **Reste ouvert** : les vecteurs de conformité officiels (voir
   `docs/superpowers/plans/2026-07-22-porte-aud.md`).
+- ⚠️ **DETTE DE BACKEND PQ (ouverte)** : TOUTE la famille `pqcrypto` est marquée
+  `unmaintained` (RUSTSEC 2026-0161/0166/0162/0163) — PQClean est ARCHIVÉ en amont.
+  La migration FIPS (T1) a DÉPLACÉ cette dette, pas supprimée : `pqcrypto-mlkem` et
+  `pqcrypto-mldsa` portent leurs propres avis, au même titre que les round-3
+  qu'elles remplacent. Les avis sont ignorés PAR LEUR NOM dans `deny.toml` (jamais
+  par un filtre large, qui masquerait une vraie vulnérabilité de la même famille).
+  Sortie propre = backend hors pqcrypto. **ÉVALUATION FAITE (2026-07-22, cf.
+  docs/BACKEND_PQ.md) : ne pas migrer maintenant** — aucun candidat n'est
+  meilleur que le statu quo (RustCrypto `ml-dsa` en 0.1.1 ; libcrux en
+  pré-release dont les auteurs déconseillent la production ; aws-lc-rs dont
+  ML-DSA est hors semver). « Unmaintained » n'est pas une vulnérabilité :
+  migrer échangerait une dette bornée contre un risque non borné sur le
+  composant le moins remplaçable. Critères de déclenchement écrits, à
+  RE-TESTER avant le gel de genèse.
 - **Zeroize (durcissement #7)** : `ShieldedSecret` (volatile non élidable),
   `WalletKeys::{shielded_secret, nk}` et les clés AEAD dérivées s'effacent au drop ;
   les moitiés dalek (X25519/Ed25519) aussi. Les secrets **ML-KEM et ML-DSA aussi**,

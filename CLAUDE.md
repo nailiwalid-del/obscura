@@ -64,18 +64,40 @@ round-3 (0x01) est REFUSÉ PAR SON NOM (`CryptoError::AlgoPerime`), jamais cohab
   jour d'une coinbase. Une émission sans bénéficiaire porte une enveloppe FACTICE
   chiffrée vers une clé KEM jetable (`proved_wallet::emission_factice`), de longueur
   identique à une vraie. `MAX_EMISSIONS_PAR_BLOC` vérifiée au décodage ET dans
-  `Bloc::genese_avec`. `VERSION_BLOC` = 0x03 et `VERSION_ETAT` = 0x04 (chaque bump
+  `Bloc::genese_avec`. `VERSION_BLOC` = **0x04** et `VERSION_ETAT` = 0x04 (chaque bump
   change l'identifiant de la genèse vide, donc un ancien dump porte une tête périmée :
-  refusé, pas relu). **Élection de producteur (v0x03)** : la genèse peut graver des
+  refusé, pas relu ; un bloc 0x03 rend `BlocDecodeError::VersionPerimee`, refusé PAR SON
+  NOM). **Élection de producteur** : la genèse peut graver des
   AUTORITÉS (`genese_avec_autorites`, ≤ 64, dans l'identifiant — deux listes = deux
-  chaînes) ; producteur légitime de h = `autorites[(h−1) mod n]`, bloc signé
+  chaînes) ; producteur légitime de (h, vue) = `autorites[(h−1+vue) mod n]`, bloc signé
   (`signer_scellement`, signature sur l'ID, hors de l'id mais sur le fil), vérifié par
   `appliquer_bloc` APRÈS le chaînage (bloc d'une autre chaîne = `ParentInattendu`, pas
   d'accusation) et AVANT tout STARK. Scellement manquant/hors tour/étranger = faute
   sanctionnée ; genèse SANS autorités = chaîne OUVERTE (défaut, testnet local — un
-  scellement y est refusé, canonicité). Liveness = option A ASSUMÉE : une autorité
-  absente fige la chaîne à son tour. Coinbase toujours hors périmètre (l'élection en
+  scellement y est refusé, canonicité). Coinbase toujours hors périmètre (l'élection en
   est le prérequis, pas le début).
+  **Consensus BFT (ADR-001 accepté, J1-a livré)** : `vue: u32` DANS l'identifiant (deux
+  vues = deux blocs, jamais deux encodages du même — c'est ce qui permet au certificat
+  de porter sur `(hauteur, vue)` sans ambiguïté) et `certificat: Option<Certificat>`
+  HORS de l'identifiant (comme le scellement : une signature sur l'id ne peut pas y
+  entrer). `Certificat { masque: u64, signatures }` — MASQUE DE BITS, donc doublons de
+  votant structurellement impossibles, et nombre de signatures DÉRIVÉ du masque au
+  décodage (jamais annoncé : deux encodages du même certificat seraient possibles).
+  `appliquer_bloc` exige `quorum_requis() = 2f+1` avec `n = 3f+1`, APRÈS le chaînage et
+  AVANT tout STARK (`QuorumInsuffisant`/`VoteInvalide`/`VotantInconnu` ; un certificat
+  sur chaîne ouverte = `CertificatInattendu`, même raison de canonicité que le
+  scellement). ⚠️ `DOMAINE_VOTE` ≠ `DOMAINE_SCELLEMENT` et ce n'est PAS cosmétique :
+  les deux signent le même id, donc sans séparation le scellement du producteur
+  compterait comme un vote et `2f` votes réels afficheraient `2f+1` (test dédié :
+  `scellement_rejoue_comme_vote_refuse`). ⚠️ AUCUNE agrégation PQ n'existe : le
+  certificat pèse `2f+1 × 3374` o, LINÉAIREMENT et pour toujours (1,0 % du bloc à n=4,
+  13,8 % à n=64) — la taille du comité est BORNÉE par le budget du bloc.
+  ⚠️ **J1-a livre le FORMAT, pas le PROTOCOLE** : aucun vote ne circule sur le fil,
+  aucun délai, la vue reste à 0 et `sceller` ne rassemble que son propre vote — donc
+  **une chaîne à n ≥ 4 ne produit AUCUN bloc** (le producteur refuse le sien pour
+  quorum insuffisant). Seules n ≤ 3 (f = 0, quorum 1) et les chaînes ouvertes avancent.
+  La liveness reste OUVERTE ; le changement de vue est J1-b, le changement d'ensemble
+  d'autorités J1-c. Ne pas croire la porte D fermée par ce jalon.
   `ProvedLedgerState::appliquer_bloc` est ATOMIQUE — un bloc à moitié appliqué
   placerait le nœud dans un état qu'AUCUN autre n'a, et il refuserait ensuite tout
   pour « ancre inconnue » sans que rien ne désigne la cause. Restauration bon marché
@@ -296,6 +318,12 @@ round-3 (0x01) est REFUSÉ PAR SON NOM (`CryptoError::AlgoPerime`), jamais cohab
   scellement manquant/hors tour/étranger comme une transaction invalide. Chaîne
   ouverte (genèse sans autorités) : comportement historique, ordre CONVENU pas
   DÉFENDU. Testé sur sockets (`finalite.rs::deux_autorites_alternent_sur_sockets`).
+  **Vote de quorum (J1-a)** : `sceller` ajoute NOTRE vote (`signer_vote`) après le
+  scellement — sans lui, on produirait un bloc que nous-mêmes refuserions. La vue est
+  câblée à 0 (le protocole de vue est J1-b, et n'accepter que la vue 0 est cohérent
+  tant que rien ne la fait avancer). ⚠️ À n ≥ 4 le quorum dépasse ce seul vote :
+  `appliquer_bloc` rejette juste en dessous, `sceller` rend `None`, rien n'est diffusé.
+  Comportement ATTENDU de J1-a — rassembler les votes des autres est J1-b.
   **Corrections issues de la revue adversariale** (détail : docs/THREAT_MODEL.md,
   « Défauts trouvés par revue adversariale ») : `sceller` PLAFONNE à MAX_TX_PAR_BLOC
   ET à MAX_OCTETS_BLOC (une borne de `from_bytes` doit exister aussi dans le
@@ -373,7 +401,7 @@ round-3 (0x01) est REFUSÉ PAR SON NOM (`CryptoError::AlgoPerime`), jamais cohab
 - `docs/PROTOCOL.md`, `docs/THREAT_MODEL.md` et `docs/STARK_STATEMENT.md` : spécification de référence
 - `cargo test --all-features --release` : suite verte (crypto/net/ledger/circuit/wallet/node)
 
-## Prochaine étape : 3z-c2, et industrialiser le nœud (persistance, wallet CLI)
+## Prochaine étape : J1-b — le protocole de vue (votes sur le fil, délais)
 
 **Tout ce qui précède est TERMINÉ** : phase 3 (validity P1–P7 + witness-hiding
 3z-b1 + monolithe segmenté 3z-c1 fusionné), durcissement pré-testnet (#7 bouclé :
@@ -403,6 +431,21 @@ sophistication crypto**. Reste :
 3. Persistance du wallet ✅ / du nœud ✅ / CLI ✅ / genèse paramétrée ✅ /
    chiffrement au repos du fichier de wallet ✅ (Argon2id + cascade AEAD, choix
    explicite, migration par `OBSCURA_WALLET_MIGRER=1`) — tous faits.
+4. **CONSENSUS BFT (ADR-001 ACCEPTÉ le 2026-07-22, à faire AVANT le gel de genèse)** :
+   - **J1-a ✅ LIVRÉ** — format `0x04` : vue dans l'identifiant, type `Certificat`
+     (masque de bits, encodage canonique), vérification du quorum `2f+1` avant tout
+     STARK, fixture de conformité v2 régénérée (la v1 a échoué la première, c'est ce
+     pour quoi elle existait).
+   - **J1-b ⬜ SUIVANT** — protocole de vue : votes sur le fil, délais, changement de
+     vue. C'est ce qui FERME la liveness, et rien avant ne la ferme. **Tant qu'il
+     manque, une chaîne à n ≥ 4 ne produit aucun bloc.** `chaos_producteur.rs` devra
+     être étendu (f absents, partition, changement de vue).
+   - **J1-c ⬜** — changement d'ensemble d'autorités certifié par l'ANCIENNE liste,
+     effectif à `h + k` : sans lui, changer un participant impose une nouvelle chaîne.
+   ⚠️ **Calendrier tranché** : J1 passe AVANT le gel de genèse de T5, parce que `0x04`
+   change l'identifiant de genèse — le faire après obligerait chaque participant à
+   re-transmettre son adresse. Le coût du réordonnancement est nul tant que rien n'est
+   gravé.
 
 ## Décisions v0.2 (revue intégrée — ne pas régresser)
 
