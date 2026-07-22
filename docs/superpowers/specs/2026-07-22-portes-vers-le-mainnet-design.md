@@ -254,13 +254,13 @@ auto-vérifie, imprime l'identifiant complet), `obscura-node --identite`,
 
 | # | Élément | Pourquoi il ne peut pas être omis |
 |---|---|---|
-| 1 | **Genèse signée ou hash officiel publié hors bande** | `THREAT_MODEL.md:381` — rien n'atteste qui a écrit la genèse |
+| 1 | **Identifiant complet (32 o) publié dans le dépôt + release SIGNÉE** ✅ *(décidé)* | `THREAT_MODEL.md:381` — rien n'atteste qui a écrit la genèse ; le dépôt Git est hors bande vis-à-vis du réseau P2P |
 | 2 | ~~**`obscura-node` imprime l'identifiant COMPLET**~~ ✅ `2e9e4df` | constat 3 — 64 bits là où l'opérateur compare |
-| 3 | **Bootnodes**, majoritairement **sans** `--archiver` | le rôle bon marché, et celui qui sert l'anti-eclipse |
+| 3 | ~~**Bootnodes**~~ → **AUCUNE infra publique** ✅ *(décidé)* | réseau **sur invitation** : les participants sont les opérateurs, les fonds viennent des allocations de genèse, pas d'un faucet |
 | 4 | **Release taguée + checksums + signature** | sans quoi le binaire n'est pas plus authentifié que la genèse |
 | 5 | **Limites connues publiées AVANT l'ouverture** | y compris : la chaîne est consommable, elle sera refaite |
 | 6 | **Procédure de reset écrite** | une remise à zéro non écrite d'avance sera vécue comme un échec |
-| 7 | **Canal d'incident** | un réseau public sans adresse de signalement est une impasse |
+| 7 | **GitHub Security Advisories** (vulnérabilités) **+ Issues** (le reste) ✅ *(décidé)* | canal privé pour permettre un correctif avant publication ; aucune infra, aucune adresse exposée |
 | 8 | **Politique de frais du testnet** | voir ci-dessous — c'est le seul morceau d'économie qui appartient à B |
 | 9 | **Règle de réaction si la valeur apparaît** | voir ci-dessous — un déclencheur sans geste n'est pas une défense |
 
@@ -280,8 +280,9 @@ auto-vérifie, imprime l'identifiant complet), `obscura-node --identite`,
 >
 > 1. **Constat public.** Rappel écrit que la chaîne est sans valeur et
 >    consommable, sur les mêmes canaux que l'annonce d'ouverture.
-> 2. **Pause du faucet.** Il est le robinet ; le fermer coupe l'entrée de
->    « stock » sans toucher au réseau.
+> 2. **Arrêt des invitations.** Décision du 2026-07-22 : il n'y a pas de faucet.
+>    L'entrée de « stock » passe par les allocations de genèse, donc cesser
+>    d'inviter tarit la source sans toucher au réseau existant.
 > 3. **Reset annoncé.** Nouvelle genèse, ancienne chaîne abandonnée. C'est
 >    l'usage prévu (chaîne consommable) et **le simple fait qu'il soit connu
 >    d'avance décourage la spéculation** — personne ne valorise ce qui sera remis
@@ -297,10 +298,17 @@ le projet, puisqu'elle est consommable.
 **Critère de franchissement :** un tiers monte un nœud depuis la release
 publiée, rejoint la chaîne, et **vérifie l'identifiant de genèse complet contre
 la valeur publiée hors bande**.
-**Coût :** infrastructure (VPS bootnodes + au moins un archiviste). Première
-dépense externe réelle du projet. L'archiviste croît sans borne (≈1,4 Kio/sortie)
-et **est le point de centralisation du réseau** — à nommer comme tel dans les
-limites publiées.
+**Coût :** **nul en infrastructure** — décision du 2026-07-22 : réseau **sur
+invitation**, aucun bootnode public, aucun faucet, aucun explorateur. Chaque
+participant fait tourner son nœud, et les fonds viennent des allocations de
+genèse.
+
+Trois conséquences à assumer, toutes écrites dans `docs/TESTNET.md` :
+l'archiviste reste le point de centralisation (**celui qui archive voit passer
+les demandes de tous les autres**) ; **`--temoin` n'a de valeur que si deux
+participants au moins archivent**, sinon la synchronisation est un point de
+confiance ; et **rejoindre après le gel exige une nouvelle chaîne**, puisque
+adresses et autorités sont gravées dans la genèse.
 
 ⚠️ **Le prix assumé de T5 :** la genèse sera figée **avant** que l'économie soit
 décidée. `extension` est réservée et entre dans l'`id`, donc le format ne sera
@@ -489,7 +497,7 @@ accompagnée de ce qui la ferait rouvrir.
 | Courbe d'émission | coinbase implémentée | idem |
 | Ouverture de l'appartenance + anti-Sybil | J1 et J3 livrés | idem |
 | Achat des audits | AUD franchie **et** spec gelée | budget disponible **et** spec stable depuis ≥ 3 mois |
-| Cadre légal | — | toute valeur réelle, tout échange, tout faucet devenant marché |
+| Cadre légal | — | toute valeur réelle, tout échange (il n'y a pas de faucet : le déclencheur est l'échange, pas la distribution) |
 
 ### Une échéance à accrocher, sinon elle se perd
 
