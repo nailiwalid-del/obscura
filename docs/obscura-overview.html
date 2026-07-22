@@ -381,8 +381,8 @@
       <thead><tr><th>Fonction</th><th>Mécanisme A</th><th>Mécanisme B</th></tr></thead>
       <tbody>
         <tr><td>Hachage (consensus)</td><td>BLAKE3</td><td>SHA3-256</td></tr>
-        <tr><td>Échange de clés (KEM)</td><td>X25519 (courbe)</td><td>Kyber-768 (réseaux, post-Q)</td></tr>
-        <tr><td>Signature</td><td>Ed25519 (courbe)</td><td>Dilithium-3 (réseaux, post-Q)</td></tr>
+        <tr><td>Échange de clés (KEM)</td><td>X25519 (courbe)</td><td>ML-KEM-768 — FIPS 203 (réseaux, post-Q)</td></tr>
+        <tr><td>Signature</td><td>Ed25519 (courbe)</td><td>ML-DSA-65 — FIPS 204 (réseaux, post-Q)</td></tr>
         <tr><td>Chiffrement (AEAD)</td><td>XChaCha20-Poly1305</td><td>AES-256-GCM (cascade)</td></tr>
       </tbody>
     </table>
