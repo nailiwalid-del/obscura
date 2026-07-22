@@ -205,6 +205,16 @@ round-3 (0x01) est REFUSÉ PAR SON NOM (`CryptoError::AlgoPerime`), jamais cohab
   décodage → admission (5 filtres O(1) puis STARK) → mempool.
   `Noeud::soumettre` = point d'entrée d'une transaction LOCALE (wallet) : part en
   TIGE Dandelion++, pas en diffusion — c'est là que l'origine est protégée.
+  **Exploitation (T4)** : `node::journal` — journalisation à NIVEAUX sur stderr
+  (`OBSCURA_LOG=erreur|avert|info|debug`, une valeur inconnue AVERTIT et retombe
+  sur info plutôt que de faire taire le nœud), horodatée en UPTIME et non en date
+  absolue (systemd/Docker horodatent déjà ; l'uptime, lui, n'est pas dérivable de
+  leurs logs). Aucune dépendance ajoutée. **Ligne de STATUT toutes les 30 s**
+  (hauteur, pairs, liens, mempool, désaccords) qui passe en AVERT si `liens = 0`
+  ou `désaccords > 0` — les deux pannes SILENCIEUSES du protocole, un nœud isolé
+  ou décroché servant sinon un historique cohérent mais tronqué. Déploiement :
+  `deploiement/{obscura-node.service,Dockerfile}` (systemd durci, image non-root
+  en deux étapes) et `docs/OPERATEUR.md`.
   **Binaires** : `obscura-node` (nœud autonome) et `obscura-demo` (démonstration
   locale : wallet → preuve → handshake PQ → socket → mempool, chaque étape
   annoncée). **Persistance** (`node::persistance`) : identité + état survivent aux

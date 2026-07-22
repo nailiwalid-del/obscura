@@ -14,6 +14,7 @@
 //! EN CLAIR, protégé par les permissions du système de fichiers seulement.
 
 use crypto::sig::SigKeypair;
+use node::journal::{Journal, Statut};
 use node::orchestration::Noeud;
 use node::runtime::Runtime;
 use std::net::{SocketAddr, TcpListener};
@@ -28,6 +29,13 @@ const SAUVEGARDE_MS: u64 = 30_000;
 
 /// Cadence de scellement par défaut si `--sceller` est demandé sans valeur.
 const SCELLEMENT_MS_DEFAUT: u64 = 10_000;
+
+/// Intervalle de la ligne de STATUT (ms).
+///
+/// 30 s : assez espacé pour ne pas noyer le journal d'un nœud au repos, assez
+/// fréquent pour qu'un opérateur voie une dérive avant qu'elle ne devienne une
+/// panne. C'est la seule ligne qu'un nœud sain écrit en régime permanent.
+const STATUT_MS: u64 = 30_000;
 
 fn usage() -> ! {
     eprintln!("usage : obscura-node --ecoute <adresse> [--pair <adresse>]... [--donnees <rep>]");
@@ -61,6 +69,20 @@ fn usage() -> ! {
 }
 
 fn main() {
+    // Journal d'abord : tout ce qui suit doit pouvoir écrire, et le niveau doit
+    // être appliqué avant la première ligne — pas après.
+    let journal = Journal::demarrer();
+    let (_niveau, valeur_invalide) = node::journal::depuis_environnement();
+    if let Some(v) = valeur_invalide {
+        // Une faute de frappe dans OBSCURA_LOG ne doit pas faire TAIRE le nœud :
+        // on retombe sur INFO et on le dit, plutôt que de laisser l'opérateur
+        // croire à un filtre qui ne s'applique pas.
+        journal.avert(&format!(
+            "OBSCURA_LOG=« {v} » n'est pas un niveau connu (erreur|avert|info|debug) \
+             — niveau INFO appliqué"
+        ));
+    }
+
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut ecoute: Option<SocketAddr> = None;
     let mut pairs: Vec<SocketAddr> = Vec::new();
@@ -140,8 +162,10 @@ fn main() {
             }
         },
         None => {
-            println!("⚠️  aucune --genese : GENÈSE VIDE par défaut (testnet local).");
-            println!("    Aucune monnaie n'existe sur cette chaîne.");
+            journal.avert(
+                "aucune --genese : GENÈSE VIDE par défaut (testnet local) — \
+                 aucune monnaie n'existe sur cette chaîne",
+            );
             ledger::bloc::Bloc::genese()
         }
     };
@@ -175,18 +199,20 @@ fn main() {
     let etat = if archiver {
         match stockage.charger_ou_amorcer_archive(&genese) {
             Ok(e) => {
-                println!(
+                journal.info(&format!(
                     "archivage ACTIVÉ — {} sorties conservées (≈{} Kio)",
                     e.historique().map(|h| h.len()).unwrap_or(0),
                     e.historique().map(|h| h.octets() / 1024).unwrap_or(0)
-                );
+                ));
                 e
             }
             Err(err) => {
-                eprintln!("⚠️  ARCHIVE INUTILISABLE : {err}");
-                eprintln!("    le nœud démarre en mode DÉGRADÉ, SANS archive : il reste");
-                eprintln!("    parfaitement valide mais ne peut plus amorcer de wallet.");
-                eprintln!("    Aucun fichier n'a été tronqué ni effacé.");
+                journal.erreur(&format!("ARCHIVE INUTILISABLE : {err}"));
+                journal.erreur(
+                    "le nœud démarre en mode DÉGRADÉ, SANS archive : il reste \
+                     parfaitement valide mais ne peut plus amorcer de wallet. \
+                     Aucun fichier n'a été tronqué ni effacé.",
+                );
                 match stockage.charger_ou_amorcer_etat(&genese) {
                     Ok(e) => e,
                     Err(e) => {
@@ -205,20 +231,20 @@ fn main() {
             }
         }
     };
-    println!(
+    journal.info(&format!(
         "identité {} — chaîne à la hauteur {} ({} notes)",
         if neuve { "CRÉÉE" } else { "rechargée" },
         etat.hauteur(),
         etat.tree.len()
-    );
+    ));
     // Une LIGNE à comparer entre opérateurs. Elle vaut mieux qu'un diagnostic
     // a posteriori sur « pourquoi mes blocs sont refusés ».
-    println!(
+    journal.info(&format!(
         "genèse {} ({} émissions) — tête courante {}",
         hex::encode(&id_genese[..8]),
         genese.emissions.len(),
         hex::encode(&etat.tete()[..8])
-    );
+    ));
     // ÉLECTION DE PRODUCTEUR : sur une chaîne à autorités, dire tout de suite qui
     // nous sommes — découvrir au premier tour de scellement qu'on n'est pas
     // autorité serait un silence inexplicable.
@@ -228,31 +254,36 @@ fn main() {
         .position(|pk| pk.to_bytes() == identite.public.to_bytes());
     if !etat.autorites().is_empty() {
         match notre_rang {
-            Some(i) => println!(
+            Some(i) => journal.info(&format!(
                 "chaîne à {} autorités — cette identité est l'autorité n° {i}",
                 etat.autorites().len()
-            ),
-            None => println!(
+            )),
+            None => journal.avert(&format!(
                 "chaîne à {} autorités — cette identité N'EN EST PAS une",
                 etat.autorites().len()
-            ),
+            )),
         }
     }
     match sceller_ms {
         Some(ms) => {
-            println!("scellement ACTIVÉ toutes les {ms} ms");
+            journal.info(&format!("scellement ACTIVÉ toutes les {ms} ms"));
             if etat.autorites().is_empty() {
-                println!("⚠️  chaîne OUVERTE, aucune élection de producteur : ordre convenu, pas défendu");
+                journal.avert(
+                    "chaîne OUVERTE, aucune élection de producteur : ordre convenu, pas défendu",
+                );
             } else if notre_rang.is_none() {
-                println!(
-                    "⚠️  --sceller sans être autorité : AUCUN bloc ne sera produit (le nœud\n\
-                     \x20   refuse de sceller hors de son tour, et il n'a pas de tour)"
+                // AVERT et non INFO : l'opérateur a demandé quelque chose que le nœud
+                // ne fera JAMAIS. Le dire en INFO le laisserait attendre des blocs qui
+                // ne viendront pas.
+                journal.avert(
+                    "--sceller sans être autorité : AUCUN bloc ne sera produit (le nœud refuse \
+                     de sceller hors de son tour, et il n'a pas de tour)",
                 );
             } else {
-                println!("élection par tour de rôle : ce nœud ne scelle qu'à son tour");
+                journal.info("élection par tour de rôle : ce nœud ne scelle qu'à son tour");
             }
         }
-        None => println!("scellement désactivé (--sceller <ms> pour l'activer)"),
+        None => journal.info("scellement désactivé (--sceller <ms> pour l'activer)"),
     }
 
     let mut secret_dandelion = [0u8; 32];
@@ -283,12 +314,12 @@ fn main() {
         eprintln!("mode non bloquant indisponible : {e}");
         std::process::exit(1);
     }
-    println!("écoute sur {adresse_ecoute}");
+    journal.info(&format!("écoute sur {adresse_ecoute}"));
 
     for p in &pairs {
         match rt.connecter(*p, &identite) {
-            Ok(_) => println!("connecté à {p}"),
-            Err(e) => eprintln!("échec de connexion à {p} : {e}"),
+            Ok(_) => journal.info(&format!("connecté à {p}")),
+            Err(e) => journal.avert(&format!("échec de connexion à {p} : {e}")),
         }
     }
 
@@ -296,6 +327,7 @@ fn main() {
     let mut derniere_epoque = u64::MAX;
     let mut derniere_sauvegarde = 0u64;
     let mut dernier_scellement = 0u64;
+    let mut dernier_statut = 0u64;
     loop {
         let maintenant = depart.elapsed().as_millis() as u64;
 
@@ -311,11 +343,11 @@ fn main() {
         // Connexions entrantes (non bloquant).
         match listener.accept() {
             Ok((flux, distant)) => match rt.accepter(flux, &identite) {
-                Ok(_) => println!("connexion entrante de {distant}"),
-                Err(e) => eprintln!("handshake échoué avec {distant} : {e}"),
+                Ok(_) => journal.info(&format!("connexion entrante de {distant}")),
+                Err(e) => journal.avert(&format!("handshake échoué avec {distant} : {e}")),
             },
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(e) => eprintln!("accept : {e}"),
+            Err(e) => journal.avert(&format!("accept : {e}")),
         }
 
         rt.pomper(maintenant);
@@ -327,14 +359,34 @@ fn main() {
             if maintenant.saturating_sub(dernier_scellement) >= cadence {
                 dernier_scellement = maintenant;
                 if let Some((bloc, actions)) = rt.noeud_mut().sceller() {
-                    println!(
+                    journal.info(&format!(
                         "bloc {} scellé à la hauteur {} ({} transactions)",
                         hex::encode(&bloc.id()[..8]),
                         bloc.hauteur,
                         bloc.transactions.len()
-                    );
+                    ));
                     rt.executer(actions);
                 }
+            }
+        }
+
+        // STATUT : la ligne qu'un opérateur surveille. Un nœud isolé (aucun lien)
+        // ou qui décroche (blocs refusés pour chaînage) passe en AVERT — sans quoi
+        // il resterait indiscernable d'un nœud au repos, en servant un historique
+        // cohérent mais tronqué.
+        if maintenant.saturating_sub(dernier_statut) >= STATUT_MS {
+            dernier_statut = maintenant;
+            let statut = Statut {
+                hauteur: rt.noeud().etat.hauteur(),
+                pairs: rt.noeud().pairs.len(),
+                liens: rt.liens_ouverts(),
+                mempool: rt.noeud().mempool.len(),
+                desaccords: rt.noeud().blocs_desaccordes(),
+            };
+            if statut.preoccupant() {
+                journal.avert(&statut.ligne());
+            } else {
+                journal.info(&statut.ligne());
             }
         }
 
@@ -343,7 +395,9 @@ fn main() {
         if maintenant.saturating_sub(derniere_sauvegarde) >= SAUVEGARDE_MS {
             derniere_sauvegarde = maintenant;
             if let Err(e) = stockage.enregistrer_etat(&rt.noeud().etat) {
-                eprintln!("sauvegarde de l'état impossible : {e}");
+                // ERREUR et non AVERT : un état non sauvegardé signifie que le
+                // prochain redémarrage repartira d'un point ANTÉRIEUR.
+                journal.erreur(&format!("sauvegarde de l'état impossible : {e}"));
             }
         }
 

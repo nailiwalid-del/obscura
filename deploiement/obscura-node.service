@@ -1,0 +1,80 @@
+# Unité systemd pour un nœud Obscura.
+#
+#   sudo useradd --system --home /var/lib/obscura --shell /usr/sbin/nologin obscura
+#   sudo install -o obscura -g obscura -d /var/lib/obscura
+#   sudo install -m 644 obscura-node.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now obscura-node
+#
+# Journal :  journalctl -u obscura-node -f
+#
+# ⚠️ Le nœud écrit son journal sur STDERR (uptime + niveau) ; systemd y ajoute
+# l'horodatage absolu et le nom d'unité. Les deux ne font pas doublon : l'uptime
+# répond à « depuis combien de temps tourne-t-il sans redémarrer », que la date
+# absolue ne donne pas.
+
+[Unit]
+Description=Nœud Obscura (prototype, non audité)
+Documentation=https://github.com/nailiwalid-del/obscura
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=obscura
+Group=obscura
+WorkingDirectory=/var/lib/obscura
+
+# ⚠️ ADAPTER : adresse d'écoute, pairs, et genèse de VOTRE chaîne. Deux nœuds
+# amorcés sur des genèses différentes se refusent tous leurs blocs — l'identifiant
+# imprimé au démarrage est fait pour être COMPARÉ entre opérateurs.
+ExecStart=/usr/local/bin/obscura-node \
+    --ecoute 0.0.0.0:9333 \
+    --donnees /var/lib/obscura/donnees \
+    --genese /var/lib/obscura/genese.bin
+
+# Niveau de journal : erreur | avert | info | debug (défaut : info).
+Environment=OBSCURA_LOG=info
+
+# Redémarrage sur échec seulement. PAS `always` : un nœud qui s'arrête sur une
+# erreur de configuration (genèse illisible, répertoire inutilisable) doit RESTER
+# arrêté et visible, pas boucler en silence toutes les cinq secondes.
+Restart=on-failure
+RestartSec=5s
+
+# Arrêt propre : l'état est sauvegardé périodiquement et par écriture ATOMIQUE
+# (tmp + rename), donc un SIGTERM ne peut pas laisser un fichier à moitié écrit.
+# Au pire, le nœud repart de la dernière sauvegarde — jamais d'un état corrompu.
+KillSignal=SIGTERM
+TimeoutStopSec=30s
+
+# ---- Durcissement ----
+# Le nœud n'a besoin que d'écrire dans son répertoire de données et d'ouvrir des
+# sockets. Tout le reste est retiré : le fichier d'identité contient du matériel
+# de clé EN CLAIR, protégé par les seules permissions du système de fichiers.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @obsolete
+CapabilityBoundingSet=
+AmbientCapabilities=
+# Seul chemin inscriptible.
+ReadWritePaths=/var/lib/obscura
+# Le nœud ne parle qu'en TCP/IP.
+RestrictAddressFamilies=AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

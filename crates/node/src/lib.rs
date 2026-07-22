@@ -21,6 +21,7 @@
 pub mod archive;
 pub mod client;
 pub mod etranglement;
+pub mod journal;
 pub mod message;
 pub mod orchestration;
 pub mod persistance;
