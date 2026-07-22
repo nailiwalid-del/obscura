@@ -46,6 +46,8 @@ fn usage() -> ! {
     eprintln!("  --genese  <fichier>  bloc de genèse (défaut : genèse VIDE, testnet local)");
     eprintln!("  --sceller <ms>       SCELLER des blocs toutes les <ms> (défaut : off)");
     eprintln!("  --archiver           conserver l'HISTORIQUE des sorties (défaut : off)");
+    eprintln!("  --identite           IMPRIMER la clé publique de ce nœud, et sortir");
+    eprintln!("                       (à publier pour devenir autorité de scellement)");
     eprintln!();
     eprintln!("⚠️  --archiver est un rôle d'OPÉRATEUR, pas une obligation de consensus.");
     eprintln!("    Un nœud qui ne l'active pas est parfaitement valide — il ne peut");
@@ -94,12 +96,21 @@ fn main() {
     // Archivage DÉSACTIVÉ par défaut, pour la même raison : conserver l'historique
     // des sorties est un rôle d'opérateur, à un coût qui croît sans borne.
     let mut archiver = false;
+    // Interrogation, pas démarrage : on imprime la clé publique et on sort. Sans
+    // elle, `obscura-genese --autorite-hex` — la voie recommandée pour monter une
+    // fédération, celle où personne ne transmet son fichier d'identité — n'avait
+    // aucune source d'entrée.
+    let mut imprimer_identite = false;
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--archiver" => {
                 archiver = true;
+                i += 1;
+            }
+            "--identite" => {
+                imprimer_identite = true;
                 i += 1;
             }
             "--donnees" => {
@@ -139,6 +150,40 @@ fn main() {
             _ => usage(),
         }
     }
+    // `--identite` court-circuite TOUT le démarrage : pas de genèse, pas d'état, pas
+    // de socket. C'est une interrogation, et elle doit répondre à un opérateur qui
+    // n'a encore ni chaîne ni pairs — c'est justement l'ordre des choses, puisque sa
+    // clé doit être connue AVANT que la genèse ne soit fabriquée.
+    if imprimer_identite {
+        let stockage = match node::persistance::Donnees::ouvrir(&donnees) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("répertoire de données inutilisable ({donnees}) : {e}");
+                std::process::exit(1);
+            }
+        };
+        let (identite, neuve) = match stockage.charger_ou_creer_identite() {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("identité illisible : {e}");
+                std::process::exit(1);
+            }
+        };
+        if neuve {
+            eprintln!("identité CRÉÉE dans {donnees} — c'est désormais celle de ce nœud.");
+        }
+        eprintln!("clé publique à publier (--autorite-hex de obscura-genese) :");
+        // La clé seule sur stdout : elle doit pouvoir se rediriger vers un fichier
+        // sans emporter de prose. Tout le reste part sur stderr.
+        println!("{}", node::autorite::encoder(&identite.public));
+        eprintln!();
+        eprintln!("⚠️  Cette clé n'a de valeur d'autorité que si le fichier d'identité");
+        eprintln!("    ({donnees}/identite.cle) SURVIT : le perdre, c'est perdre le");
+        eprintln!("    tour de scellement, et la liste des autorités est figée dans");
+        eprintln!("    l'identifiant de la chaîne — elle ne se corrige pas.");
+        return;
+    }
+
     let Some(adresse_ecoute) = ecoute else {
         usage()
     };

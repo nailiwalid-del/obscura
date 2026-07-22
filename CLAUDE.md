@@ -223,6 +223,13 @@ round-3 (0x01) est REFUSÉ PAR SON NOM (`CryptoError::AlgoPerime`), jamais cohab
   imprime l'identifiant court À COMPARER entre opérateurs avant démarrage. Sans lui,
   geler une chaîne exigeait d'écrire du Rust ad hoc pour l'artefact le moins
   rattrapable du projet.
+  **`obscura-node --identite`** (imprime la clé publique du nœud sur stdout, puis
+  SORT) : sans elle, `--autorite-hex` — la voie recommandée, celle où personne ne
+  transmet son fichier d'identité — n'avait AUCUNE source d'entrée, et la fédération
+  était donc inaccessible sans écrire du Rust. Les deux moitiés du geste vivent dans
+  `node::autorite` (`encoder`/`decoder`, utilisé par les DEUX binaires) précisément
+  pour qu'un test les confronte : séparées, un préfixe ou une majuscule les feraient
+  diverger, et l'échec n'apparaîtrait qu'au moment de graver une chaîne.
   **Binaires** : `obscura-node` (nœud autonome) et `obscura-demo` (démonstration
   locale : wallet → preuve → handshake PQ → socket → mempool, chaque étape
   annoncée). **Persistance** (`node::persistance`) : identité + état survivent aux
