@@ -392,9 +392,14 @@ sophistication crypto**. Reste :
   `pqcrypto-mldsa` portent leurs propres avis, au même titre que les round-3
   qu'elles remplacent. Les avis sont ignorés PAR LEUR NOM dans `deny.toml` (jamais
   par un filtre large, qui masquerait une vraie vulnérabilité de la même famille).
-  Sortie propre = backend hors pqcrypto (RustCrypto `ml-kem`/`ml-dsa`, libcrux,
-  aws-lc-rs…) — même travail que T1, même discipline de version d'algo. À trancher
-  AVANT le mainnet.
+  Sortie propre = backend hors pqcrypto. **ÉVALUATION FAITE (2026-07-22, cf.
+  docs/BACKEND_PQ.md) : ne pas migrer maintenant** — aucun candidat n'est
+  meilleur que le statu quo (RustCrypto `ml-dsa` en 0.1.1 ; libcrux en
+  pré-release dont les auteurs déconseillent la production ; aws-lc-rs dont
+  ML-DSA est hors semver). « Unmaintained » n'est pas une vulnérabilité :
+  migrer échangerait une dette bornée contre un risque non borné sur le
+  composant le moins remplaçable. Critères de déclenchement écrits, à
+  RE-TESTER avant le gel de genèse.
 - **Zeroize (durcissement #7)** : `ShieldedSecret` (volatile non élidable),
   `WalletKeys::{shielded_secret, nk}` et les clés AEAD dérivées s'effacent au drop ;
   les moitiés dalek (X25519/Ed25519) aussi. ⚠️ Les `SecretKey` pqcrypto (Kyber768/
