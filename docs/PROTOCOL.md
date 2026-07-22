@@ -33,9 +33,9 @@ Note { value: u64, owner: [u8;32], rho: [u8;32], r: [u8;32] }
 | Clé | Construction | Rôle |
 |---|---|---|
 | Secret shielded `shielded_secret` | aléa 32 o, jamais publié | racine de l'identité ; témoin du circuit (P2/P4) |
-| Réception/vue | hybride X25519 + Kyber768 | déchiffrer les notes reçues |
+| Réception/vue | hybride X25519 + ML-KEM-768 (FIPS 203) | déchiffrer les notes reçues |
 | Nullifier `nk` | `nk = H_nk(shielded_secret)` (**hash prouvé**) | calculer les nullifiers, liée à l'autorité (P4) |
-| Signature `spend` | hybride Ed25519 + Dilithium3, **NEUVE à chaque transaction** | enveloppe d'intention / anti-malléabilité sur `tx_digest` (PAS autorisation d'ownership tant que non liée au secret — phase 3) |
+| Signature `spend` | hybride Ed25519 + ML-DSA-65 (FIPS 204), **NEUVE à chaque transaction** | enveloppe d'intention / anti-malléabilité sur `tx_digest` (PAS autorisation d'ownership tant que non liée au secret — phase 3) |
 
 ### La clé d'intention ne doit JAMAIS être réutilisée
 
@@ -64,9 +64,12 @@ obs1 ‖ hex( version(1 o) ‖ owner(32 o) ‖ kem_pk(1 217 o) ‖ somme(4 o) )
 ```
 
 - **Version de FORMAT** distincte de la version d'ALGORITHME portée par `kem_pk` ; les
-  deux sont vérifiées. Une adresse `0x02` (future migration FIPS 203) doit être
-  REFUSÉE par un décodeur round-3, jamais réinterprétée.
-- **Somme de contrôle** : 4 octets de `dual_hash("obscura/adresse/v1", corps)`. Elle
+  deux sont vérifiées. La version courante est `0x02` (FIPS 203) ; une adresse `0x01`
+  (round-3) est REFUSÉE PAR SON NOM (`AdresseError::VersionPerimee`, qui dit quoi
+  regénérer), jamais réinterprétée.
+- **Somme de contrôle** : 4 octets de `dual_hash("obscura/adresse/v2", corps)` — le
+  domaine a changé avec la version, donc une adresse d'ancienne version échoue de
+  toute façon sur sa somme, avant même le contrôle de version. Elle
   existe parce qu'un paiement vers une adresse abîmée est **irréversible et
   silencieux** — le `owner` altéré ne correspond à aucun secret, la note est engagée
   et personne ne peut la dépenser. Le protocole ne peut rien rattraper ; la seule
@@ -74,24 +77,28 @@ obs1 ‖ hex( version(1 o) ‖ owner(32 o) ‖ kem_pk(1 217 o) ‖ somme(4 o) )
 - ⚠️ **La somme détecte l'ACCIDENT, pas l'ADVERSAIRE** : courte et non clefée,
   quiconque fabrique une adresse en recalcule la somme. L'authenticité d'une adresse
   vient du CANAL qui l'a transmise, jamais de son encodage.
-- ~2,5 Kio en hexadécimal — le prix des clés post-quantiques (Kyber768 pk = 1 184 o),
+- ~2,5 Kio en hexadécimal — le prix des clés post-quantiques (ML-KEM-768 pk = 1 184 o),
   non réductible par troncature.
 
 ## Versioning des algorithmes (obligatoire)
 
-La migration round-3 → FIPS n'est PAS un simple changement d'import : FIPS 203/204
-diffèrent de Kyber/Dilithium round-3 (dérivation, encodages, errata NIST suivis).
-Tout objet sérialisé et tout transcript inclut donc un identifiant d'algorithme :
+Tout objet sérialisé et tout transcript inclut un identifiant d'algorithme, et cet
+identifiant entre dans les DOMAINES de dérivation (`combine`) et de signature
+(`frame`) : deux versions ne peuvent donc pas se confondre, structurellement.
 
 | ID | Signification |
 |---|---|
-| `x25519+kyber768-round3` (byte 0x01) | KEM hybride actuel |
-| `x25519+ml-kem-768-fips203` (byte 0x02) | après migration |
-| `ed25519+dilithium3-round3` (byte 0x01) | signature hybride actuelle |
-| `ed25519+ml-dsa-65-fips204` (byte 0x02) | après migration |
+| `x25519+kyber768-round3` (byte 0x01) | KEM round-3 — **PÉRIMÉ, refusé par son nom** |
+| `x25519+mlkem768-fips203` (byte 0x02) | KEM hybride COURANT |
+| `ed25519+dilithium3-round3` (byte 0x01) | signature round-3 — **PÉRIMÉE, refusée par son nom** |
+| `ed25519+mldsa65-fips204` (byte 0x02) | signature hybride COURANTE |
 
-Deux versions peuvent cohabiter sur la chaîne pendant une transition ; un objet
-sans identifiant ou avec un identifiant inconnu est invalide.
+**Aucune cohabitation** (décision T1.1, plan Testnet 0) : un objet `0x01` est reconnu
+et REFUSÉ par une variante d'erreur qui le nomme (`CryptoError::AlgoPerime`), jamais
+réinterprété ni accepté. Aucun réseau public n'a existé en round-3 : il n'y avait rien
+à migrer sauf des fichiers locaux, qui se recréent — supporter deux versions aurait
+coûté une surface de confusion de version pour zéro utilisateur. Un objet sans
+identifiant ou avec un identifiant inconnu est invalide.
 
 ## Chiffrement des notes : exigence de key privacy
 
@@ -101,8 +108,9 @@ IND-CCA seul ne suffit pas.
 
 Construction actuelle et arguments :
 - l'éphémère X25519 est indistinguable d'un point aléatoire ;
-- Kyber768 avec rejet implicite est réputé anonyme (ANO-CCA) dans la littérature
-  post-Round-3 — à re-vérifier sur ML-KEM final lors de la migration ;
+- ML-KEM-768 avec rejet implicite est réputé anonyme (ANO-CCA) dans la littérature
+  post-Round-3. ⚠️ Les analyses publiées visent Kyber round-3, et FIPS 203 n'en est
+  pas la copie (dérivation, encodages) : l'argument est RECONDUIT, pas re-démontré ;
 - l'AEAD cascade ne contient aucun identifiant de clé ; `aad = commitment` seulement ;
 
 Vérification côté implémentation (`ledger::proved_wallet`, tests `key_privacy_*`) :
@@ -160,14 +168,14 @@ attendant le circuit. Fonctions suffixées `_transparent` dans le code.
 |---|---|---|
 | dual_hash | BLAKE3 ‖ SHA3-256 (64 o) | collision-résistant si l'un des deux tient |
 | prf | BLAKE3 keyed + domaine | PRF |
-| HybridKem | X25519 + Kyber768, ss = KDF(ss1‖ss2‖transcript‖algo-id) | IND-CCA si l'un tient |
-| HybridSig | Ed25519 ET Dilithium3 | EUF-CMA si l'un tient |
+| HybridKem | X25519 + ML-KEM-768, ss = KDF(ss1‖ss2‖transcript‖algo-id) | IND-CCA si l'un tient |
+| HybridSig | Ed25519 ET ML-DSA-65 | EUF-CMA si l'un tient |
 | CascadeAead | XChaCha20-Poly1305( AES-256-GCM(m) ) | confidentialité si l'un tient |
 
 **Contributivité du KEM** : `encapsulate` rejette une clé publique X25519 d'ordre
 faible, `decapsulate` rejette un éphémère d'ordre faible (`CryptoError::NonContributif`,
 points de RFC 7748 §6.1). Sans ce contrôle, un point de petit sous-groupe force un DH
-nul : la moitié courbes du KEM disparaît EN SILENCE et Kyber porte seul la sécurité —
+nul : la moitié courbes du KEM disparaît EN SILENCE et ML-KEM porte seul la sécurité —
 la défense en profondeur serait perdue sans qu'aucune erreur ne le dise.
 
 ## Phases (recentrées)

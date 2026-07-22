@@ -10,14 +10,14 @@
 | Nœud malveillant / Sybil | Nœuds espions | Rien de sensible en clair ; la confidentialité du CONTENU ne dépend pas de l'honnêteté des nœuds |
 | **Eclipse** (adversaire contrôlant TOUS nos pairs) | Isole le nœud du reste du réseau | Sélection sortante par **groupes réseau distincts** (IPv4 /16, IPv6 /32), bannissement par score — `net::pairs`. ⚠️ Voir la nuance ci-dessous |
 | Ordinateur quantique (futur) | Casse ECC (Shor), affaiblit les hash (Grover) | Hybride PQ partout (ML-KEM, ML-DSA), hash 256-bit, STARKs (hash uniquement) |
-| Cryptanalyse d'une primitive | Casse UNE primitive (ex : Kyber ou AES) | **Défense en profondeur** : chaque fonction repose sur ≥2 primitives indépendantes |
+| Cryptanalyse d'une primitive | Casse UNE primitive (ex : ML-KEM ou AES) | **Défense en profondeur** : chaque fonction repose sur ≥2 primitives indépendantes |
 
 ## Principe central : défense en profondeur (choix validé)
 
 Chaque fonction de sécurité combine deux primitives de familles mathématiques indépendantes :
 la sécurité tient tant qu'AU MOINS UNE des deux tient.
 
-- **Échange de clés** : X25519 (courbes elliptiques) + ML-KEM-768 (réseaux euclidiens), secrets combinés par KDF sur le transcript complet. **Contributivité** : un point X25519 d'ordre faible est rejeté des DEUX côtés (`CryptoError::NonContributif`) — sans ce contrôle, un pair hostile force un DH nul et la moitié courbes disparaît en silence, Kyber portant seul la sécurité.
+- **Échange de clés** : X25519 (courbes elliptiques) + ML-KEM-768 (réseaux euclidiens), secrets combinés par KDF sur le transcript complet. **Contributivité** : un point X25519 d'ordre faible est rejeté des DEUX côtés (`CryptoError::NonContributif`) — sans ce contrôle, un pair hostile force un DH nul et la moitié courbes disparaît en silence, ML-KEM portant seul la sécurité.
 - **Signatures** : Ed25519 + ML-DSA-65 — la vérification exige les DEUX signatures.
 - **Chiffrement** : cascade XChaCha20-Poly1305 ∘ AES-256-GCM, clés indépendantes dérivées.
 - **Hachage / commitments** : dual_hash = BLAKE3(x) ‖ SHA3-256(x) — résistant aux collisions si l'un des deux l'est (ARX vs éponge Keccak).
@@ -67,7 +67,7 @@ la gouvernance du remplacement d'autorité. **Prototype non audité — testnet 
   permettre de deviner le destinataire parmi des clés connues (test distingueur prévu).
 - **Non-malléabilité des preuves** : la preuve STARK est liée à tx_digest.
 - **Versioning d'algorithmes** dans tout transcript et toute sérialisation
-  (la migration round-3 → FIPS n'est pas transparente : FIPS 203/204 + errata NIST).
+  (migration FIPS 203/204 FAITE : version d'algo 0x02, le round-3 0x01 est refusé par son nom, sans cohabitation).
 - **Anti-sabotage de notes** : nullifier lié au commitment (nf = PRF_nk(rho ‖ cm)) —
   deux notes de même rho ne partagent plus le même nullifier.
 - **Aucun pseudonyme public stable par wallet.** Tout champ en clair réutilisé d'une
@@ -128,7 +128,7 @@ le bloc fautif.
 ### Qui a autorité pour sceller — l'élection de producteur (livrée)
 
 La genèse peut GRAVER une liste d'**autorités de scellement** (`Bloc::
-genese_avec_autorites`, clés hybrides Ed25519+Dilithium3, ≤ 64, dans l'IDENTIFIANT de
+genese_avec_autorites`, clés hybrides Ed25519+ML-DSA-65, ≤ 64, dans l'IDENTIFIANT de
 genèse — deux listes = deux chaînes dès l'octet zéro). La règle est alors : le
 producteur légitime de la hauteur h est `autorites[(h−1) mod n]` (tour de rôle), le
 bloc porte sa **signature de scellement** sur l'identifiant (« obscura/bloc/

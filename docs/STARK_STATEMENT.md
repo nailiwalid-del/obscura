@@ -169,7 +169,7 @@
 > (15 preuves séparées) est supprimé ; voir les chiffres du monolithe ci-dessous.
 >
 > **Signature d'intention (fait) — enveloppe anti-malléabilité** : `ProvedTx` porte
-> une clé publique d'intention `signer` (hybride Ed25519+Dilithium3) et une signature
+> une clé publique d'intention `signer` (hybride Ed25519+ML-DSA-65) et une signature
 > `intent_sig` sur `tx_digest`. Le `signer` est **lié dans `tx_digest`** → il ne peut
 > pas être échangé sans invalider la preuve. `prove_tx` prend un `SigKeypair`
 > d'intention et signe ; `apply_proved_tx` vérifie la signature (`InvalidSignature`).
@@ -258,7 +258,8 @@
 > **Durcissement pré-testnet #7 — zeroize + audit panic + Merkle frontier (faits)** :
 > `zeroize` des secrets au drop (`ShieldedSecret` écriture volatile non élidable,
 > `WalletKeys`, clés AEAD dérivées ; moitiés dalek OK, trou pqcrypto Kyber/Dilithium
-> documenté à fermer en FIPS 0x02). Audit `panic→Result` de la surface réseau :
+> documenté à fermer en FIPS 0x02 — **FERMÉ depuis T1** : les secrets ML-KEM/ML-DSA
+> vivent en `Zeroizing<Vec<u8>>`, le type pqcrypto étant reconstruit à chaque usage). Audit `panic→Result` de la surface réseau :
 > `from_bytes`/`verify_tx`/`scan_proved_output`/`apply_proved_tx` sans panique sur
 > entrée attaquant. **Merkle frontier** (`proved_hash::MerkleFrontier`) : l'arbre du
 > nœud est append-only et ne garde que le bord droit — `append`/`root` en O(depth),
