@@ -784,8 +784,22 @@ impl ProvedLedgerState {
         let tree_bytes = take(b, &mut pos, tree_len)?;
         let tree = MerkleFrontier::from_bytes(tree_bytes).map_err(StateDecodeError::BadFrontier)?;
 
+        // BORNE AVANT ALLOCATION. `usize::try_from` ne protège de rien sur une
+        // machine 64 bits : un compteur corrompu à 2^60 passe la conversion puis
+        // fait PANIQUER `with_capacity` (« Hash table capacity overflow »), et le
+        // nœud meurt au démarrage sur un fichier abîmé — exactement ce que la
+        // discipline « borne avant allocation » du dépôt existe pour empêcher.
+        //
+        // La borne est NATURELLE et sans constante arbitraire : chaque entrée pèse
+        // 32 octets, donc un compteur supérieur à ce que le fichier peut encore
+        // contenir est faux, quelle qu'en soit la cause.
+        let reste = |pos: usize| b.len().saturating_sub(pos) / 32;
+
         let n = u64::from_le_bytes(take(b, &mut pos, 8)?.try_into().unwrap());
         let n = usize::try_from(n).map_err(|_| StateDecodeError::TooShort)?;
+        if n > reste(pos) {
+            return Err(StateDecodeError::TooShort);
+        }
         let mut nullifiers = HashSet::with_capacity(n);
         for _ in 0..n {
             let d: [u8; 32] = take(b, &mut pos, 32)?.try_into().unwrap();
@@ -794,6 +808,9 @@ impl ProvedLedgerState {
 
         let m = u64::from_le_bytes(take(b, &mut pos, 8)?.try_into().unwrap());
         let m = usize::try_from(m).map_err(|_| StateDecodeError::TooShort)?;
+        if m > reste(pos) {
+            return Err(StateDecodeError::TooShort);
+        }
         let mut roots_order = VecDeque::with_capacity(m);
         let mut recent_roots = HashSet::with_capacity(m);
         for _ in 0..m {
