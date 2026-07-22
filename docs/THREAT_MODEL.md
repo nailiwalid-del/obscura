@@ -56,9 +56,10 @@ ni l'autorité de dépense, ni l'équilibre, et révélait commitment, chemin de
 clé publique (dépenses reliables). **Il n'est plus la voie de consensus.** La règle de
 consensus est le statement STARK (docs/STARK_STATEMENT.md, P1–P7), appliquée par
 `ProvedLedgerState::appliquer_bloc` ; le witness-hiding (phase 3z) et la variabilité de
-forme (3z-c2) sont livrés. Ce qui interdit encore un déploiement public n'est plus la
-preuve mais la **gouvernance** : aucune élection de producteur (voir « Personne n'a
-autorité pour sceller »). **Testnet local uniquement.**
+forme (3z-c2) sont livrés. L'**élection de producteur** existe désormais (autorités
+gravées en genèse, tour de rôle, bloc signé — voir « Qui a autorité pour sceller ») ;
+ce qui reste ouvert est la LIVENESS (option A : une autorité absente fige la chaîne) et
+la gouvernance du remplacement d'autorité. **Prototype non audité — testnet uniquement.**
 
 ## Garanties additionnelles exigées (v0.2)
 
@@ -124,13 +125,35 @@ un état qu'aucun autre n'a, sans qu'il le sache. Il refuserait ensuite toutes l
 transactions pour « ancre inconnue », et rien dans les messages d'erreur ne désignerait
 le bloc fautif.
 
-### ⚠️ Personne n'a autorité pour sceller
+### Qui a autorité pour sceller — l'élection de producteur (livrée)
 
-Aucune élection de producteur n'existe — c'est explicitement hors périmètre (économie et
-gouvernance du consensus). Tout nœud lancé avec `--sceller` fabrique donc des blocs, et
-la chaîne obtenue est un ordre **convenu** entre participants coopératifs, jamais un
-ordre **défendu** contre un adversaire. Un participant hostile peut sceller ce qu'il
-veut, quand il veut. Testnet local uniquement.
+La genèse peut GRAVER une liste d'**autorités de scellement** (`Bloc::
+genese_avec_autorites`, clés hybrides Ed25519+Dilithium3, ≤ 64, dans l'IDENTIFIANT de
+genèse — deux listes = deux chaînes dès l'octet zéro). La règle est alors : le
+producteur légitime de la hauteur h est `autorites[(h−1) mod n]` (tour de rôle), le
+bloc porte sa **signature de scellement** sur l'identifiant (« obscura/bloc/
+scellement/v1 » ; la signature est HORS de l'id — la signer serait circulaire — mais
+SUR le fil), et `appliquer_bloc` la vérifie APRÈS le chaînage (un bloc d'une autre
+chaîne rend `ParentInattendu`, sans accusation) et AVANT tout coût STARK. Un
+scellement manquant, hors tour ou étranger est une **faute non équivoque**,
+sanctionnée comme une transaction invalide ; `--sceller` refuse de produire hors de
+son tour (rien ne part, pas même un octet). L'**équivocation** (deux blocs signés à la
+même hauteur) reste physiquement possible mais devient une faute PROUVABLE — deux
+signatures valides du même producteur sur deux ids de même hauteur.
+
+Une genèse SANS autorités (le défaut, `Bloc::genese()`) reste une chaîne **OUVERTE** :
+tout nœud peut sceller, ordre convenu, pas défendu — mode testnet local, et un
+scellement y est REFUSÉ (deux encodages valides du même bloc casseraient la
+canonicité).
+
+Ce que cela ne ferme PAS : la **liveness** (option A assumée : une autorité absente
+FIGE la chaîne à son tour — les transactions attendent au mempool ; l'évolution
+« certificat de saut à quorum » est décrite dans la spec) ; le **remplacement
+d'autorité** (liste statique : en changer = nouvelle genèse = nouvelle chaîne — c'est
+une fédération, assumée) ; la **censure par le producteur du tour** (il choisit ses
+transactions ; le tri par `tx_digest` est une convention de reproductibilité, pas une
+défense — la tx censurée attend le producteur suivant). Spec :
+`docs/superpowers/specs/2026-07-21-election-producteur-design.md`.
 
 L'ordre interne d'un bloc est le tri par `tx_digest` : deux nœuds scellant le même
 mempool produisent le même bloc, ce qui rend les collisions inoffensives. Ce critère est
@@ -322,11 +345,12 @@ ce qui rend l'erreur détectable.
 
 ### Ce que cela ne ferme PAS
 
-- **Aucune coinbase, donc aucune récompense de producteur.** C'est cohérent avec
-  l'absence d'élection de producteur (hors périmètre). Le jour où une coinbase shielded
-  aura un sens, elle exigera une règle qui **borne le montant émis** — or ce montant est
-  précisément ce que le chiffrement cache. C'est une brique de conception, pas un champ
-  à débloquer.
+- **Aucune coinbase, donc aucune récompense de producteur.** L'élection de producteur
+  (livrée) en est le PRÉREQUIS — « le producteur de h » est désormais vérifiable, donc
+  un bénéficiaire légitime nommable — mais l'émission par bloc reste un chantier
+  SÉPARÉ : le jour où une coinbase shielded aura un sens, elle exigera une règle qui
+  **borne le montant émis** — or ce montant est précisément ce que le chiffrement
+  cache. C'est une brique de conception, pas un champ à débloquer.
 - **FERMÉ — l'état grave désormais sa genèse** (`VERSION_ETAT` 0x03) : l'identifiant du
   bloc 0 est sérialisé dans `etat.bin` et confronté au `--genese` demandé À CHAQUE
   démarrage. Un répertoire peuplé par une autre chaîne est refusé avec les deux

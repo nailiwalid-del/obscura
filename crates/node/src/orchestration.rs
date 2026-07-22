@@ -263,6 +263,21 @@ impl Noeud {
     /// Retourne le bloc scellé et l'action de diffusion, ou `None` si le mempool ne
     /// contient rien à sceller.
     pub fn sceller(&mut self) -> Option<(Bloc, Vec<Action>)> {
+        // ÉLECTION DE PRODUCTEUR : sur une chaîne à autorités, on ne scelle QUE si
+        // la prochaine hauteur nous revient. Produire hors de son tour ne serait
+        // même pas diffusable — chaque récepteur le refuse avant tout coût STARK —
+        // donc on n'y brûle pas un cycle. Chaîne OUVERTE : comportement historique.
+        let prochaine = self.etat.hauteur() + 1;
+        let doit_signer = match self.etat.producteur_attendu(prochaine) {
+            Some(attendu) => {
+                if attendu.to_bytes() != self.identite.public.to_bytes() {
+                    return None;
+                }
+                true
+            }
+            None => false,
+        };
+
         let mut digests = self.mempool.digests();
         if digests.is_empty() {
             return None;
@@ -303,7 +318,11 @@ impl Noeud {
         // doit rester candidat pour le suivant, sinon sceller PERDRAIT des paiements.
         let digests = retenus;
 
-        let bloc = Bloc::sceller(&self.etat.tete(), self.etat.hauteur() + 1, transactions).ok()?;
+        let mut bloc =
+            Bloc::sceller(&self.etat.tete(), self.etat.hauteur() + 1, transactions).ok()?;
+        if doit_signer {
+            bloc.signer_scellement(&self.identite);
+        }
         // On applique à NOTRE état avant de diffuser : diffuser un bloc qu'on n'a pas
         // su appliquer soi-même reviendrait à demander aux autres de nous croire.
         match self.etat.appliquer_bloc(&bloc) {
@@ -396,13 +415,22 @@ impl Noeud {
                 }
                 actions
             }
-            // Deux fautes NON ÉQUIVOQUES, sanctionnées de la même façon :
+            // Des fautes NON ÉQUIVOQUES, sanctionnées de la même façon :
             //
             // - une transaction invalide nous a fait vérifier tout un bloc pour rien ;
-            // - une ÉMISSION hors genèse est une tentative de créer de la monnaie.
-            //   Contrairement à un refus de chaînage, elle n'a aucune lecture innocente :
-            //   un bloc valide n'en contient jamais, à aucune hauteur, sur aucune chaîne.
-            Err(BlocRefus::Transaction { .. }) | Err(BlocRefus::EmissionHorsGenese { .. }) => {
+            // - une ÉMISSION (ou des AUTORITÉS) hors genèse est une tentative de
+            //   réécrire les règles de la chaîne — aucune lecture innocente ;
+            // - un SCELLEMENT manquant, hors tour ou étranger viole l'élection de
+            //   producteur : le bloc est refusé À TOUTE hauteur par tout nœud de
+            //   cette chaîne, ce n'est jamais le cas normal d'un retard. (Le refus
+            //   de scellement tombe APRÈS le chaînage dans `appliquer_bloc` : un
+            //   bloc d'une autre chaîne rend `ParentInattendu`, sans sanction.)
+            Err(BlocRefus::Transaction { .. })
+            | Err(BlocRefus::EmissionHorsGenese { .. })
+            | Err(BlocRefus::AutoritesHorsGenese { .. })
+            | Err(BlocRefus::ScellementManquant { .. })
+            | Err(BlocRefus::ScellementInvalide { .. })
+            | Err(BlocRefus::ScellementInattendu) => {
                 self.pairs.ajuster_score(&de, PENALITE_BLOC_INVALIDE);
                 Vec::new()
             }
@@ -689,6 +717,17 @@ mod tests {
     /// contre cet état.
     #[cfg(test)]
     fn noeud_avec_transaction() -> (Noeud, ProvedTx) {
+        noeud_avec_transaction_param(SigKeypair::generate(), Vec::new())
+    }
+
+    /// Idem, en choisissant l'IDENTITÉ du nœud et les AUTORITÉS de la genèse —
+    /// c'est ce qui permet d'exercer l'élection de producteur avec un mempool
+    /// réellement garni.
+    #[cfg(test)]
+    fn noeud_avec_transaction_param(
+        identite: SigKeypair,
+        autorites: Vec<crypto::sig::SigPublicKey>,
+    ) -> (Noeud, ProvedTx) {
         use circuit::{prove_tx, ProvedInput, SpendNote};
         use ledger::proved_wallet::encrypt_note;
         use proved_hash::digest::{Digest, ShieldedSecret};
@@ -722,13 +761,16 @@ mod tests {
 
         // La monnaie n'existe QUE par la genèse — le nœud est amorcé dessus, il ne
         // peut plus rien créer ensuite.
-        let genese = ledger::bloc::Bloc::genese_avec(vec![
-            ledger::proved_wallet::emission_factice(&cm0),
-            ledger::proved_wallet::emission_factice(&cm1),
-        ])
+        let genese = ledger::bloc::Bloc::genese_avec_autorites(
+            vec![
+                ledger::proved_wallet::emission_factice(&cm0),
+                ledger::proved_wallet::emission_factice(&cm1),
+            ],
+            autorites,
+        )
         .expect("genèse bornée");
         let noeud = Noeud::new(
-            SigKeypair::generate(),
+            identite,
             ProvedLedgerState::depuis_genese_depth(&genese, 4).expect("amorçage"),
             [7u8; 32],
         );
@@ -905,6 +947,97 @@ mod tests {
         let mut n = noeud_de_test();
         assert!(n.sceller().is_none());
         assert_eq!(n.etat.hauteur(), 0);
+    }
+
+    /// ÉLECTION : sur une chaîne à autorités, un bloc mal scellé est une FAUTE non
+    /// équivoque (contrairement au bloc non chaîné) — sanctionnée comme une
+    /// transaction invalide.
+    #[test]
+    fn bloc_mal_scelle_penalise() {
+        // Autorités [nous, autre] : la hauteur 1 revient à `nous`.
+        let nous = SigKeypair::generate();
+        let autre = SigKeypair::generate();
+        let genese = ledger::bloc::Bloc::genese_avec_autorites(
+            Vec::new(),
+            vec![nous.public.clone(), autre.public.clone()],
+        )
+        .unwrap();
+        let mut n = Noeud::new(
+            nous,
+            ProvedLedgerState::depuis_genese_depth(&genese, 4).unwrap(),
+            [7u8; 32],
+        );
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+
+        // Sans scellement : refusé, sanctionné, jamais relayé.
+        let nu = ledger::bloc::Bloc::sceller(&n.etat.tete(), 1, Vec::new()).unwrap();
+        assert!(n.traiter(p, Message::Bloc(Box::new(nu)), 0).is_empty());
+        assert_eq!(n.pairs.get(&p).unwrap().score, PENALITE_BLOC_INVALIDE);
+
+        // HORS TOUR : signé par `autre` alors que la hauteur 1 revient à `nous`.
+        let mut hors_tour = ledger::bloc::Bloc::sceller(&n.etat.tete(), 1, Vec::new()).unwrap();
+        hors_tour.signer_scellement(&autre);
+        assert!(n
+            .traiter(p, Message::Bloc(Box::new(hors_tour)), 0)
+            .is_empty());
+        assert_eq!(n.pairs.get(&p).unwrap().score, 2 * PENALITE_BLOC_INVALIDE);
+        assert_eq!(n.etat.hauteur(), 0, "aucun des deux blocs n'est passé");
+    }
+
+    /// Chaîne OUVERTE : un scellement n'y a aucun sens — refusé et sanctionné
+    /// (deux encodages valides du même bloc casseraient la canonicité).
+    #[test]
+    fn scellement_sur_chaine_ouverte_penalise() {
+        let mut n = noeud_de_test();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+        let mut signe = ledger::bloc::Bloc::sceller(&n.etat.tete(), 1, Vec::new()).unwrap();
+        signe.signer_scellement(&SigKeypair::generate());
+        assert!(n.traiter(p, Message::Bloc(Box::new(signe)), 0).is_empty());
+        assert_eq!(n.pairs.get(&p).unwrap().score, PENALITE_BLOC_INVALIDE);
+    }
+
+    /// ÉLECTION : hors de son tour, `sceller` ne produit RIEN — pas même un octet
+    /// diffusable — et le mempool reste intact pour le producteur légitime.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
+    fn sceller_refuse_hors_de_son_tour() {
+        let nous = SigKeypair::generate();
+        let nous_pub = nous.public.clone();
+        let autre_pub = SigKeypair::generate().public;
+        // La hauteur 1 revient à `autre` : PAS notre tour.
+        let (mut n, tx) = noeud_avec_transaction_param(nous, vec![autre_pub, nous_pub]);
+        n.mempool.admettre(&n.etat, tx).expect("admission");
+        assert!(n.sceller().is_none(), "hors tour : aucun bloc");
+        assert_eq!(n.etat.hauteur(), 0);
+        assert_eq!(n.mempool.len(), 1, "la transaction reste candidate");
+    }
+
+    /// ÉLECTION : à son tour, `sceller` SIGNE — et le bloc diffusé porte le
+    /// scellement (il doit survivre au réencodage wire).
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
+    fn sceller_signe_a_son_tour() {
+        let nous = SigKeypair::generate();
+        let nous_pub = nous.public.clone();
+        let autre_pub = SigKeypair::generate().public;
+        // La hauteur 1 nous revient.
+        let (mut n, tx) = noeud_avec_transaction_param(nous, vec![nous_pub.clone(), autre_pub]);
+        n.mempool.admettre(&n.etat, tx).expect("admission");
+
+        let (bloc, actions) = n.sceller().expect("notre tour : un bloc");
+        assert!(bloc.verifier_scellement(&nous_pub), "scellé par nous");
+        assert_eq!(n.etat.hauteur(), 1, "appliqué à notre propre état");
+        match actions.as_slice() {
+            [Action::Diffuser(Message::Bloc(b))] => {
+                assert!(
+                    b.verifier_scellement(&nous_pub),
+                    "le scellement doit survivre au réencodage wire"
+                );
+            }
+            autres => panic!("diffusion attendue, reçu {} actions", autres.len()),
+        }
     }
 
     /// Un bloc qui ne s'enchaîne PAS ne pénalise pas.

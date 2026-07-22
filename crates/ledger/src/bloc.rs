@@ -15,16 +15,20 @@
 //! à son parent. Deux nœuds qui acceptent la même chaîne de blocs obtiennent le même
 //! arbre, feuille par feuille.
 //!
-//! # Ce que ce module ne décide PAS : qui produit les blocs
+//! # Qui produit les blocs : l'ÉLECTION DE PRODUCTEUR (v0x03)
 //!
-//! L'élection du producteur (preuve de travail, preuve d'enjeu, autorité) est une
-//! question d'ÉCONOMIE et de gouvernance, explicitement hors périmètre du prototype
-//! (docs/THREAT_MODEL.md). Elle est orthogonale : quel que soit le mécanisme retenu,
-//! il produira des blocs de cette forme et l'application restera celle-ci.
+//! La genèse peut graver une liste d'AUTORITÉS de scellement (champ `autorites`,
+//! dans son identifiant). La règle, appliquée par `ProvedLedgerState::appliquer_bloc` :
+//! le producteur légitime de la hauteur h est `autorites[(h−1) mod n]` (tour de
+//! rôle), et le bloc porte sa signature de scellement sur l'IDENTIFIANT (champ
+//! `scellement` — hors de l'id, sinon circulaire, mais sur le fil). L'unicité du
+//! bloc par hauteur est ainsi garantie PAR CONSTRUCTION — indispensable, l'état
+//! étant append-only sans réorganisation : il n'existe aucun fork choice pour
+//! rattraper une divergence. Liveness = option A, assumée : une autorité absente
+//! FIGE la chaîne à son tour (spec « élection de producteur »).
 //!
-//! Tant qu'aucun mécanisme n'est choisi, **n'importe qui peut sceller un bloc**. Une
-//! chaîne Obscura n'a donc aujourd'hui aucune résistance à la réécriture par un
-//! adversaire : c'est un ordre CONVENU, pas un ordre DÉFENDU.
+//! Une genèse SANS autorités (le défaut) reste une chaîne OUVERTE : **n'importe qui
+//! peut sceller**, ordre CONVENU et non DÉFENDU — mode testnet local.
 //!
 //! # ⚠️ Aucune réorganisation n'est possible, par construction
 //!
@@ -72,6 +76,7 @@
 
 use circuit::tx::{KEM_CT_LEN, MAX_ENC_NOTE_LEN};
 use circuit::{EncNote, ProvedTx};
+use crypto::sig::{HybridSignature, SigKeypair, SigPublicKey};
 use proved_hash::digest::{Digest, DIGEST_BYTES};
 
 /// Nombre maximal de transactions par bloc.
@@ -99,14 +104,40 @@ pub const PAS_DE_PARENT: [u8; TAILLE_ID] = [0u8; TAILLE_ID];
 /// adversariale, cf. docs/THREAT_MODEL.md).
 pub const MAX_EMISSIONS_PAR_BLOC: usize = 512;
 
+/// Nombre maximal d'AUTORITÉS de scellement dans une genèse.
+///
+/// Une clé hybride pèse ~2 Kio : 64 autorités ≈ 128 Kio, loin sous le cadre réseau.
+/// Vérifiée AVANT allocation dans `from_bytes` **et** dans le constructeur
+/// `Bloc::genese_avec_autorites` (même règle que `MAX_EMISSIONS_PAR_BLOC`).
+pub const MAX_AUTORITES: usize = 64;
+
+/// Domaine de la signature de SCELLEMENT d'un bloc par son producteur.
+///
+/// Signée sur `dual_hash(DOMAINE_SCELLEMENT, id_du_bloc)` : l'identifiant engage
+/// déjà parent, hauteur, transactions, émissions et autorités — signer l'id suffit,
+/// et rien de nouveau n'entre dans l'id lui-même (sinon la signature serait
+/// circulaire).
+pub const DOMAINE_SCELLEMENT: &str = "obscura/bloc/scellement/v1";
+
+/// Majorant du coût WIRE du champ scellement : 4 o de longueur + signature hybride
+/// (1 + 64 + 3293 = 3358 o en ed25519+dilithium3 round-3). Majoré à 4 Kio pour
+/// survivre à une migration FIPS sans recalibrer ; un test épingle la taille réelle.
+pub const TAILLE_SCELLEMENT_MAX: usize = 4 + 4096;
+
+/// Majorant d'une clé publique d'autorité sérialisée (1 + 32 + 1952 = 1985 o en
+/// round-3) — borne d'allocation au décodage, même marge FIPS que ci-dessus.
+pub const TAILLE_AUTORITE_MAX: usize = 4096;
+
 /// Version du format de bloc.
 ///
-/// Passée à `0x02` par l'ajout des émissions. Ce n'est pas cosmétique : l'encodage
-/// entrant dans `Bloc::id`, l'identifiant de la genèse VIDE change lui aussi. Un état
-/// dumpé par une version antérieure porte donc une tête périmée — d'où le passage
-/// simultané de `proved_state::VERSION_ETAT` à `0x02`, qui le refuse au lieu de le
-/// lire de travers.
-pub const VERSION_BLOC: u8 = 0x02;
+/// `0x02` : ajout des émissions. `0x03` : ajout des AUTORITÉS de scellement (genèse),
+/// du champ `scellement` (élection de producteur) et de l'EN-TÊTE EXTENSIBLE réservé
+/// (vide, verrouillé — la place de la future coinbase). Ce n'est pas cosmétique :
+/// l'encodage entrant dans `Bloc::id`, l'identifiant de la genèse VIDE change à
+/// chaque passage. Un état dumpé par une version antérieure porte donc une tête
+/// périmée — d'où le bump simultané de `proved_state::VERSION_ETAT`, qui le refuse
+/// au lieu de le lire de travers.
+pub const VERSION_BLOC: u8 = 0x03;
 const DOMAINE_ID: &str = "obscura/bloc/id/v1";
 
 /// Taille indicative d'une `ProvedTx` (≈68 Kio) et cadre maximal de `net::frame`
@@ -183,6 +214,14 @@ pub enum BlocDecodeError {
     TropDEmissions,
     #[error("émission indécodable ou hors bornes en position {0}")]
     EmissionInvalide(usize),
+    #[error("trop d'autorités (borne : {MAX_AUTORITES})")]
+    TropDAutorites,
+    #[error("autorité indécodable ou hors bornes en position {0}")]
+    AutoriteInvalide(usize),
+    #[error("scellement indécodable ou hors bornes")]
+    ScellementInvalide,
+    #[error("extension non vide : aucun contenu n'est défini en version {VERSION_BLOC:#04x}")]
+    ExtensionInconnue,
 }
 
 /// Erreur de CONSTRUCTION d'un bloc de genèse. Distincte du décodage : elle protège
@@ -197,6 +236,8 @@ pub enum BlocConstructionError {
     TropDeTransactions { recues: usize },
     #[error("bloc de {octets} o : indiffusable (borne : {MAX_OCTETS_BLOC} o)")]
     TropDOctets { octets: usize },
+    #[error("{recues} autorités (borne : {MAX_AUTORITES})")]
+    TropDAutorites { recues: usize },
 }
 
 /// Une émission : un commitment de note créé EX NIHILO, avec son enveloppe chiffrée.
@@ -227,6 +268,26 @@ pub struct Bloc {
     /// appliquée par `ProvedLedgerState::appliquer_bloc`, contrôle O(1) placé avant
     /// toute vérification coûteuse.
     pub emissions: Vec<Emission>,
+    /// Les AUTORITÉS de scellement de la chaîne — **genèse seulement**, même règle
+    /// que `emissions` (`hauteur > 0 ⇒ autorites.is_empty()`). Liste VIDE = chaîne
+    /// OUVERTE (tout nœud peut sceller — mode testnet local, l'état actuel du
+    /// prototype) ; liste non vide = tour de rôle par hauteur, bloc signé exigé.
+    /// La liste entre dans l'IDENTIFIANT de la genèse : deux réseaux aux autorités
+    /// différentes sont deux chaînes distinctes dès l'octet zéro.
+    pub autorites: Vec<SigPublicKey>,
+    /// EN-TÊTE EXTENSIBLE — la place RÉSERVÉE d'une future coinbase prouvée et d'un
+    /// collecteur de frais (plan Testnet 0, T2). **Obligatoirement VIDE en 0x03** :
+    /// son contenu n'est défini par aucune règle, donc `from_bytes` refuse le
+    /// moindre octet (fail-closed). Le champ entre dans l'IDENTIFIANT : le jour où
+    /// une version le remplit, son contenu est engagé sans déplacer un seul champ
+    /// existant — ajouter la coinbase ne refondra pas le format.
+    pub extension: Vec<u8>,
+    /// Signature de SCELLEMENT du producteur, sur l'identifiant du bloc.
+    ///
+    /// HORS de l'identifiant (sinon circulaire) mais SUR le fil. `None` pour la
+    /// genèse (elle amorce, personne ne la produit) et sur une chaîne ouverte ;
+    /// exigée par `appliquer_bloc` dès que la chaîne a des autorités.
+    pub scellement: Option<HybridSignature>,
 }
 
 impl Bloc {
@@ -241,6 +302,9 @@ impl Bloc {
             hauteur: 0,
             transactions: Vec::new(),
             emissions: Vec::new(),
+            autorites: Vec::new(),
+            extension: Vec::new(),
+            scellement: None,
         }
     }
 
@@ -252,6 +316,19 @@ impl Bloc {
     /// `Noeud::sceller` (une borne de `from_bytes` doit exister aussi dans le
     /// constructeur).
     pub fn genese_avec(emissions: Vec<Emission>) -> Result<Self, BlocConstructionError> {
+        Self::genese_avec_autorites(emissions, Vec::new())
+    }
+
+    /// Genèse paramétrée AVEC autorités de scellement : la seule façon de fermer le
+    /// droit de sceller. Liste vide = chaîne OUVERTE (comportement historique).
+    ///
+    /// La borne `MAX_AUTORITES` est vérifiée ICI et pas seulement au décodage — même
+    /// règle que pour les émissions (une borne de `from_bytes` doit exister aussi
+    /// dans le constructeur).
+    pub fn genese_avec_autorites(
+        emissions: Vec<Emission>,
+        autorites: Vec<SigPublicKey>,
+    ) -> Result<Self, BlocConstructionError> {
         if emissions.len() > MAX_EMISSIONS_PAR_BLOC {
             return Err(BlocConstructionError::TropDEmissions {
                 recues: emissions.len(),
@@ -260,11 +337,19 @@ impl Bloc {
         if let Some(i) = emissions.iter().position(|e| !e.enc_note.within_bounds()) {
             return Err(BlocConstructionError::EmissionHorsBornes(i));
         }
+        if autorites.len() > MAX_AUTORITES {
+            return Err(BlocConstructionError::TropDAutorites {
+                recues: autorites.len(),
+            });
+        }
         Ok(Bloc {
             parent: PAS_DE_PARENT,
             hauteur: 0,
             transactions: Vec::new(),
             emissions,
+            autorites,
+            extension: Vec::new(),
+            scellement: None,
         })
     }
 
@@ -296,31 +381,56 @@ impl Bloc {
             hauteur,
             transactions,
             emissions: Vec::new(),
+            autorites: Vec::new(),
+            extension: Vec::new(),
+            scellement: None,
         };
-        let octets = bloc.to_bytes().len();
+        // Budget vérifié SCELLEMENT COMPRIS : le champ pèse ~4,7 Kio une fois signé,
+        // et la borne doit couvrir le bloc tel qu'il partira sur le fil.
+        let octets = bloc.to_bytes().len() + TAILLE_SCELLEMENT_MAX;
         if octets > MAX_OCTETS_BLOC {
             return Err(BlocConstructionError::TropDOctets { octets });
         }
         Ok(bloc)
     }
 
-    /// Identifiant du bloc = `dual_hash` de son encodage canonique.
+    /// Signe le scellement du bloc avec l'identité du producteur.
     ///
-    /// L'encodage étant canonique et injectif, deux blocs de même identifiant ont le
-    /// même parent, la même hauteur et les mêmes transactions dans le même ordre.
-    /// Réordonner les transactions change l'identifiant — ce qui est le but : c'est
-    /// l'ORDRE qu'on veut rendre infalsifiable.
-    pub fn id(&self) -> [u8; TAILLE_ID] {
-        crypto::hash::dual_hash(DOMAINE_ID, &self.to_bytes())
+    /// À appeler APRÈS `sceller` (l'identifiant est celui du corps, la signature
+    /// n'y entre pas — la re-signer ne change pas l'id, cf. test dédié).
+    pub fn signer_scellement(&mut self, identite: &SigKeypair) {
+        let id = self.id();
+        self.scellement = Some(identite.sign(DOMAINE_SCELLEMENT, &id));
     }
 
-    /// Encodage canonique : `version ‖ parent ‖ hauteur LE ‖ n LE ‖ [len(txᵢ) LE ‖ txᵢ]
-    /// ‖ m LE ‖ [cmⱼ ‖ len(kem_ctⱼ) LE ‖ kem_ctⱼ ‖ len(enc_noteⱼ) LE ‖ enc_noteⱼ]`.
+    /// Vérifie le scellement contre la clé d'UN producteur attendu.
+    pub fn verifier_scellement(&self, attendu: &SigPublicKey) -> bool {
+        match &self.scellement {
+            Some(sig) => crypto::sig::verify(attendu, DOMAINE_SCELLEMENT, &self.id(), sig),
+            None => false,
+        }
+    }
+
+    /// Identifiant du bloc = `dual_hash` de son CORPS canonique (tout SAUF le
+    /// scellement — signer l'id serait sinon circulaire).
+    ///
+    /// L'encodage étant canonique et injectif, deux blocs de même identifiant ont le
+    /// même parent, la même hauteur, les mêmes transactions dans le même ordre — et
+    /// les mêmes autorités pour une genèse. Réordonner les transactions change
+    /// l'identifiant — ce qui est le but : c'est l'ORDRE qu'on veut rendre
+    /// infalsifiable.
+    pub fn id(&self) -> [u8; TAILLE_ID] {
+        crypto::hash::dual_hash(DOMAINE_ID, &self.corps_bytes())
+    }
+
+    /// CORPS canonique (ce que l'identifiant engage) : `version ‖ parent ‖ hauteur LE
+    /// ‖ n LE ‖ [len(txᵢ) LE ‖ txᵢ] ‖ m LE ‖ [cmⱼ ‖ len(kem_ctⱼ) LE ‖ kem_ctⱼ ‖
+    /// len(enc_noteⱼ) LE ‖ enc_noteⱼ] ‖ a LE ‖ [len(pkₖ) LE ‖ pkₖ]`.
     ///
     /// Les émissions sont encodées SANS drapeau de présence : une émission factice a
     /// exactement la même forme et la même longueur qu'une émission destinée à
     /// quelqu'un (cf. tête de module).
-    pub fn to_bytes(&self) -> Vec<u8> {
+    fn corps_bytes(&self) -> Vec<u8> {
         let mut b = vec![VERSION_BLOC];
         b.extend_from_slice(&self.parent);
         b.extend_from_slice(&self.hauteur.to_le_bytes());
@@ -337,6 +447,31 @@ impl Bloc {
             b.extend_from_slice(&em.enc_note.kem_ct);
             b.extend_from_slice(&(em.enc_note.enc_note.len() as u32).to_le_bytes());
             b.extend_from_slice(&em.enc_note.enc_note);
+        }
+        b.extend_from_slice(&(self.autorites.len() as u32).to_le_bytes());
+        for pk in &self.autorites {
+            let o = pk.to_bytes();
+            b.extend_from_slice(&(o.len() as u32).to_le_bytes());
+            b.extend_from_slice(&o);
+        }
+        // En-tête extensible (réservé, vide en 0x03) — DANS le corps, donc engagé
+        // par l'identifiant.
+        b.extend_from_slice(&(self.extension.len() as u32).to_le_bytes());
+        b.extend_from_slice(&self.extension);
+        b
+    }
+
+    /// Encodage WIRE : le corps, suivi du scellement (longueur-préfixé, `0` =
+    /// absent). Le scellement est HORS du corps — donc hors de l'identifiant.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut b = self.corps_bytes();
+        match &self.scellement {
+            Some(sig) => {
+                let o = sig.to_bytes();
+                b.extend_from_slice(&(o.len() as u32).to_le_bytes());
+                b.extend_from_slice(&o);
+            }
+            None => b.extend_from_slice(&0u32.to_le_bytes()),
         }
         b
     }
@@ -418,6 +553,42 @@ impl Bloc {
             });
         }
 
+        let a = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap()) as usize;
+        // Borne AVANT allocation, comme partout ailleurs dans ce décodeur.
+        if a > MAX_AUTORITES {
+            return Err(BlocDecodeError::TropDAutorites);
+        }
+        let mut autorites = Vec::with_capacity(a);
+        for k in 0..a {
+            let lp = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap()) as usize;
+            if lp > TAILLE_AUTORITE_MAX {
+                return Err(BlocDecodeError::AutoriteInvalide(k));
+            }
+            let pk = SigPublicKey::from_bytes(prendre(b, &mut pos, lp)?)
+                .map_err(|_| BlocDecodeError::AutoriteInvalide(k))?;
+            autorites.push(pk);
+        }
+
+        // En-tête extensible : RÉSERVÉ, donc verrouillé VIDE — aucun contenu n'est
+        // défini en 0x03, le moindre octet est refusé (fail-closed, avant allocation).
+        let lx = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap()) as usize;
+        if lx != 0 {
+            return Err(BlocDecodeError::ExtensionInconnue);
+        }
+
+        let ls = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap()) as usize;
+        let scellement = if ls == 0 {
+            None
+        } else {
+            if ls > TAILLE_SCELLEMENT_MAX {
+                return Err(BlocDecodeError::ScellementInvalide);
+            }
+            Some(
+                HybridSignature::from_bytes(prendre(b, &mut pos, ls)?)
+                    .map_err(|_| BlocDecodeError::ScellementInvalide)?,
+            )
+        };
+
         if pos != b.len() {
             return Err(BlocDecodeError::OctetsResiduels);
         }
@@ -426,6 +597,9 @@ impl Bloc {
             hauteur,
             transactions,
             emissions,
+            autorites,
+            extension: Vec::new(),
+            scellement,
         })
     }
 }
@@ -454,6 +628,135 @@ mod tests {
         let c = Bloc::sceller(&[9u8; TAILLE_ID], 1, Vec::new()).unwrap();
         assert_ne!(a.id(), b.id(), "la hauteur doit entrer dans l'identifiant");
         assert_ne!(a.id(), c.id(), "le parent doit entrer dans l'identifiant");
+    }
+
+    /// Les AUTORITÉS entrent dans l'identifiant de la genèse (deux réseaux aux
+    /// autorités différentes = deux chaînes dès l'octet zéro) et survivent au fil.
+    #[test]
+    fn autorites_dans_lidentifiant_et_sur_le_fil() {
+        let a = SigKeypair::generate();
+        let b = SigKeypair::generate();
+        let g0 = Bloc::genese();
+        let g2 = Bloc::genese_avec_autorites(Vec::new(), vec![a.public.clone(), b.public.clone()])
+            .unwrap();
+        assert_ne!(
+            g0.id(),
+            g2.id(),
+            "les autorités doivent entrer dans l'identifiant"
+        );
+
+        let relu = Bloc::from_bytes(&g2.to_bytes()).expect("genèse à autorités décodable");
+        assert_eq!(relu.id(), g2.id(), "aller-retour à identifiant stable");
+        assert_eq!(
+            relu.autorites.len(),
+            2,
+            "les autorités doivent survivre au fil"
+        );
+        assert_eq!(relu.autorites[0].to_bytes(), a.public.to_bytes());
+        assert_eq!(relu.autorites[1].to_bytes(), b.public.to_bytes());
+    }
+
+    /// Le SCELLEMENT circule sur le fil mais n'entre PAS dans l'identifiant
+    /// (signer l'id serait sinon circulaire).
+    #[test]
+    fn scellement_sur_le_fil_mais_hors_de_lidentifiant() {
+        let identite = SigKeypair::generate();
+        let parent = Bloc::genese().id();
+        let mut bloc = Bloc::sceller(&parent, 1, Vec::new()).unwrap();
+        let id_avant = bloc.id();
+
+        bloc.signer_scellement(&identite);
+        assert_eq!(
+            bloc.id(),
+            id_avant,
+            "la signature ne doit pas entrer dans l'id"
+        );
+        assert!(bloc.verifier_scellement(&identite.public));
+        assert!(
+            !bloc.verifier_scellement(&SigKeypair::generate().public),
+            "une autre clé ne doit pas vérifier"
+        );
+
+        let relu = Bloc::from_bytes(&bloc.to_bytes()).expect("bloc scellé décodable");
+        assert_eq!(relu.id(), id_avant);
+        assert!(
+            relu.verifier_scellement(&identite.public),
+            "le scellement doit survivre au fil"
+        );
+
+        // Et un bloc NON scellé ne vérifie jamais.
+        let nu = Bloc::sceller(&parent, 1, Vec::new()).unwrap();
+        assert!(!nu.verifier_scellement(&identite.public));
+    }
+
+    /// La borne d'autorités vit dans le CONSTRUCTEUR et au DÉCODAGE — même règle
+    /// que les émissions (une borne de `from_bytes` doit exister aussi côté
+    /// fabricant).
+    #[test]
+    fn trop_dautorites_refusees_des_deux_cotes() {
+        let pk = SigKeypair::generate().public;
+        let trop: Vec<SigPublicKey> = (0..MAX_AUTORITES + 1).map(|_| pk.clone()).collect();
+        assert!(matches!(
+            Bloc::genese_avec_autorites(Vec::new(), trop.clone()),
+            Err(BlocConstructionError::TropDAutorites { .. })
+        ));
+
+        // Bloc HOSTILE par littéral (le constructeur refuserait) : le décodeur doit
+        // refuser AVANT allocation.
+        let hostile = Bloc {
+            parent: PAS_DE_PARENT,
+            hauteur: 0,
+            transactions: Vec::new(),
+            emissions: Vec::new(),
+            autorites: trop,
+            extension: Vec::new(),
+            scellement: None,
+        };
+        assert!(matches!(
+            Bloc::from_bytes(&hostile.to_bytes()),
+            Err(BlocDecodeError::TropDAutorites)
+        ));
+    }
+
+    /// L'EN-TÊTE EXTENSIBLE est réservé (dans l'identifiant) et VERROUILLÉ VIDE :
+    /// aucun contenu n'est défini en 0x03, donc le moindre octet est refusé au
+    /// décodage — fail-closed. Le jour où une version le remplit (coinbase,
+    /// collecteur de frais), son contenu sera engagé sans déplacer un champ.
+    #[test]
+    fn extension_reservee_et_verrouillee_vide() {
+        let bloc = Bloc::sceller(&PAS_DE_PARENT, 1, Vec::new()).unwrap();
+        assert!(bloc.extension.is_empty());
+        let relu = Bloc::from_bytes(&bloc.to_bytes()).expect("bloc décodable");
+        assert!(relu.extension.is_empty());
+        assert_eq!(relu.id(), bloc.id());
+
+        // Bloc HOSTILE à extension non vide : refusé au décodage.
+        let mut hostile = Bloc::sceller(&PAS_DE_PARENT, 1, Vec::new()).unwrap();
+        hostile.extension = vec![1, 2, 3];
+        assert!(matches!(
+            Bloc::from_bytes(&hostile.to_bytes()),
+            Err(BlocDecodeError::ExtensionInconnue)
+        ));
+
+        // Et le champ est ENGAGÉ par l'identifiant.
+        let mut autre = Bloc::sceller(&PAS_DE_PARENT, 1, Vec::new()).unwrap();
+        autre.extension = vec![9];
+        assert_ne!(
+            autre.id(),
+            bloc.id(),
+            "l'extension entre dans l'identifiant"
+        );
+    }
+
+    /// Les majorants wire (`TAILLE_SCELLEMENT_MAX`, `TAILLE_AUTORITE_MAX`) couvrent
+    /// les tailles RÉELLES des primitives round-3 — épinglées ici pour qu'une
+    /// migration FIPS qui les ferait déborder casse un test au lieu du décodage.
+    #[test]
+    fn majorants_wire_couvrent_les_tailles_reelles() {
+        let kp = SigKeypair::generate();
+        let sig = kp.sign(DOMAINE_SCELLEMENT, b"mesure");
+        assert!(4 + sig.to_bytes().len() <= TAILLE_SCELLEMENT_MAX);
+        assert!(kp.public.to_bytes().len() <= TAILLE_AUTORITE_MAX);
     }
 
     /// Aller-retour d'un bloc VIDE (le cas le plus courant d'une chaîne au repos).
@@ -499,15 +802,19 @@ mod tests {
             Err(BlocDecodeError::Tronque)
         ));
         assert!(matches!(
-            Bloc::from_bytes(&[0x03]),
-            Err(BlocDecodeError::VersionInconnue(0x03))
+            Bloc::from_bytes(&[0x04]),
+            Err(BlocDecodeError::VersionInconnue(0x04))
         ));
-        // La version PRÉCÉDENTE est refusée, pas réinterprétée : son encodage n'a pas
-        // de compteur d'émissions, le lire comme la version courante ferait dériver
-        // toutes les longueurs suivantes.
+        // Les versions PRÉCÉDENTES sont refusées, pas réinterprétées : le 0x01 n'a
+        // pas de compteur d'émissions, le 0x02 ni autorités ni scellement — les lire
+        // comme la version courante ferait dériver toutes les longueurs suivantes.
         assert!(matches!(
             Bloc::from_bytes(&[0x01]),
             Err(BlocDecodeError::VersionInconnue(0x01))
+        ));
+        assert!(matches!(
+            Bloc::from_bytes(&[0x02]),
+            Err(BlocDecodeError::VersionInconnue(0x02))
         ));
         assert!(matches!(
             Bloc::from_bytes(&[VERSION_BLOC]),

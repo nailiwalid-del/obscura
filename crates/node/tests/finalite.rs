@@ -225,6 +225,153 @@ fn rejouer_un_bloc_ne_change_rien() {
     );
 }
 
+/// ÉLECTION DE PRODUCTEUR sur sockets réelles : deux autorités ALTERNENT.
+///
+/// La chaîne est fermée par sa genèse (autorités [A, B]) : A scelle la hauteur 1
+/// (son tour), B l'applique puis scelle la hauteur 2 (le sien), A l'applique. Le
+/// scellement traverse le fil deux fois (sérialisation → chiffrement → socket →
+/// décodage → vérification de signature) et les deux nœuds convergent. C'est le
+/// test d'intégration exigé par la spec « élection de producteur ».
+#[test]
+#[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
+fn deux_autorites_alternent_sur_sockets() {
+    // Deux wallets financés par la même genèse : chacun paiera dans SON bloc.
+    let mut payeur_a = Wallet::depuis_secret(secret(700), PROFONDEUR);
+    let mut payeur_b = Wallet::depuis_secret(secret(800), PROFONDEUR);
+    let beneficiaire = Wallet::depuis_secret(secret(900), PROFONDEUR);
+
+    let id_a = SigKeypair::generate();
+    let id_b = SigKeypair::generate();
+    let id_a_pub = id_a.public.clone();
+
+    let emissions: Vec<_> = [
+        (&payeur_a, 1_000u64, 11u64),
+        (&payeur_a, 500, 12),
+        (&payeur_b, 800, 13),
+        (&payeur_b, 400, 14),
+    ]
+    .iter()
+    .map(|(w, valeur, graine)| {
+        let note = circuit::SpendNote {
+            value: *valeur,
+            owner: w.owner(),
+            rho: rescue::hash(
+                proved_hash::domain::Domain::Owner,
+                &[Felt::from_canonical_u64(*graine).unwrap(); 4],
+            ),
+            r: rescue::hash(
+                proved_hash::domain::Domain::Nk,
+                &[Felt::from_canonical_u64(*graine).unwrap(); 4],
+            ),
+        };
+        let cm = rescue::note_commitment(note.value, &note.owner, &note.rho, &note.r);
+        ledger::proved_wallet::emission_vers(&w.adresse().kem, &cm, &note).unwrap()
+    })
+    .collect();
+    let genese =
+        Bloc::genese_avec_autorites(emissions, vec![id_a.public.clone(), id_b.public.clone()])
+            .expect("genèse bornée");
+
+    // Chaque nœud amorce sur LA même genèse ; chaque wallet la rejoue entière.
+    let etat_a = ProvedLedgerState::depuis_genese_depth(&genese, PROFONDEUR).expect("amorçage A");
+    let etat_b = ProvedLedgerState::depuis_genese_depth(&genese, PROFONDEUR).expect("amorçage B");
+    let lot = wallet::synchro::MorceauHistorique::bloc_entier(
+        0,
+        0,
+        etat_a.tree.root(),
+        genese
+            .emissions
+            .iter()
+            .map(ledger::historique::Sortie::from)
+            .collect(),
+    );
+    payeur_a
+        .synchroniser(std::slice::from_ref(&lot))
+        .expect("rejeu A");
+    payeur_b
+        .synchroniser(std::slice::from_ref(&lot))
+        .expect("rejeu B");
+
+    let tx_a = payeur_a
+        .construire(&beneficiaire.adresse(), 300, 20)
+        .expect("tx de A");
+    let tx_b = payeur_b
+        .construire(&beneficiaire.adresse(), 200, 20)
+        .expect("tx de B");
+
+    let ecoute = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();
+    let adresse_b = ecoute.local_addr().unwrap();
+    let identite_transport_b = SigKeypair::generate();
+    let (fin_tx, fin_rx) = std::sync::mpsc::channel::<()>();
+
+    let serveur = std::thread::spawn(move || {
+        let mut rt = Runtime::new(Noeud::new(id_b, etat_b, [3u8; 32]));
+        let (flux, _) = ecoute.accept().unwrap();
+        rt.accepter(flux, &identite_transport_b).expect("handshake");
+
+        // B applique le bloc 1 de A…
+        let a_recu_h1 = attendre(
+            || {
+                rt.pomper(0);
+                rt.noeud().etat.hauteur() == 1
+            },
+            Duration::from_secs(60),
+        );
+        assert!(a_recu_h1, "B doit appliquer le bloc 1 scellé par A");
+
+        // …puis scelle la hauteur 2 : c'est SON tour.
+        rt.noeud_mut().soumettre(tx_b, 0).expect("admission chez B");
+        let (bloc2, actions) = rt.noeud_mut().sceller().expect("le tour de B");
+        assert_eq!(bloc2.hauteur, 2);
+        rt.executer(actions);
+
+        // B reste en vie (et pompe) jusqu'à ce que A ait confirmé la convergence.
+        let _ = attendre(
+            || {
+                rt.pomper(0);
+                fin_rx.try_recv().is_ok()
+            },
+            Duration::from_secs(60),
+        );
+        (
+            rt.noeud().etat.tree.root(),
+            rt.noeud().etat.tete(),
+            rt.noeud().etat.hauteur(),
+        )
+    });
+
+    let mut a = Runtime::new(Noeud::new(id_a, etat_a, [1u8; 32]));
+    a.connecter(adresse_b, &SigKeypair::generate())
+        .expect("handshake");
+
+    // A scelle la hauteur 1 : c'est son tour (autorité n° 0).
+    a.noeud_mut().soumettre(tx_a, 0).expect("admission chez A");
+    let (bloc1, actions) = a.noeud_mut().sceller().expect("le tour de A");
+    assert_eq!(bloc1.hauteur, 1);
+    assert!(bloc1.verifier_scellement(&id_a_pub), "scellé par A");
+    a.executer(actions);
+
+    // Puis A applique le bloc 2 de B, reçu par le fil.
+    let a_recu_h2 = attendre(
+        || {
+            a.pomper(0);
+            a.noeud().etat.hauteur() == 2
+        },
+        Duration::from_secs(60),
+    );
+    assert!(a_recu_h2, "A doit appliquer le bloc 2 scellé par B");
+    let _ = fin_tx.send(());
+
+    let (racine_b, tete_b, hauteur_b) = serveur.join().expect("thread B");
+    assert_eq!(hauteur_b, 2);
+    assert_eq!(
+        racine_b,
+        a.noeud().etat.tree.root(),
+        "même arbre après alternance"
+    );
+    assert_eq!(tete_b, a.noeud().etat.tete(), "même tête après alternance");
+}
+
 /// Le bloc scellé propage bien les ACTIONS attendues (diffusion, pas envoi ciblé).
 #[test]
 fn sceller_diffuse_plutot_que_cibler() {

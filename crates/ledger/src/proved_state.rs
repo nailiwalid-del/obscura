@@ -63,6 +63,8 @@ pub enum StateDecodeError {
     BadFrontier(FrontierDecodeError),
     /// Version de format inconnue — refusée, jamais réinterprétée.
     BadVersion(u8),
+    /// Autorité de scellement indécodable ou hors bornes.
+    BadAutorite,
 }
 
 /// Erreur de chargement d'un état depuis un fichier (`load`).
@@ -118,7 +120,10 @@ const _: () = assert!(RECENT_ROOTS_WINDOW > crate::bloc::MAX_TX_PAR_BLOC);
 /// avec une autre genèse sur un répertoire déjà peuplé passait inaperçu jusqu'au
 /// premier bloc refusé, un nœud sur la mauvaise chaîne étant indiscernable d'un nœud
 /// au repos.
-pub const VERSION_ETAT: u8 = 0x03;
+/// `0x04` : les AUTORITÉS de scellement entrent dans le dump (élection de
+/// producteur) — et `VERSION_BLOC` passant à 0x03, tous les identifiants de bloc
+/// changent : un dump antérieur porte une tête périmée, refusé plutôt que relu.
+pub const VERSION_ETAT: u8 = 0x04;
 
 pub struct ProvedLedgerState {
     pub tree: MerkleFrontier,
@@ -136,6 +141,13 @@ pub struct ProvedLedgerState {
     /// poser : « cet état appartient-il à la chaîne qu'on me demande de suivre ? »
     /// Sans ce champ, la réponse n'arrivait qu'au premier bloc refusé — en silence.
     genese: [u8; TAILLE_ID],
+    /// AUTORITÉS de scellement de la chaîne, copiées de la GENÈSE à l'amorçage.
+    ///
+    /// Liste VIDE = chaîne OUVERTE (tout nœud peut sceller — mode testnet local) ;
+    /// non vide = tour de rôle par hauteur, scellement exigé et vérifié par
+    /// `appliquer_bloc`. Sérialisée dans le dump d'état : un nœud rechargé doit
+    /// appliquer la même règle sans relire la genèse.
+    autorites: Vec<crypto::sig::SigPublicKey>,
     /// Historique des sorties — `None` par DÉFAUT.
     ///
     /// Un `Option` et pas un champ toujours présent : l'archivage est un rôle
@@ -159,6 +171,22 @@ pub enum BlocRefus {
     /// chaînage qui sont le cas normal d'un nœud en retard.
     #[error("{recues} émissions à la hauteur {hauteur} : seule la genèse peut émettre")]
     EmissionHorsGenese { hauteur: u64, recues: usize },
+    /// Autorités hors genèse : même nature que l'émission — aucun bloc valide n'en
+    /// porte à hauteur non nulle, sur aucune chaîne.
+    #[error("{recues} autorités à la hauteur {hauteur} : seule la genèse en déclare")]
+    AutoritesHorsGenese { hauteur: u64, recues: usize },
+    /// Chaîne à autorités, bloc NON signé : personne n'a le droit de sceller sans
+    /// prouver qu'il est le producteur du tour.
+    #[error("bloc de hauteur {hauteur} sans scellement : cette chaîne a des autorités")]
+    ScellementManquant { hauteur: u64 },
+    /// Signature absente de la BONNE clé : soit un producteur hors de son tour, soit
+    /// un tiers, soit une signature altérée. Faute non équivoque dans tous les cas.
+    #[error("scellement invalide à la hauteur {hauteur} (producteur attendu : n° {attendu})")]
+    ScellementInvalide { hauteur: u64, attendu: usize },
+    /// Chaîne OUVERTE, bloc signé : le scellement n'y a aucun sens, et l'accepter
+    /// rendrait deux encodages valides pour le même bloc (canonicité).
+    #[error("scellement présent sur une chaîne sans autorités")]
+    ScellementInattendu,
     #[error("transaction {index} refusée : {source}")]
     Transaction {
         index: usize,
@@ -185,6 +213,8 @@ pub enum GeneseRefus {
     TransactionsPresentes { recues: usize },
     #[error("{recues} émissions dans la genèse (borne : {borne})")]
     TropDEmissions { borne: usize, recues: usize },
+    #[error("{recues} autorités dans la genèse (borne : {borne})")]
+    TropDAutorites { borne: usize, recues: usize },
     #[error("émission {index} refusée : {source}")]
     Emission {
         index: usize,
@@ -293,6 +323,14 @@ impl ProvedLedgerState {
             etat.mint(&emission.commitment)
                 .map_err(|source| GeneseRefus::Emission { index, source })?;
         }
+        // Borne re-vérifiée pour la même raison que les émissions : champs publics.
+        if genese.autorites.len() > crate::bloc::MAX_AUTORITES {
+            return Err(GeneseRefus::TropDAutorites {
+                borne: crate::bloc::MAX_AUTORITES,
+                recues: genese.autorites.len(),
+            });
+        }
+        etat.autorites = genese.autorites.clone();
         etat.tete = genese.id();
         etat.genese = genese.id();
         etat.hauteur = 0;
@@ -317,6 +355,7 @@ impl ProvedLedgerState {
             tete: Bloc::genese().id(),
             hauteur: 0,
             genese: Bloc::genese().id(),
+            autorites: Vec::new(),
             historique: None,
         };
         let root = s.tree.root();
@@ -434,6 +473,22 @@ impl ProvedLedgerState {
         self.genese
     }
 
+    /// Autorités de scellement de la chaîne (vide = chaîne OUVERTE).
+    pub fn autorites(&self) -> &[crypto::sig::SigPublicKey] {
+        &self.autorites
+    }
+
+    /// Producteur LÉGITIME de la hauteur `hauteur` : tour de rôle
+    /// `autorites[(hauteur − 1) mod n]`. `None` sur une chaîne ouverte, ou pour la
+    /// hauteur 0 (la genèse n'a pas de producteur, elle amorce).
+    pub fn producteur_attendu(&self, hauteur: u64) -> Option<&crypto::sig::SigPublicKey> {
+        if self.autorites.is_empty() || hauteur == 0 {
+            return None;
+        }
+        let i = ((hauteur - 1) % self.autorites.len() as u64) as usize;
+        Some(&self.autorites[i])
+    }
+
     /// Historique des sorties, si ce nœud tient le rôle d'archiviste.
     ///
     /// `None` est le cas NORMAL : l'archivage est optionnel, et un nœud qui rend `None`
@@ -539,6 +594,14 @@ impl ProvedLedgerState {
                 recues: bloc.emissions.len(),
             });
         }
+        // Même nature que l'émission : des autorités hors genèse sont invalides pour
+        // tout le monde, à toute hauteur, sur toute chaîne — refus AVANT le chaînage.
+        if bloc.hauteur > 0 && !bloc.autorites.is_empty() {
+            return Err(BlocRefus::AutoritesHorsGenese {
+                hauteur: bloc.hauteur,
+                recues: bloc.autorites.len(),
+            });
+        }
         if bloc.parent != self.tete {
             return Err(BlocRefus::ParentInattendu);
         }
@@ -557,6 +620,34 @@ impl ProvedLedgerState {
                 borne: crate::bloc::MAX_TX_PAR_BLOC,
                 recues: bloc.transactions.len(),
             });
+        }
+
+        // ÉLECTION DE PRODUCTEUR — après le chaînage (un bloc d'une autre chaîne
+        // tombe en `ParentInattendu`, sans accusation), avant tout coût STARK (une
+        // vérification de signature contre ~4 ms × n transactions). Chaîne OUVERTE :
+        // un scellement n'y a aucun sens et l'accepter donnerait deux encodages
+        // valides du même bloc. Chaîne À AUTORITÉS : signature du producteur du TOUR
+        // exigée — c'est ce qui fait de « qui scelle » une règle et non une course.
+        match self.producteur_attendu(bloc.hauteur) {
+            None => {
+                if bloc.scellement.is_some() {
+                    return Err(BlocRefus::ScellementInattendu);
+                }
+            }
+            Some(attendu) => {
+                if bloc.scellement.is_none() {
+                    return Err(BlocRefus::ScellementManquant {
+                        hauteur: bloc.hauteur,
+                    });
+                }
+                if !bloc.verifier_scellement(attendu) {
+                    let attendu = ((bloc.hauteur - 1) % self.autorites.len() as u64) as usize;
+                    return Err(BlocRefus::ScellementInvalide {
+                        hauteur: bloc.hauteur,
+                        attendu,
+                    });
+                }
+            }
         }
 
         // Instantané de ce qui n'est pas restaurable autrement (la frontier est
@@ -651,6 +742,15 @@ impl ProvedLedgerState {
         for r in &self.roots_order {
             b.extend_from_slice(r);
         }
+
+        // Autorités de scellement (0x04) : un nœud rechargé doit appliquer la même
+        // règle d'élection sans relire la genèse.
+        b.extend_from_slice(&(self.autorites.len() as u32).to_le_bytes());
+        for pk in &self.autorites {
+            let o = pk.to_bytes();
+            b.extend_from_slice(&(o.len() as u32).to_le_bytes());
+            b.extend_from_slice(&o);
+        }
         b
     }
 
@@ -702,6 +802,21 @@ impl ProvedLedgerState {
             recent_roots.insert(d);
         }
 
+        let a = u32::from_le_bytes(take(b, &mut pos, 4)?.try_into().unwrap()) as usize;
+        if a > crate::bloc::MAX_AUTORITES {
+            return Err(StateDecodeError::BadAutorite);
+        }
+        let mut autorites = Vec::with_capacity(a);
+        for _ in 0..a {
+            let lp = u32::from_le_bytes(take(b, &mut pos, 4)?.try_into().unwrap()) as usize;
+            if lp > crate::bloc::TAILLE_AUTORITE_MAX {
+                return Err(StateDecodeError::BadAutorite);
+            }
+            let pk = crypto::sig::SigPublicKey::from_bytes(take(b, &mut pos, lp)?)
+                .map_err(|_| StateDecodeError::BadAutorite)?;
+            autorites.push(pk);
+        }
+
         if pos != b.len() {
             return Err(StateDecodeError::TrailingBytes);
         }
@@ -713,6 +828,7 @@ impl ProvedLedgerState {
             tete,
             hauteur,
             genese,
+            autorites,
             // L'historique vit dans un fichier SÉPARÉ et se rattache par
             // `adopter_historique`, qui le confronte à cet état. L'embarquer ici
             // aurait forcé TOUS les nœuds à porter un dump de plusieurs Gio pour un
@@ -780,6 +896,154 @@ mod tests {
         } else {
             ProvedLedgerState::depuis_genese_depth(&genese, depth).expect("amorçage")
         }
+    }
+
+    /// Chaîne à DEUX autorités (a, b) : état amorcé sur leur genèse, profondeur 4.
+    fn chaine_a_deux_autorites() -> (
+        crypto::sig::SigKeypair,
+        crypto::sig::SigKeypair,
+        ProvedLedgerState,
+    ) {
+        let a = crypto::sig::SigKeypair::generate();
+        let b = crypto::sig::SigKeypair::generate();
+        let genese = crate::bloc::Bloc::genese_avec_autorites(
+            Vec::new(),
+            vec![a.public.clone(), b.public.clone()],
+        )
+        .expect("genèse bornée");
+        let etat = ProvedLedgerState::depuis_genese_depth(&genese, DEPTH).expect("amorçage");
+        (a, b, etat)
+    }
+
+    /// Chaîne À AUTORITÉS : un bloc non signé, signé hors tour ou signé par un tiers
+    /// est REFUSÉ ; le bon producteur passe, et le tour TOURNE (a, b, a, …).
+    #[test]
+    fn scellement_exige_et_rotation_du_producteur() {
+        let (a, b, mut etat) = chaine_a_deux_autorites();
+
+        // Non signé : refusé, et l'état n'a pas bougé.
+        let nu = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new()).unwrap();
+        assert!(matches!(
+            etat.appliquer_bloc(&nu),
+            Err(BlocRefus::ScellementManquant { hauteur: 1 })
+        ));
+        assert_eq!(etat.hauteur(), 0);
+
+        // Signé par la MAUVAISE autorité (b, alors que la hauteur 1 revient à a).
+        let mut hors_tour = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new()).unwrap();
+        hors_tour.signer_scellement(&b);
+        assert!(matches!(
+            etat.appliquer_bloc(&hors_tour),
+            Err(BlocRefus::ScellementInvalide {
+                hauteur: 1,
+                attendu: 0
+            })
+        ));
+
+        // Signé par un TIERS hors liste.
+        let mut tiers = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new()).unwrap();
+        tiers.signer_scellement(&crypto::sig::SigKeypair::generate());
+        assert!(matches!(
+            etat.appliquer_bloc(&tiers),
+            Err(BlocRefus::ScellementInvalide { .. })
+        ));
+
+        // Le BON producteur, trois hauteurs de suite : a (h=1), b (h=2), a (h=3).
+        for (h, producteur) in [(1u64, &a), (2, &b), (3, &a)] {
+            let mut bloc = crate::bloc::Bloc::sceller(&etat.tete(), h, Vec::new()).unwrap();
+            bloc.signer_scellement(producteur);
+            etat.appliquer_bloc(&bloc)
+                .unwrap_or_else(|e| panic!("hauteur {h} par le bon producteur : {e}"));
+            assert_eq!(etat.hauteur(), h);
+        }
+    }
+
+    /// Chaîne OUVERTE (aucune autorité) : un bloc signé est REFUSÉ — accepter deux
+    /// encodages (signé/non signé) pour le même bloc casserait la canonicité — et le
+    /// comportement historique (bloc nu accepté) est inchangé.
+    #[test]
+    fn chaine_ouverte_refuse_un_scellement() {
+        let mut etat = ProvedLedgerState::with_depth(DEPTH);
+        let mut signe = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new()).unwrap();
+        signe.signer_scellement(&crypto::sig::SigKeypair::generate());
+        assert!(matches!(
+            etat.appliquer_bloc(&signe),
+            Err(BlocRefus::ScellementInattendu)
+        ));
+
+        let nu = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new()).unwrap();
+        etat.appliquer_bloc(&nu)
+            .expect("chaîne ouverte : bloc nu accepté");
+    }
+
+    /// Des AUTORITÉS hors genèse sont refusées comme une émission hors genèse :
+    /// aucun bloc valide n'en porte à hauteur non nulle, sur aucune chaîne.
+    #[test]
+    fn autorites_hors_genese_refusees() {
+        let (_a, _b, mut etat) = chaine_a_deux_autorites();
+        let hostile = crate::bloc::Bloc {
+            parent: etat.tete(),
+            hauteur: 1,
+            transactions: Vec::new(),
+            emissions: Vec::new(),
+            autorites: vec![crypto::sig::SigKeypair::generate().public],
+            extension: Vec::new(),
+            scellement: None,
+        };
+        assert!(matches!(
+            etat.appliquer_bloc(&hostile),
+            Err(BlocRefus::AutoritesHorsGenese {
+                hauteur: 1,
+                recues: 1
+            })
+        ));
+    }
+
+    /// L'état SÉRIALISÉ porte ses autorités : un nœud rechargé applique la même
+    /// règle sans relire la genèse.
+    #[test]
+    fn letat_recharge_garde_ses_autorites() {
+        let (a, _b, etat) = chaine_a_deux_autorites();
+        let mut relu = ProvedLedgerState::from_bytes(&etat.to_bytes()).expect("état relisible");
+        assert_eq!(
+            relu.autorites().len(),
+            2,
+            "les autorités doivent survivre au dump"
+        );
+
+        let nu = crate::bloc::Bloc::sceller(&relu.tete(), 1, Vec::new()).unwrap();
+        assert!(
+            matches!(
+                relu.appliquer_bloc(&nu),
+                Err(BlocRefus::ScellementManquant { .. })
+            ),
+            "l'état rechargé doit encore exiger le scellement"
+        );
+        let mut bon = crate::bloc::Bloc::sceller(&relu.tete(), 1, Vec::new()).unwrap();
+        bon.signer_scellement(&a);
+        relu.appliquer_bloc(&bon)
+            .expect("bon producteur accepté après rechargement");
+    }
+
+    /// La borne d'autorités est re-vérifiée à l'AMORÇAGE (champs publics).
+    #[test]
+    fn amorcage_borne_les_autorites() {
+        let pk = crypto::sig::SigKeypair::generate().public;
+        let hostile = crate::bloc::Bloc {
+            parent: crate::bloc::PAS_DE_PARENT,
+            hauteur: 0,
+            transactions: Vec::new(),
+            emissions: Vec::new(),
+            autorites: (0..crate::bloc::MAX_AUTORITES + 1)
+                .map(|_| pk.clone())
+                .collect(),
+            extension: Vec::new(),
+            scellement: None,
+        };
+        assert!(matches!(
+            ProvedLedgerState::depuis_genese_depth(&hostile, DEPTH),
+            Err(GeneseRefus::TropDAutorites { .. })
+        ));
     }
 
     /// Prépare un état avec 2 notes d'entrée émises et construit une tx équilibrée.
@@ -1409,6 +1673,9 @@ mod tests {
             hauteur: 1,
             transactions: trop,
             emissions: Vec::new(),
+            autorites: Vec::new(),
+            extension: Vec::new(),
+            scellement: None,
         };
         assert!(matches!(
             etat.appliquer_bloc(&bloc),
@@ -1467,17 +1734,22 @@ mod tests {
     fn dump_dautre_version_refuse() {
         let etat = ProvedLedgerState::with_depth(4);
         let mut octets = etat.to_bytes();
-        octets[0] = 0x04; // version FUTURE
+        octets[0] = 0x05; // version FUTURE
         assert!(matches!(
             ProvedLedgerState::from_bytes(&octets),
-            Err(StateDecodeError::BadVersion(0x04))
+            Err(StateDecodeError::BadVersion(0x05))
         ));
-        // Version PRÉCÉDENTE (0x02, sans genèse gravée) : refusée aussi — la relire
-        // en 0x03 décalerait tous les champs suivants de 64 octets.
+        // Versions PRÉCÉDENTES : refusées aussi — le 0x02 n'a pas de genèse gravée,
+        // le 0x03 pas d'autorités ; les relire décalerait les champs suivants.
         octets[0] = 0x02;
         assert!(matches!(
             ProvedLedgerState::from_bytes(&octets),
             Err(StateDecodeError::BadVersion(0x02))
+        ));
+        octets[0] = 0x03;
+        assert!(matches!(
+            ProvedLedgerState::from_bytes(&octets),
+            Err(StateDecodeError::BadVersion(0x03))
         ));
         // Et un dump de la version PRÉCÉDENTE (0x01) : refusé aussi. Son champ `tete`
         // porte l'identifiant d'une genèse calculée sur l'ancien encodage de bloc ;

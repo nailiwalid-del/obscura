@@ -56,8 +56,18 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   jour d'une coinbase. Une émission sans bénéficiaire porte une enveloppe FACTICE
   chiffrée vers une clé KEM jetable (`proved_wallet::emission_factice`), de longueur
   identique à une vraie. `MAX_EMISSIONS_PAR_BLOC` vérifiée au décodage ET dans
-  `Bloc::genese_avec`. `VERSION_BLOC` = 0x02 et `VERSION_ETAT` = 0x02 (l'identifiant de
-  la genèse vide change, donc un ancien dump porte une tête périmée : refusé, pas relu).
+  `Bloc::genese_avec`. `VERSION_BLOC` = 0x03 et `VERSION_ETAT` = 0x04 (chaque bump
+  change l'identifiant de la genèse vide, donc un ancien dump porte une tête périmée :
+  refusé, pas relu). **Élection de producteur (v0x03)** : la genèse peut graver des
+  AUTORITÉS (`genese_avec_autorites`, ≤ 64, dans l'identifiant — deux listes = deux
+  chaînes) ; producteur légitime de h = `autorites[(h−1) mod n]`, bloc signé
+  (`signer_scellement`, signature sur l'ID, hors de l'id mais sur le fil), vérifié par
+  `appliquer_bloc` APRÈS le chaînage (bloc d'une autre chaîne = `ParentInattendu`, pas
+  d'accusation) et AVANT tout STARK. Scellement manquant/hors tour/étranger = faute
+  sanctionnée ; genèse SANS autorités = chaîne OUVERTE (défaut, testnet local — un
+  scellement y est refusé, canonicité). Liveness = option A ASSUMÉE : une autorité
+  absente fige la chaîne à son tour. Coinbase toujours hors périmètre (l'élection en
+  est le prérequis, pas le début).
   `ProvedLedgerState::appliquer_bloc` est ATOMIQUE — un bloc à moitié appliqué
   placerait le nœud dans un état qu'AUCUN autre n'a, et il refuserait ensuite tout
   pour « ancre inconnue » sans que rien ne désigne la cause. Restauration bon marché
@@ -79,7 +89,7 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   ⚠️ **Décision tranchée** : `racine_apres`/`fin` n'entrent PAS dans `Bloc::to_bytes`,
   parce que le bloc engage DÉJÀ ses sorties (ses transactions entières y sont, donc
   leurs `output_commitments` et `enc_notes` dans l'ordre) — ce sont des valeurs DÉRIVÉES,
-  les inscrire ne coûterait qu'un `VERSION_BLOC` 0x03 et un scellement spéculatif pour
+  les inscrire ne coûterait qu'un bump de `VERSION_BLOC` et un scellement spéculatif pour
   zéro bit d'authentification. Ce qui reste ouvert est écrit : un wallet qui prend
   historique ET identifiants de blocs au MÊME nœud n'a rien vérifié.
   Coût chiffré : ≈1,4 Kio/sortie, ≈1,4 Mio/bloc plein, ≈12 Gio/jour sous charge ; jamais
@@ -227,7 +237,13 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   chaîné = AUCUNE sanction — c'est le cas normal de deux scellements simultanés ou
   d'un retard ; seule une tx invalide dans un bloc bien chaîné pénalise).
   `obscura-node --sceller <ms>`, **OFF par défaut** : produire des blocs est une
-  décision d'opérateur. ⚠️ Aucune élection de producteur — ordre CONVENU, pas DÉFENDU.
+  décision d'opérateur. **Élection de producteur CÂBLÉE** : sur une chaîne à
+  autorités, `Noeud::sceller` refuse hors de son tour (rien ne part) et SIGNE à son
+  tour de l'identité persistante du nœud (plus une identité jetable — une autorité
+  re-clefée à chaque démarrage ne serait jamais reconnue) ; `sur_bloc` sanctionne un
+  scellement manquant/hors tour/étranger comme une transaction invalide. Chaîne
+  ouverte (genèse sans autorités) : comportement historique, ordre CONVENU pas
+  DÉFENDU. Testé sur sockets (`finalite.rs::deux_autorites_alternent_sur_sockets`).
   **Corrections issues de la revue adversariale** (détail : docs/THREAT_MODEL.md,
   « Défauts trouvés par revue adversariale ») : `sceller` PLAFONNE à MAX_TX_PAR_BLOC
   ET à MAX_OCTETS_BLOC (une borne de `from_bytes` doit exister aussi dans le
@@ -254,7 +270,8 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   ÉCHEC FRANC si absent/corrompu — aucun repli, un nœud mal amorcé est indiscernable
   d'un nœud neuf sain). Sans l'option : genèse VIDE par défaut, AFFICHÉE. L'identifiant
   de genèse (8 o hex) est imprimé au démarrage pour être comparé entre opérateurs.
-  `persistance::charger_ou_amorcer_etat(&genese)`. L'état GRAVE sa genèse (`VERSION_ETAT` 0x03) :
+  `persistance::charger_ou_amorcer_etat(&genese)`. L'état GRAVE sa genèse (`VERSION_ETAT` 0x03,
+  puis 0x04 avec les autorités de scellement) :
   un répertoire peuplé par une AUTRE chaîne est REFUSÉ au démarrage avec les deux
   identifiants (`GeneseDifferente`) — plus de divergence silencieuse par mauvais
   `--donnees`.

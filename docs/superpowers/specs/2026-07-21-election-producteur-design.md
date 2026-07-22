@@ -3,8 +3,12 @@
 **Date :** 2026-07-21
 **Contexte :** dernier verrou avant un déploiement public (la preuve est faite,
 la gouvernance du scellement ne l'est pas) ; prérequis de toute coinbase.
-**Statut :** PROPOSITION — écrite en autonomie, **à trancher par l'utilisateur**
-avant toute ligne de code. Rien ici n'est implémenté.
+**Statut :** approuvé (« ok go », 2026-07-22) et IMPLÉMENTÉ — option A retenue
+pour la liveness (la chaîne attend). Écarts d'implémentation par rapport au texte :
+une genèse SANS autorités reste une chaîne OUVERTE (comportement historique du
+testnet local, un scellement y est refusé pour préserver la canonicité) ;
+`VERSION_ETAT` est passé à 0x04 (les autorités entrent dans le dump d'état).
+Tests : unités ledger/node + `deux_autorites_alternent_sur_sockets` (finalite.rs).
 
 ## Le problème, exactement
 

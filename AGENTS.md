@@ -200,7 +200,9 @@ Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscu
   chaîné = AUCUNE sanction — c'est le cas normal de deux scellements simultanés ou
   d'un retard ; seule une tx invalide dans un bloc bien chaîné pénalise).
   `obscura-node --sceller <ms>`, **OFF par défaut** : produire des blocs est une
-  décision d'opérateur. ⚠️ Aucune élection de producteur — ordre CONVENU, pas DÉFENDU.
+  décision d'opérateur. **Élection de producteur CÂBLÉE** (autorités en genèse, tour
+  de rôle, bloc signé — cf. THREAT_MODEL « Qui a autorité pour sceller ») ; une
+  genèse SANS autorités reste une chaîne OUVERTE : ordre CONVENU, pas DÉFENDU.
   **Corrections issues de la revue adversariale** (détail : docs/THREAT_MODEL.md,
   « Défauts trouvés par revue adversariale ») : `sceller` PLAFONNE à MAX_TX_PAR_BLOC
   (une borne de `from_bytes` doit exister aussi dans le CONSTRUCTEUR, sinon elle ne

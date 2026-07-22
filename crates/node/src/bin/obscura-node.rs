@@ -50,10 +50,13 @@ fn usage() -> ! {
     eprintln!("    amorcés sur des genèses différentes se refusent tous leurs blocs.");
     eprintln!("    L'identifiant imprimé au démarrage est fait pour être COMPARÉ.");
     eprintln!();
-    eprintln!("⚠️  --sceller n'est protégé par AUCUNE élection de producteur : tout nœud");
-    eprintln!("    qui l'active fabrique des blocs. L'ordre obtenu est CONVENU entre");
-    eprintln!("    participants coopératifs, pas DÉFENDU contre un adversaire. Testnet");
-    eprintln!("    local uniquement.");
+    eprintln!("⚠️  --sceller : sur une chaîne dont la genèse déclare des AUTORITÉS, le");
+    eprintln!("    nœud ne scelle qu'à SON tour (tour de rôle par hauteur, bloc signé,");
+    eprintln!("    équivocation = faute prouvable). Sur une chaîne OUVERTE (genèse sans");
+    eprintln!("    autorités, le défaut), tout nœud qui l'active fabrique des blocs :");
+    eprintln!("    ordre CONVENU, pas DÉFENDU — testnet local uniquement.");
+    eprintln!("    ⚠️  LIVENESS (option A assumée) : une autorité absente FIGE la chaîne");
+    eprintln!("    à son tour ; les transactions attendent au mempool, rien n'est perdu.");
     std::process::exit(2)
 }
 
@@ -216,10 +219,38 @@ fn main() {
         genese.emissions.len(),
         hex::encode(&etat.tete()[..8])
     );
+    // ÉLECTION DE PRODUCTEUR : sur une chaîne à autorités, dire tout de suite qui
+    // nous sommes — découvrir au premier tour de scellement qu'on n'est pas
+    // autorité serait un silence inexplicable.
+    let notre_rang = etat
+        .autorites()
+        .iter()
+        .position(|pk| pk.to_bytes() == identite.public.to_bytes());
+    if !etat.autorites().is_empty() {
+        match notre_rang {
+            Some(i) => println!(
+                "chaîne à {} autorités — cette identité est l'autorité n° {i}",
+                etat.autorites().len()
+            ),
+            None => println!(
+                "chaîne à {} autorités — cette identité N'EN EST PAS une",
+                etat.autorites().len()
+            ),
+        }
+    }
     match sceller_ms {
         Some(ms) => {
             println!("scellement ACTIVÉ toutes les {ms} ms");
-            println!("⚠️  aucune élection de producteur : ordre convenu, pas défendu");
+            if etat.autorites().is_empty() {
+                println!("⚠️  chaîne OUVERTE, aucune élection de producteur : ordre convenu, pas défendu");
+            } else if notre_rang.is_none() {
+                println!(
+                    "⚠️  --sceller sans être autorité : AUCUN bloc ne sera produit (le nœud\n\
+                     \x20   refuse de sceller hors de son tour, et il n'a pas de tour)"
+                );
+            } else {
+                println!("élection par tour de rôle : ce nœud ne scelle qu'à son tour");
+            }
         }
         None => println!("scellement désactivé (--sceller <ms> pour l'activer)"),
     }
@@ -227,7 +258,17 @@ fn main() {
     let mut secret_dandelion = [0u8; 32];
     rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut secret_dandelion);
 
-    let mut rt = Runtime::new(Noeud::new(SigKeypair::generate(), etat, secret_dandelion));
+    // Le Noeud reçoit l'identité PERSISTANTE (recopiée), pas une identité jetable :
+    // c'est elle qui signe les scellements, et une autorité qui signerait d'une clé
+    // neuve à chaque démarrage ne serait jamais reconnue.
+    let identite_noeud = match SigKeypair::from_bytes_secret(&identite.to_bytes_secret()) {
+        Ok(k) => k,
+        Err(_) => {
+            eprintln!("recopie de l'identité impossible (bug interne)");
+            std::process::exit(1);
+        }
+    };
+    let mut rt = Runtime::new(Noeud::new(identite_noeud, etat, secret_dandelion));
 
     let listener = match TcpListener::bind(adresse_ecoute) {
         Ok(l) => l,
