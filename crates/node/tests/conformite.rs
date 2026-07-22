@@ -13,6 +13,14 @@
 //!
 //! Le générateur (`generer_la_fixture`, `#[ignore]`) produit les fichiers ; il
 //! n'est lancé qu'à la main, et son résultat est versionné.
+//!
+//! # v2 — pourquoi la v1 a disparu
+//!
+//! `VERSION_BLOC 0x04` (ADR J1 : vue + certificat de quorum) change l'identifiant
+//! de genèse. La fixture v1 est devenue invalide **par construction**, et son
+//! échec a été la PREMIÈRE chose que le changement de format a produite — c'est
+//! exactement ce pour quoi elle existe. Une v2 datée plutôt qu'un écrasement :
+//! le remplacement doit rester visible dans l'historique.
 
 use crypto::sig::SigKeypair;
 use ledger::bloc::Bloc;
@@ -20,7 +28,7 @@ use ledger::proved_state::ProvedLedgerState;
 use std::path::PathBuf;
 
 fn racine_fixture() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/fixtures/conformite-v1")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/fixtures/conformite-v2")
 }
 
 fn lire(nom: &str) -> Vec<u8> {

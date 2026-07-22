@@ -999,6 +999,7 @@ mod tests {
     fn autorites_hors_genese_refusees() {
         let (_a, _b, mut etat) = chaine_a_deux_autorites();
         let hostile = crate::bloc::Bloc {
+            vue: 0,
             parent: etat.tete(),
             hauteur: 1,
             transactions: Vec::new(),
@@ -1047,6 +1048,7 @@ mod tests {
     fn amorcage_borne_les_autorites() {
         let pk = crypto::sig::SigKeypair::generate().public;
         let hostile = crate::bloc::Bloc {
+            vue: 0,
             parent: crate::bloc::PAS_DE_PARENT,
             hauteur: 0,
             transactions: Vec::new(),
@@ -1686,6 +1688,7 @@ mod tests {
         // pair HOSTILE, qui n'emprunte évidemment pas notre constructeur — c'est le
         // chemin d'APPLICATION qu'on veut éprouver ici.
         let bloc = crate::bloc::Bloc {
+            vue: 0,
             parent: etat.tete(),
             hauteur: 1,
             transactions: trop,

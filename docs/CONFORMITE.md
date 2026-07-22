@@ -44,7 +44,7 @@ tests unitaires de `crates/crypto`.
 
 ## 2. Consensus
 
-Fixture rejouable : [`docs/fixtures/conformite-v1/`](fixtures/conformite-v1/README.md).
+Fixture rejouable : [`docs/fixtures/conformite-v2/`](fixtures/conformite-v2/README.md).
 
 ```bash
 cargo test -p node --test conformite

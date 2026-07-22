@@ -400,9 +400,15 @@ mod tests {
         // Version RÉELLE du bloc, pas un littéral : un octet recopié en dur ici a
         // déjà cassé ce test le jour où le format de bloc a changé, sans que rien
         // n'ait bougé du côté du protocole applicatif.
+        //
+        // ⚠️ La constante ne suffit PAS : ce test reconstruit l'EN-TÊTE à la main,
+        // donc tout champ ajouté au bloc doit être ajouté ici aussi. La vue (0x04)
+        // en est le second exemple — sans elle, le compteur de transactions se
+        // retrouvait lu comme une vue, et le test échouait pour la mauvaise raison.
         let mut b = vec![TAG_BLOC, ledger::bloc::VERSION_BLOC];
         b.extend_from_slice(&[0u8; 64]); // parent
         b.extend_from_slice(&0u64.to_le_bytes()); // hauteur
+        b.extend_from_slice(&0u32.to_le_bytes()); // vue
         b.extend_from_slice(&1_000_000u32.to_le_bytes()); // n hors borne
         assert!(matches!(
             Message::from_bytes(&b),
