@@ -380,17 +380,48 @@ impl Noeud {
             Bloc::sceller(&self.etat.tete(), self.etat.hauteur() + 1, transactions).ok()?;
         if doit_signer {
             bloc.signer_scellement(&self.identite);
-            // NOTRE VOTE (ADR J1). Sans lui, on produirait un bloc que nous-mêmes
-            // refuserions pour quorum insuffisant — et qu'aucun pair n'accepterait.
-            //
-            // ⚠️ À `n ≥ 4`, le quorum vaut `2f+1 ≥ 3` : notre seul vote NE SUFFIT
-            // PAS, et `appliquer_bloc` juste en dessous rejettera le bloc. C'est le
-            // comportement attendu de J1-a — rassembler les votes des autres est le
-            // travail de J1-b. À `n ≤ 3` (`f = 0`, quorum 1), l'auto-vote suffit et
-            // la chaîne avance.
+            // NOTRE VOTE. Il compte dans le quorum comme celui de n'importe quelle
+            // autre autorité — nous ne nous accordons aucun privilège.
             let index =
                 ((self.etat.hauteur() + vue as u64) % self.etat.autorites().len() as u64) as usize;
             bloc.signer_vote(index, &self.identite);
+
+            // Le vote que NOUS émettons obéit à la même règle de sûreté que ceux des
+            // autres : on ne propose pas à une position déjà promise ailleurs.
+            let id = bloc.id();
+            if !self.votes.peut_voter(bloc.hauteur, vue, &id) {
+                return None;
+            }
+            self.votes.enregistrer(bloc.hauteur, vue, id);
+
+            // QUORUM 1 (n ≤ 3, donc f = 0) : notre vote suffit, on applique et on
+            // diffuse comme avant. AU-DELÀ, il faut PROPOSER et attendre les autres —
+            // c'est tout l'objet de J1-b1.
+            if self.etat.quorum_requis() > 1 {
+                self.proposition_en_cours = Some(
+                    Bloc::from_bytes(&bloc.to_bytes()).expect("bloc que nous venons de produire"),
+                );
+                self.votes_recus.clear();
+                self.votes_recus.entry(id).or_default().insert(
+                    index as u16,
+                    self.identite.sign(ledger::bloc::DOMAINE_VOTE, &id),
+                );
+
+                // Le bloc PROPOSÉ part SANS certificat : c'est ce qui le distingue
+                // d'un bloc à appliquer, et le décodeur refuse l'autre forme.
+                let mut propose =
+                    Bloc::from_bytes(&bloc.to_bytes()).expect("bloc que nous venons de produire");
+                propose.certificat = None;
+
+                // Les transactions restent au mempool : le bloc n'est pas final.
+                return Some((
+                    bloc,
+                    vec![
+                        Action::PersisterVotes(Box::new(self.votes.clone())),
+                        Action::Diffuser(Message::Proposition(Box::new(propose))),
+                    ],
+                ));
+            }
         }
         // On applique à NOTRE état avant de diffuser : diffuser un bloc qu'on n'a pas
         // su appliquer soi-même reviendrait à demander aux autres de nous croire.
