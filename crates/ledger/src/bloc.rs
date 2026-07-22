@@ -119,6 +119,14 @@ pub const MAX_AUTORITES: usize = 64;
 /// circulaire).
 pub const DOMAINE_SCELLEMENT: &str = "obscura/bloc/scellement/v1";
 
+/// Domaine de signature d'un VOTE de quorum (ADR J1).
+///
+/// ⚠️ DISTINCT de [`DOMAINE_SCELLEMENT`], et ce n'est pas cosmétique : les deux
+/// portent sur le MÊME identifiant de bloc. Sans domaines séparés, le scellement
+/// du producteur pourrait être compté comme l'un des votes du quorum, et `2f`
+/// votes réels suffiraient à en afficher `2f+1`.
+pub const DOMAINE_VOTE: &str = "obscura/bloc/vote/v1";
+
 /// Majorant du coût WIRE du champ scellement : 4 o de longueur + signature hybride
 /// (1 + 64 + 3293 = 3358 o en ed25519+dilithium3 round-3). Majoré à 4 Kio pour
 /// survivre à une migration FIPS sans recalibrer ; un test épingle la taille réelle.
@@ -229,6 +237,8 @@ pub enum BlocDecodeError {
     TropDAutorites,
     #[error("autorité indécodable ou hors bornes en position {0}")]
     AutoriteInvalide(usize),
+    #[error("certificat de quorum indécodable ou hors bornes")]
+    CertificatInvalide,
     #[error("scellement indécodable ou hors bornes")]
     ScellementInvalide,
     #[error(
@@ -269,6 +279,101 @@ pub struct Emission {
 }
 
 /// Un bloc : des transactions dans un ORDRE écrit, chaînées à un parent.
+/// Certificat de quorum : la preuve que `2f+1` autorités ont vu ce bloc à cette
+/// `(hauteur, vue)` (ADR J1).
+///
+/// # Le masque, et pourquoi il n'y a pas de liste d'index
+///
+/// Un bit mis = l'autorité de cet index a voté. Huit octets couvrent les 64
+/// autorités possibles, mais surtout : **les doublons deviennent structurellement
+/// impossibles**. Un bit est mis ou ne l'est pas. Avec une liste d'index, il
+/// faudrait dédupliquer — donc pouvoir se tromper, et compter deux fois le même
+/// votant pour atteindre le quorum.
+///
+/// # Pas d'agrégation
+///
+/// Aucune signature post-quantique n'offre l'agrégation : l'astuce des BFT
+/// modernes (BLS) repose sur des couplages, cassés par Shor. Le certificat pèse
+/// donc `popcount(masque) × 3374` octets, linéairement. C'est ce qui BORNE la
+/// taille du comité — cf. `examples/dimensionner-quorum.rs`.
+///
+/// Ni `Debug` ni `PartialEq` : `HybridSignature` ne les offre pas, et un
+/// certificat se compare par son masque et la validité de ses signatures, jamais
+/// par égalité structurelle.
+#[derive(Clone)]
+pub struct Certificat {
+    /// Bit `i` mis = l'autorité d'index `i` a voté.
+    pub masque: u64,
+    /// Une signature par bit mis, dans l'ORDRE CROISSANT des index.
+    pub signatures: Vec<HybridSignature>,
+}
+
+impl Certificat {
+    /// Index des votants, croissants et sans doublon par construction.
+    pub fn votants(&self) -> impl Iterator<Item = usize> + '_ {
+        let masque = self.masque;
+        (0..64).filter(move |i| masque & (1u64 << i) != 0)
+    }
+
+    /// Nombre de votants annoncés par le masque.
+    pub fn nombre_de_votants(&self) -> usize {
+        self.masque.count_ones() as usize
+    }
+
+    /// Encodage : `masque LE (8) ‖ [len(sigᵢ) LE ‖ sigᵢ]`.
+    ///
+    /// Le NOMBRE de signatures n'est pas encodé : il est DÉRIVÉ du masque. Un
+    /// décodeur qui accepterait les deux se ferait servir deux encodages du même
+    /// certificat, et la canonicité tomberait.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut b = self.masque.to_le_bytes().to_vec();
+        for sig in &self.signatures {
+            let o = sig.to_bytes();
+            b.extend_from_slice(&(o.len() as u32).to_le_bytes());
+            b.extend_from_slice(&o);
+        }
+        b
+    }
+
+    /// Décode, borné AVANT allocation : le nombre de signatures vient du masque,
+    /// lui-même borné par [`MAX_AUTORITES`].
+    pub fn from_bytes(b: &[u8]) -> Result<Self, BlocDecodeError> {
+        if b.len() < 8 {
+            return Err(BlocDecodeError::Tronque);
+        }
+        let masque = u64::from_le_bytes(b[..8].try_into().expect("8 octets"));
+        let attendu = masque.count_ones() as usize;
+        if attendu > MAX_AUTORITES {
+            return Err(BlocDecodeError::CertificatInvalide);
+        }
+        let mut signatures = Vec::with_capacity(attendu);
+        let mut pos = 8usize;
+        for _ in 0..attendu {
+            if pos + 4 > b.len() {
+                return Err(BlocDecodeError::Tronque);
+            }
+            let n = u32::from_le_bytes(b[pos..pos + 4].try_into().expect("4 octets")) as usize;
+            pos += 4;
+            if n == 0 || n > TAILLE_SCELLEMENT_MAX {
+                return Err(BlocDecodeError::CertificatInvalide);
+            }
+            let fin = pos.checked_add(n).ok_or(BlocDecodeError::Tronque)?;
+            if fin > b.len() {
+                return Err(BlocDecodeError::Tronque);
+            }
+            signatures.push(
+                HybridSignature::from_bytes(&b[pos..fin])
+                    .map_err(|_| BlocDecodeError::CertificatInvalide)?,
+            );
+            pos = fin;
+        }
+        if pos != b.len() {
+            return Err(BlocDecodeError::OctetsResiduels);
+        }
+        Ok(Certificat { masque, signatures })
+    }
+}
+
 pub struct Bloc {
     /// Identifiant du bloc parent, ou `PAS_DE_PARENT` pour la genèse.
     pub parent: [u8; TAILLE_ID],
@@ -312,6 +417,12 @@ pub struct Bloc {
     /// genèse (elle amorce, personne ne la produit) et sur une chaîne ouverte ;
     /// exigée par `appliquer_bloc` dès que la chaîne a des autorités.
     pub scellement: Option<HybridSignature>,
+    /// CERTIFICAT DE QUORUM (ADR J1). **Hors de l'identifiant**, comme le
+    /// scellement : une signature portant SUR l'identifiant ne peut pas y entrer.
+    ///
+    /// `None` sur une chaîne ouverte et sur la genèse — qui n'a pas de quorum,
+    /// elle amorce. Exigé par `appliquer_bloc` dès que la chaîne a des autorités.
+    pub certificat: Option<Certificat>,
 }
 
 impl Bloc {
@@ -330,6 +441,7 @@ impl Bloc {
             autorites: Vec::new(),
             extension: Vec::new(),
             scellement: None,
+            certificat: None,
         }
     }
 
@@ -376,6 +488,7 @@ impl Bloc {
             autorites,
             extension: Vec::new(),
             scellement: None,
+            certificat: None,
         })
     }
 
@@ -411,6 +524,7 @@ impl Bloc {
             vue: 0,
             extension: Vec::new(),
             scellement: None,
+            certificat: None,
         };
         // Budget vérifié SCELLEMENT COMPRIS : le champ pèse ~4,7 Kio une fois signé,
         // et la borne doit couvrir le bloc tel qu'il partira sur le fil.
@@ -496,6 +610,16 @@ impl Bloc {
         match &self.scellement {
             Some(sig) => {
                 let o = sig.to_bytes();
+                b.extend_from_slice(&(o.len() as u32).to_le_bytes());
+                b.extend_from_slice(&o);
+            }
+            None => b.extend_from_slice(&0u32.to_le_bytes()),
+        }
+        // Certificat de quorum, même style que le scellement : longueur préfixée,
+        // `0` = absent. HORS du corps, donc hors de l'identifiant.
+        match &self.certificat {
+            Some(c) => {
+                let o = c.to_bytes();
                 b.extend_from_slice(&(o.len() as u32).to_le_bytes());
                 b.extend_from_slice(&o);
             }
@@ -621,6 +745,17 @@ impl Bloc {
             )
         };
 
+        let lc = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap()) as usize;
+        let certificat = if lc == 0 {
+            None
+        } else {
+            // Majorant : masque + MAX_AUTORITES signatures longueur-préfixées.
+            if lc > 8 + MAX_AUTORITES * (4 + TAILLE_SCELLEMENT_MAX) {
+                return Err(BlocDecodeError::CertificatInvalide);
+            }
+            Some(Certificat::from_bytes(prendre(b, &mut pos, lc)?)?)
+        };
+
         if pos != b.len() {
             return Err(BlocDecodeError::OctetsResiduels);
         }
@@ -633,6 +768,7 @@ impl Bloc {
             autorites,
             extension: Vec::new(),
             scellement,
+            certificat,
         })
     }
 }
@@ -745,6 +881,7 @@ mod tests {
             autorites: trop,
             extension: Vec::new(),
             scellement: None,
+            certificat: None,
         };
         assert!(matches!(
             Bloc::from_bytes(&hostile.to_bytes()),
@@ -756,6 +893,101 @@ mod tests {
     /// aucun contenu n'est défini en 0x03, donc le moindre octet est refusé au
     /// décodage — fail-closed. Le jour où une version le remplit (coinbase,
     /// collecteur de frais), son contenu sera engagé sans déplacer un champ.
+    /// Certificat SYNTHÉTIQUE : signatures valides EN FORME, sans rapport avec un
+    /// bloc réel. Suffit à éprouver l'ENCODAGE ; la vérification est ailleurs.
+    fn certificat_de_test(masque: u64, combien: usize) -> Certificat {
+        let k = SigKeypair::generate();
+        Certificat {
+            masque,
+            signatures: (0..combien)
+                .map(|i| k.sign(DOMAINE_VOTE, &[i as u8]))
+                .collect(),
+        }
+    }
+
+    /// L'encodage est CANONIQUE : le nombre de signatures est DÉRIVÉ du masque,
+    /// jamais annoncé. Un décodeur qui accepterait les deux se ferait servir deux
+    /// encodages du même certificat.
+    #[test]
+    fn certificat_nombre_de_signatures_derive_du_masque() {
+        let c = certificat_de_test(0b1011, 3);
+        let relu = Certificat::from_bytes(&c.to_bytes()).expect("décodable");
+        assert_eq!(relu.masque, 0b1011);
+        assert_eq!(relu.signatures.len(), 3);
+        assert_eq!(relu.votants().collect::<Vec<_>>(), vec![0, 1, 3]);
+        assert_eq!(relu.nombre_de_votants(), 3);
+    }
+
+    /// Masque et nombre de signatures INCOHÉRENTS : le décodage échoue. Ici le
+    /// masque annonce deux votants alors que trois signatures suivent — les octets
+    /// résiduels trahissent le mensonge.
+    #[test]
+    fn certificat_incoherent_refuse() {
+        let c = certificat_de_test(0b1011, 3);
+        let mut o = c.to_bytes();
+        o[0] = 0b0011;
+        assert!(matches!(
+            Certificat::from_bytes(&o),
+            Err(BlocDecodeError::OctetsResiduels)
+        ));
+    }
+
+    /// Un masque désignant plus d'autorités que la borne : refusé AVANT allocation.
+    #[test]
+    fn certificat_masque_hors_borne_refuse() {
+        let mut o = u64::MAX.to_le_bytes().to_vec(); // 64 bits mis
+        o.extend_from_slice(&[0u8; 4]);
+        // 64 == MAX_AUTORITES, donc accepté au comptage puis tronqué faute de
+        // signatures. Le point du test est l'ABSENCE DE PANIQUE et l'absence
+        // d'allocation démesurée.
+        assert!(Certificat::from_bytes(&o).is_err());
+    }
+
+    /// Certificat vide, tronqué, ou à signature de longueur nulle : jamais de panique.
+    #[test]
+    fn certificats_malformes_sans_panique() {
+        assert!(matches!(
+            Certificat::from_bytes(&[]),
+            Err(BlocDecodeError::Tronque)
+        ));
+        assert!(matches!(
+            Certificat::from_bytes(&[0u8; 7]),
+            Err(BlocDecodeError::Tronque)
+        ));
+        // Masque à un votant, longueur de signature nulle.
+        let mut o = 1u64.to_le_bytes().to_vec();
+        o.extend_from_slice(&0u32.to_le_bytes());
+        assert!(matches!(
+            Certificat::from_bytes(&o),
+            Err(BlocDecodeError::CertificatInvalide)
+        ));
+    }
+
+    /// Un bloc PORTE son certificat sur le fil, et l'identifiant n'en dépend PAS —
+    /// une signature sur l'identifiant ne peut pas y entrer.
+    #[test]
+    fn certificat_sur_le_fil_hors_de_lidentifiant() {
+        let genese = Bloc::genese();
+        let mut b = Bloc::sceller(&genese.id(), 1, Vec::new()).unwrap();
+        let sans = b.id();
+        b.certificat = Some(certificat_de_test(0b111, 3));
+        assert_eq!(b.id(), sans, "le certificat n'entre pas dans l'identifiant");
+        let relu = Bloc::from_bytes(&b.to_bytes()).expect("décodable");
+        assert_eq!(relu.certificat.as_ref().map(|c| c.masque), Some(0b111));
+        assert_eq!(relu.id(), sans);
+    }
+
+    /// Un bloc SANS certificat reste décodable (genèse, chaîne ouverte).
+    #[test]
+    fn bloc_sans_certificat_decodable() {
+        let b = Bloc::genese();
+        assert!(b.certificat.is_none());
+        assert!(Bloc::from_bytes(&b.to_bytes())
+            .unwrap()
+            .certificat
+            .is_none());
+    }
+
     /// La VUE entre dans l'IDENTIFIANT : deux vues donnent deux blocs, jamais deux
     /// encodages du même. Sans cela, un producteur présenterait le même bloc sous
     /// deux vues et la canonicité — que tout le projet défend — tomberait.

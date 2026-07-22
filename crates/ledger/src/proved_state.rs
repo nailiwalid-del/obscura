@@ -1007,6 +1007,7 @@ mod tests {
             autorites: vec![crypto::sig::SigKeypair::generate().public],
             extension: Vec::new(),
             scellement: None,
+            certificat: None,
         };
         assert!(matches!(
             etat.appliquer_bloc(&hostile),
@@ -1058,6 +1059,7 @@ mod tests {
                 .collect(),
             extension: Vec::new(),
             scellement: None,
+            certificat: None,
         };
         assert!(matches!(
             ProvedLedgerState::depuis_genese_depth(&hostile, DEPTH),
@@ -1696,6 +1698,7 @@ mod tests {
             autorites: Vec::new(),
             extension: Vec::new(),
             scellement: None,
+            certificat: None,
         };
         assert!(matches!(
             etat.appliquer_bloc(&bloc),
