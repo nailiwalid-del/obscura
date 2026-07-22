@@ -33,7 +33,7 @@
 
 use crypto::sig::SigKeypair;
 use net::connexion::Connexion;
-use node::client::{synchroniser_par_connexion, Arret, ResumeSynchro};
+use node::client::{synchroniser_avec_temoin, synchroniser_par_connexion, Arret, ResumeSynchro};
 use node::message::Message;
 use proved_hash::merkle::CONSENSUS_DEPTH;
 use std::net::{SocketAddr, TcpStream};
@@ -120,7 +120,11 @@ fn usage() -> ! {
     eprintln!();
     eprintln!("  creer        --fichier <f>                   crée un wallet (refuse d'écraser)");
     eprintln!("  adresse      --fichier <f>                   affiche l'adresse à communiquer");
-    eprintln!("  synchroniser --fichier <f> --noeud <ip:port> rejoue l'historique, se met à jour");
+    eprintln!("  synchroniser --fichier <f> --noeud <ip:port> [--temoin <ip:port>]");
+    eprintln!("               rejoue l'historique et se met à jour. --temoin est un SECOND");
+    eprintln!("               nœud, d'un AUTRE opérateur, qui corrobore la racine de chaque");
+    eprintln!("               bloc : sans lui, --noeud peut taire un paiement en servant un");
+    eprintln!("               historique parfaitement cohérent.");
     eprintln!("  solde        --fichier <f>                   affiche le solde connu");
     eprintln!("  consolider   --fichier <f> --noeud <ip:port>  regroupe ses notes en une seule");
     eprintln!("  envoyer      --fichier <f> --a <adresse> \\");
@@ -143,6 +147,7 @@ struct Options {
     frais: u64,
     noeud: Option<SocketAddr>,
     noeud_synchro: Option<SocketAddr>,
+    temoin: Option<SocketAddr>,
 }
 
 fn lire_options(args: &[String]) -> Options {
@@ -153,6 +158,7 @@ fn lire_options(args: &[String]) -> Options {
         frais: 0,
         noeud: None,
         noeud_synchro: None,
+        temoin: None,
     };
     let mut i = 0;
     while i < args.len() {
@@ -184,6 +190,12 @@ fn lire_options(args: &[String]) -> Options {
                 o.noeud_synchro = Some(valeur.parse().unwrap_or_else(|_| {
                     abandon(&format!("adresse de nœud de synchro invalide : {valeur}"))
                 }))
+            }
+            "--temoin" => {
+                o.temoin =
+                    Some(valeur.parse().unwrap_or_else(|_| {
+                        abandon(&format!("adresse de témoin invalide : {valeur}"))
+                    }))
             }
             autre => {
                 eprintln!("option inconnue : {autre}");
@@ -350,26 +362,53 @@ fn synchroniser(fichier: &Path, o: &Options, protection: &ProtectionCli) {
     let depart = w.prochaine_hauteur();
     println!("synchronisation depuis la hauteur {depart} auprès de {noeud}…");
 
-    let mut connexion = connecter(noeud, DELAI_SILENCE);
-    let resume = synchroniser_par_connexion(&mut connexion, &mut w, CADENCE_DEMANDES, |p, w| {
-        // Enregistrement APRÈS chaque bloc rejoué : la position est dans le fichier, et
-        // un crash entre deux blocs doit laisser le wallet exactement à son dernier bloc,
-        // jamais en avance sur le disque.
-        w.enregistrer(fichier, protection.get())
-            .map_err(|e| e.to_string())?;
-        if p.entrees > 0 || p.notes_recues > 0 {
-            println!(
-                "  bloc {} : {} sorties, {} pour vous — solde {}",
-                p.hauteur, p.entrees, p.notes_recues, p.solde
-            );
+    // TÉMOIN : un second nœud, choisi INDÉPENDAMMENT, à qui l'on redemande la même
+    // hauteur pour comparer sa racine de fin de bloc. Sans lui, taire une sortie donne
+    // une chaîne parfaitement close que rien de local ne peut démentir.
+    let mut connexion_temoin = o.temoin.map(|t| {
+        if t == noeud {
+            abandon(
+                "--temoin identique à --noeud : un nœud ne se corrobore pas lui-même.
+                          Le témoin doit être opéré par quelqu'un d'autre — c'est tout
+                          ce qui fait sa valeur, et le protocole ne peut pas le vérifier.",
+            )
         }
-        Ok(())
+        println!("corroboration auprès du témoin {t}");
+        connecter(t, DELAI_SILENCE)
     });
+    if connexion_temoin.is_none() {
+        println!(
+            "⚠️  aucun --temoin : ce nœud peut TAIRE un paiement sans que rien ne le
+                 montre. La racine qu'il annonce sera cohérente avec ce qu'il sert."
+        );
+    }
 
-    rapporter_synchro(&w, &resume, depart);
+    let mut connexion = connecter(noeud, DELAI_SILENCE);
+    let resume = synchroniser_avec_temoin(
+        &mut connexion,
+        connexion_temoin.as_mut(),
+        &mut w,
+        CADENCE_DEMANDES,
+        |p, w| {
+            // Enregistrement APRÈS chaque bloc rejoué : la position est dans le fichier, et
+            // un crash entre deux blocs doit laisser le wallet exactement à son dernier bloc,
+            // jamais en avance sur le disque.
+            w.enregistrer(fichier, protection.get())
+                .map_err(|e| e.to_string())?;
+            if p.entrees > 0 || p.notes_recues > 0 {
+                println!(
+                    "  bloc {} : {} sorties, {} pour vous — solde {}",
+                    p.hauteur, p.entrees, p.notes_recues, p.solde
+                );
+            }
+            Ok(())
+        },
+    );
+
+    rapporter_synchro(&w, &resume, depart, o.temoin.is_some());
 }
 
-fn rapporter_synchro(w: &Wallet, resume: &ResumeSynchro, depart: u64) {
+fn rapporter_synchro(w: &Wallet, resume: &ResumeSynchro, depart: u64, corrobore: bool) {
     println!();
     println!(
         "{} blocs rejoués (hauteurs {}..{}), {} paiements reçus — solde {}",
@@ -380,7 +419,12 @@ fn rapporter_synchro(w: &Wallet, resume: &ResumeSynchro, depart: u64) {
         w.solde()
     );
     match &resume.arret {
-        Arret::AJour => println!("à jour."),
+        // La nuance n'est pas cosmétique : « à jour » sans témoin signifie seulement
+        // « ce nœud n'a plus rien à me dire », ce qu'un nœud qui omet dit aussi.
+        Arret::AJour if corrobore => println!("à jour — chaque bloc corroboré par le témoin."),
+        Arret::AJour => println!(
+            "à jour SELON CE NŒUD (aucun témoin : une omission de sa part reste invisible)."
+        ),
         Arret::LimiteAtteinte => println!(
             "⚠️  limite de travail atteinte pour cette invocation : relancez\n\
              \x20   `synchroniser` pour continuer."
@@ -390,6 +434,17 @@ fn rapporter_synchro(w: &Wallet, resume: &ResumeSynchro, depart: u64) {
              \x20        Les blocs déjà rejoués sont enregistrés. Réessayez, au besoin\n\
              \x20        contre un autre nœud."
         )),
+        Arret::Desaccord(raison) => abandon(&format!(
+            "DÉSACCORD ENTRE NŒUDS : {raison}
+                      Rien n'a été appliqué pour ce bloc. Un des deux sert un historique
+                      faux ; comparez avec un TROISIÈME nœud plutôt que de choisir au
+                      hasard, et n'utilisez pas le solde affiché avant d'avoir tranché."
+        )),
+        Arret::TemoinMuet => println!(
+            "⚠️  le témoin n'a pas répondu : ce bloc n'a PAS été appliqué.
+                 Ce n'est pas un accord — un nœud qui n'archive pas, ou dont le
+                 crédit est épuisé, se tait. Relancez, ou choisissez un autre témoin."
+        ),
         Arret::Persistance(e) => abandon(&format!(
             "enregistrement du wallet impossible : {e}\n\
              \x20        La position en mémoire a avancé mais le fichier ne l'a pas suivie."
@@ -433,7 +488,11 @@ fn envoyer(fichier: &Path, o: &Options, protection: &ProtectionCli) {
                 w.enregistrer(fichier, protection.get())
                     .map_err(|e| e.to_string())
             });
-        rapporter_synchro(&w, &resume, depart);
+        // Pas de témoin sur la synchro PRÉALABLE : `--temoin` s'utilise avec la
+        // commande `synchroniser`, où l'utilisateur choisit sciemment son second
+        // nœud. L'enchaîner ici multiplierait les liens réseau juste avant un envoi
+        // — exactement ce que `--noeud-synchro` cherche à éviter.
+        rapporter_synchro(&w, &resume, depart, false);
     }
 
     // REFUS si le wallet n'a jamais été synchronisé. Enchaîner une synchro et un envoi

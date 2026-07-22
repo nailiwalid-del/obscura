@@ -227,13 +227,16 @@ impl Noeud {
 
     /// Scelle un bloc avec les transactions du mempool, l'applique, et le diffuse.
     ///
-    /// # Personne n'a autorité pour faire cela — et c'est assumé
+    /// # Qui a autorité pour faire cela dépend de la GENÈSE
     ///
-    /// Aucune élection de producteur n'existe (hors périmètre : docs/THREAT_MODEL.md).
-    /// N'importe quel nœud peut donc sceller, à n'importe quel moment. La chaîne qui
-    /// en résulte est un ordre CONVENU entre participants coopératifs, pas un ordre
-    /// DÉFENDU contre un adversaire. C'est utilisable pour un testnet local, pas au
-    /// delà.
+    /// Sur une chaîne dont la genèse grave des AUTORITÉS, le producteur légitime de
+    /// la hauteur `h` est `autorites[(h−1) mod n]` : ce nœud refuse de sceller hors
+    /// de son tour (rien ne part) et SIGNE à son tour, de son identité persistante.
+    ///
+    /// Sur une chaîne OUVERTE (genèse sans autorités — le défaut), n'importe quel
+    /// nœud peut sceller à n'importe quel moment. L'ordre qui en résulte est CONVENU
+    /// entre participants coopératifs, pas DÉFENDU contre un adversaire : utilisable
+    /// pour un testnet local, pas au delà.
     ///
     /// # L'ordre est déterministe, à dessein
     ///

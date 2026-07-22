@@ -157,11 +157,17 @@ Ce qui reste ouvert, en détail dans [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md
    chaîne OUVERTE : l'ordre y est *convenu* entre participants coopératifs, jamais
    *défendu*. C'est le défaut, et c'est bon pour un testnet local, pas pour un réseau
    public.
-2. **Le nœud qui sert l'historique en apprend long, et peut MENTIR PAR OMISSION.** Il
-   voit l'IP du wallet, la CADENCE de ses demandes et sa POSITION de chaîne ; et taire
-   une sortie donne une chaîne parfaitement close dont la racine est celle qu'il annonce
-   — le paiement omis reste invisible. S'en prémunir exige des identifiants de blocs
-   venus d'AILLEURS (plusieurs nœuds, point de contrôle hors bande). Servir l'historique
+2. **Le nœud qui sert l'historique en apprend long, et l'omission demande maintenant
+   une COLLUSION.** Il voit l'IP du wallet, la CADENCE de ses demandes et sa POSITION
+   de chaîne. Taire une sortie donnait une chaîne parfaitement close dont la racine est
+   celle qu'il annonce — le paiement omis restait invisible, et aucun contrôle *local*
+   ne pouvait le démentir. `obscura-wallet synchroniser --temoin <ip:port>` interroge un
+   **second nœud** sur la même hauteur et compare sa racine de fin de bloc : un
+   désaccord arrête tout **avant** application. Trois limites : le témoin n'a de valeur
+   que choisi indépendamment (deux nœuds d'un même opérateur n'en valent qu'un, et le
+   protocole ne peut pas le vérifier) ; un désaccord ne dit pas *lequel* des deux ment ;
+   l'option est **off par défaut**, et sans elle le CLI dit « à jour **selon ce nœud** »
+   plutôt que « à jour ». Servir l'historique
    est en outre un rôle d'ARCHIVISTE coûteux et optionnel (`obscura-node --archiver`,
    ≈1,4 Kio/sortie, jamais élagué) : un nœud qui ne l'active pas est valide mais ne peut
    pas amorcer de wallet.
