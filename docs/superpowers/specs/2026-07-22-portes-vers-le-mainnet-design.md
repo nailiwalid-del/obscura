@@ -4,7 +4,10 @@
 **Objet :** les quatre portes que `2026-07-22-testnet-public-0-design.md` avait
 écartées comme « non planifiables » — audits, consensus public défendable,
 économie, durcissement.
-**Statut :** carte d'arbitrage validée, **révisée après revue** (révision 2).
+**Statut :** carte d'arbitrage validée, **révision 3**.
+**Révisions :** r1 initiale · r2 (B falsifiable, J2 démoté, T5 devient une porte)
+· r3 (nommage ACVP non surpromis, fixture de conformité, gel suspensif corrigé et
+réattribué à J1, règle de réaction à la valeur).
 **Ce document ne contient aucun spec implémentable** ; chaque porte obtient
 ensuite son propre cycle spec → plan.
 
@@ -54,7 +57,7 @@ n'est le moment où l'on a changé d'avis.
 | Porte | Commun à A et B | Ce que **A seul** ajoute |
 |---|---|---|
 | **Durcissement** | tout | **rien** |
-| **Audits** | être auditable : spec gelée, vecteurs officiels, surface réduite, bug bounty | passer commande (argent, calendrier subi) |
+| **Audits** | être auditable : spec gelée, vecteurs ACVP ciblés, fixture de conformité, surface réduite, bug bounty | passer commande (argent, calendrier subi) |
 | **Économie** | le **mécanisme spécifié** : coinbase prouvée, collecteur de frais | son **implémentation** et la politique (courbe, halving, queue) |
 | **Consensus** | **consensus public vérifiable, fédéré ou expérimental** : finalité défendue, partitions, mise à jour, négociation de version | **ouverture de l'appartenance + anti-Sybil économique réel** |
 
@@ -96,7 +99,7 @@ Et il n'y a pas un document mais **deux** : `AGENTS.md` (345 l., version Codex)
 et `CLAUDE.md` (457 l.), **divergents**. Deux sources de vérité qui dérivent
 séparément valent moins que zéro.
 
-### Constat 2 — les vecteurs KAT n'existent pas
+### Constat 2 — aucun vecteur de conformité n'existe
 
 Aucun fichier de `crates/` ne contient de vecteurs KAT/ACVP ;
 `crates/crypto/tests/` n'existe pas. C'était un **critère de sortie de T1**
@@ -105,6 +108,13 @@ demandera ». **T1 a été déclaré terminé sans son critère de sortie le plu
 important pour la suite.** Un critère non vérifié ne vaut pas mieux que pas de
 critère.
 
+⚠️ **Nommage.** Ce document ne dit jamais « vecteurs KAT » sans qualificatif, et
+ne dira jamais « KAT FIPS complets ». Ce qui est réalisable avec le backend
+actuel est un sous-ensemble — voir la stratégie en porte AUD. Le terme retenu
+partout est **« vecteurs ACVP ciblés (`decap`/`sigVer`) »**. Une surpromesse dans
+un titre est exactement ce qu'un auditeur relève en premier, et elle décrédibilise
+le travail réel qui est dessous.
+
 ### Constat 3 — l'ancre de genèse est tronquée là où elle sert
 
 `obscura-genese` imprime l'identifiant **complet** (32 o) *et* sa forme courte
@@ -112,7 +122,12 @@ critère.
 **8 octets** au démarrage (`crates/node/src/bin/obscura-node.rs:289`) —
 c'est-à-dire exactement au moment où un opérateur compare avec la valeur publiée
 hors bande. 64 bits comme ancre d'authentification d'une chaîne publique, c'est
-court. Correctif : une ligne.
+court.
+
+✅ **Fermé le 2026-07-22 (`2e9e4df`).** L'identifiant est imprimé entier ; la tête
+courante reste courte (diagnostic, pas ancre). Le correctif n'a pas attendu T5 :
+une ligne sans risque n'a aucune raison d'être mise en file d'attente derrière une
+porte.
 
 À rapprocher de `docs/THREAT_MODEL.md:381` : « **Rien n'atteste QUI a écrit la
 genèse. Le fichier n'est ni signé ni authentifié** ». Pour un testnet public,
@@ -172,13 +187,14 @@ dépôt public.
 
 **Ce qui manque — trois défauts.**
 
-**1. Les vecteurs KAT (constat 2).** Le moins cher et le plus rentable. C'est ce
-qui distingue « on a changé d'import » de « on implémente bien FIPS 203/204 ».
+**1. Les vecteurs ACVP ciblés `decap`/`sigVer` (constat 2).** Le moins cher et le
+plus rentable. C'est ce qui distingue « on a changé d'import » de « on implémente
+bien FIPS 203/204 » — **sur la partie qu'on peut effectivement démontrer**.
 
-> **Stratégie KAT — à écrire avant de commencer, parce que le backend la
-> contraint.** Vérifié : `pqcrypto_mlkem::mlkem768::keypair()` ne prend **aucun
-> argument** — il n'existe aucune injection de graine officielle. `keyGen`,
-> `encap` et `sigGen` ne sont donc **pas** KAT-ables avec ce backend.
+> **Stratégie — à écrire avant de commencer, parce que le backend la contraint.**
+> Vérifié : `pqcrypto_mlkem::mlkem768::keypair()` ne prend **aucun argument** — il
+> n'existe aucune injection de graine officielle. `keyGen`, `encap` et `sigGen` ne
+> sont donc **pas** KAT-ables avec ce backend.
 >
 > Mais les deux opérations **déterministes** le sont : `decapsulate(ct, sk) → ss`
 > et `verify(sig, msg, pk)`, les deux types se reconstruisant depuis des octets
@@ -206,9 +222,24 @@ qui est prouvé séparé de ce qui est supposé.
 **Dépend de :** rien pour (1) et (2). Le bug bounty dépend d'une cible publique,
 donc de T5.
 **Gèle :** rien — mais **consomme** un gel, un audit portant sur une spec figée.
-**Critère de franchissement :** les vecteurs KAT `decap`/`sigVer` passent en CI ;
-un tiers vérifie un bloc de la chaîne publique **en n'ayant lu que `docs/`** ;
-`CLAUDE.md` et `AGENTS.md` ne contiennent plus aucune affirmation normative.
+**Critère de franchissement :** les vecteurs ACVP ciblés `decap`/`sigVer` passent
+en CI ; **la fixture de conformité existe et un tiers la rejoue** (voir
+ci-dessous) ; `CLAUDE.md` et `AGENTS.md` ne contiennent plus aucune affirmation
+normative.
+
+> **La fixture de conformité — parce que « un tiers vérifie en n'ayant lu que
+> `docs/` » est un bon critère mais intestable tel quel.** Il faut un artefact,
+> versionné dans le dépôt :
+>
+> - la **genèse** de référence (octets) et son identifiant complet attendu ;
+> - **un bloc scellé** appliqué dessus ;
+> - la **racine d'état attendue** après application ;
+> - **la commande** qui rejoue tout ça, et son résultat attendu.
+>
+> Le critère devient alors falsifiable en une exécution : la commande sort le bon
+> identifiant et la bonne racine, ou elle ne les sort pas. C'est aussi ce qui
+> rend le reste de `docs/` vérifiable — une spec dont on peut rejouer un exemple
+> se corrige toute seule.
 **Coût :** temps d'ingénierie seul. **Zéro dépense externe** — c'est la
 définition d'« être auditable » plutôt qu'« être audité ».
 
@@ -224,13 +255,14 @@ auto-vérifie, imprime l'identifiant complet), `obscura-node --identite`,
 | # | Élément | Pourquoi il ne peut pas être omis |
 |---|---|---|
 | 1 | **Genèse signée ou hash officiel publié hors bande** | `THREAT_MODEL.md:381` — rien n'atteste qui a écrit la genèse |
-| 2 | **`obscura-node` imprime l'identifiant COMPLET** | constat 3 — 64 bits là où l'opérateur compare |
+| 2 | ~~**`obscura-node` imprime l'identifiant COMPLET**~~ ✅ `2e9e4df` | constat 3 — 64 bits là où l'opérateur compare |
 | 3 | **Bootnodes**, majoritairement **sans** `--archiver` | le rôle bon marché, et celui qui sert l'anti-eclipse |
 | 4 | **Release taguée + checksums + signature** | sans quoi le binaire n'est pas plus authentifié que la genèse |
 | 5 | **Limites connues publiées AVANT l'ouverture** | y compris : la chaîne est consommable, elle sera refaite |
 | 6 | **Procédure de reset écrite** | une remise à zéro non écrite d'avance sera vécue comme un échec |
 | 7 | **Canal d'incident** | un réseau public sans adresse de signalement est une impasse |
 | 8 | **Politique de frais du testnet** | voir ci-dessous — c'est le seul morceau d'économie qui appartient à B |
+| 9 | **Règle de réaction si la valeur apparaît** | voir ci-dessous — un déclencheur sans geste n'est pas une défense |
 
 > **Pourquoi la politique de frais est ici et pas dans J2.** `fee` est une
 > **entrée publique du STARK** (`crates/circuit/src/monolith/seg_air.rs:1423`) et
@@ -239,6 +271,26 @@ auto-vérifie, imprime l'identifiant complet), `obscura-node --identite`,
 > empreinte, sur un projet dont toute la thèse est la confidentialité. Frais
 > constants ⇒ pas d'empreinte. C'est une décision de T5, bon marché, et elle ne
 > peut pas attendre J2.
+
+> **La règle de réaction — parce qu'un déclencheur sans geste n'est pas une
+> défense.** La partie III inscrit « toute valeur réelle » comme déclencheur du
+> cadre légal. Ça ne suffit pas : le jour où des jetons de testnet s'échangent, il
+> faut un geste **déjà écrit**, sinon la décision se prendra sous pression, mal et
+> tard. Escalade, du moins grave au plus grave :
+>
+> 1. **Constat public.** Rappel écrit que la chaîne est sans valeur et
+>    consommable, sur les mêmes canaux que l'annonce d'ouverture.
+> 2. **Pause du faucet.** Il est le robinet ; le fermer coupe l'entrée de
+>    « stock » sans toucher au réseau.
+> 3. **Reset annoncé.** Nouvelle genèse, ancienne chaîne abandonnée. C'est
+>    l'usage prévu (chaîne consommable) et **le simple fait qu'il soit connu
+>    d'avance décourage la spéculation** — personne ne valorise ce qui sera remis
+>    à zéro.
+> 4. **Fermeture.** Arrêt des bootnodes et de l'archiviste, dépôt archivé.
+>
+> **Ce qui déclenche quoi doit être écrit avant l'ouverture, pas au moment des
+> faits.** L'escalade elle-même fait partie des limites publiées : un réseau dont
+> on sait qu'il sera remis à zéro n'acquiert pas de valeur par accident.
 
 **Dépend de :** rien de bloquant. **Gèle :** la genèse de *cette* chaîne — pas
 le projet, puisqu'elle est consommable.
@@ -264,11 +316,27 @@ CI à six jobs sur deux plateformes, décodage borné avant allocation partout,
 
 **Ce qui manque — quatre défauts.**
 
-1. **Une autorité absente fige la chaîne définitivement.** L'option A (aucun
-   certificat de saut) est assumée et documentée. Sous B, avec un réseau public,
-   c'est la panne numéro un et non un cas limite : un opérateur qui redémarre son
-   VPS arrête le réseau. **Test de chaos requis : producteur absent, puis
-   producteur de retour.**
+1. **Une autorité absente fige la chaîne jusqu'à son retour** — et le
+   comportement de gel puis de reprise n'est pas testé.
+
+   ⚠️ **Correction de la révision 2**, qui écrivait « fige la chaîne
+   **définitivement** ». C'est faux : `producteur_attendu(h) =
+   autorites[(h−1) mod n]` (`crates/ledger/src/proved_state.rs:484`) est une
+   fonction pure de la hauteur — personne d'autre ne peut produire `h`, mais
+   l'autorité qui revient produit `h` et la chaîne repart. Le gel est
+   **suspensif**, pas terminal.
+
+   **Et le défaut ainsi corrigé n'appartient plus entièrement à D.** Il faut
+   séparer deux propriétés que la révision 2 confondait :
+
+   | Propriété | Porte |
+   |---|---|
+   | le réseau **s'arrête proprement et reprend proprement** — pas d'état corrompu, pas de scission, pas de bannissement de pairs, mempool préservé, wallets qui rattrapent | **D** |
+   | le réseau **continue à produire malgré l'absence** | **J1** — c'est un changement de vue, rien d'autre |
+
+   D livre donc un **test de chaos** (producteur absent, puis de retour) et
+   l'inscription du gel suspensif dans les limites connues. **Fermer** le gel est
+   le travail de J1.
 2. **Le fuzzing ne peut pas atteindre la logique de validation.** Un fuzzer
    aléatoire ne produira jamais une preuve STARK valide : `ProvedTx::from_bytes`
    est fuzzé, mais tout ce qui est **derrière** le décodeur ne l'est pas. Il
@@ -282,8 +350,12 @@ CI à six jobs sur deux plateformes, décodage borné avant allocation partout,
    pas un chantier — mais l'absence doit être **décidée**, pas subie.
 
 **Dépend de :** rien. **Gèle :** rien.
-**Critère de franchissement :** le réseau survit à l'arrêt **et au retour** de
-son producteur ; le fuzzing sémantique tourne au budget nocturne sans crash ;
+**Critère de franchissement :** le producteur est arrêté puis redémarré, et la
+chaîne **reprend exactement où elle s'était arrêtée** — même hauteur suivante,
+aucune transaction perdue du mempool, aucun pair banni pendant le gel, tout wallet
+qui se resynchronise obtient la même racine qu'avant. (Le réseau **ne produit pas**
+pendant l'absence : c'est attendu, c'est écrit dans les limites, et c'est J1 qui
+le changera.) Le fuzzing sémantique tourne au budget nocturne sans crash ;
 les quatre défauts sont soit fermés, soit inscrits dans les limites connues
 **avec leur raison**.
 **Coût :** temps d'ingénierie seul.
@@ -311,10 +383,11 @@ L'évolution naturelle n'est donc pas Nakamoto mais un BFT dont l'appartenance
 *pourra* s'ouvrir. Dans ce monde, « défendre un modèle sans réorg » n'est pas une
 excuse : c'est la thèse.
 
-Et surtout : **en (i), J1 et le défaut n°1 de la porte D sont le même problème.**
+Et surtout : **c'est ici, et nulle part ailleurs, que le gel suspensif se ferme.**
 Un BFT a besoin d'un protocole de vue avec délais et changement de vue —
 exactement le mécanisme qui fait qu'une autorité absente ne fige plus la chaîne.
-Choisir (i) ferme la liveness par construction. Aucune autre option ne fait ça.
+D constate le gel et le rend propre ; **seul J1 le supprime.** Aucune des deux
+autres options ne le fait : (ii) le remplace par une course, (iii) le conserve.
 
 **L'ADR doit trancher, explicitement, sept points :** quorum ; hypothèse de
 tolérance (`n = 3f+1` ou autre, avec `f` énoncé) ; changement de vue ; partitions
@@ -424,9 +497,9 @@ accompagnée de ce qui la ferait rouvrir.
 `BACKEND_PQ.md` l'écrit ; aucun jalon ne la portait. Elle est accrochée à T5 :
 **avant d'exécuter `obscura-genese` en production**, les critères de
 `BACKEND_PQ.md` sont rejoués et le résultat écrit — **même si c'est « toujours
-non »**. La stratégie KAT ajoute un critère à cette liste : *un backend
+non »**. La stratégie ACVP ajoute un critère à cette liste : *un backend
 permettant l'injection d'aléa officiel rendrait `keyGen`/`encap`/`sigGen`
-KAT-ables*.
+vérifiables, et supprimerait le trou nommé en porte AUD*.
 
 ### Une omission nommée
 
@@ -460,15 +533,18 @@ qu'on ne rattrape pas.
 ## Ordre recommandé
 
 ```
-  1. AUD  ── KAT (decap/sigVer) · docs source normative · CLAUDE+AGENTS assainis
+  1. AUD  ── ACVP ciblés (decap/sigVer) · FIXTURE de conformité
+       │     · docs source normative · CLAUDE+AGENTS assainis
        │
-  2. T5  ── genèse signée + id complet · bootnodes · release · limites
-       │     · reset · incident · POLITIQUE DE FRAIS
+  2. T5  ── genèse signée · bootnodes · release · limites · reset
+       │     · incident · POLITIQUE DE FRAIS · RÈGLE DE RÉACTION
        │
-  3. D   ── fuzzing sémantique · chaos producteur absent/retour · dette PQ
+  3. D   ── fuzzing sémantique · chaos arrêt/reprise du producteur · dette PQ
+       │     (le gel suspensif est CONSTATÉ ici, fermé en J1)
        │
   4. J1  ── ADR : quorum, n=3f+1, changement de vue, partitions,
        │     non-réorg défendue, admission, mise à jour d'autorités
+       │     └─ ferme le gel suspensif
        │
   5. J2  ── ADR du mécanisme (coinbase à montant public, bénéficiaire caché ;
        │     destin des frais).  IMPLÉMENTATION derrière A.
@@ -497,8 +573,8 @@ s'arrêtent pas quand la porte suivante commence. L'ordre ci-dessus est celui de
 
 ## Suites immédiates
 
-1. **Spec de la porte AUD**, dans cet ordre : vecteurs KAT `decap`/`sigVer` ;
-   `docs/` promu source normative ; `CLAUDE.md` et `AGENTS.md` réduits à des
-   pointeurs (constats 1 et 2).
-2. Correctif d'une ligne : `obscura-node` imprime l'identifiant de genèse
-   complet (constat 3) — à faire avec T5, pas avant.
+1. **Spec de la porte AUD**, dans cet ordre : vecteurs ACVP ciblés
+   `decap`/`sigVer` ; **fixture de conformité** (genèse + bloc + racine attendue +
+   commande) ; `docs/` promu source normative ; `CLAUDE.md` et `AGENTS.md` réduits
+   à des pointeurs (constats 1 et 2).
+2. ~~Correctif `obscura-node`~~ — fait (`2e9e4df`, constat 3).
