@@ -142,7 +142,7 @@ mod tests {
     //
     // ⚠️ PORTÉE HONNÊTE DE CES TESTS. Un test unitaire ne peut PAS établir IK-CCA :
     // c'est une réduction cryptographique, qui repose ici sur (a) l'éphémère X25519
-    // indistinguable d'un point aléatoire, (b) l'anonymat (ANO-CCA) de Kyber768 à
+    // indistinguable d'un point aléatoire, (b) l'anonymat (ANO-CCA) de ML-KEM-768 à
     // rejet implicite, (c) l'absence d'identifiant de clé dans l'AEAD cascade. Ces
     // arguments sont dans PROTOCOL.md et NE sont pas vérifiés ici.
     //

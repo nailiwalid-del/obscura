@@ -8,8 +8,10 @@ validé sur testnet local.
 
 Défense en profondeur : chaque fonction de sécurité combine 2 primitives de familles
 mathématiques indépendantes (la sécurité tient si l'une des deux tient).
-KEM = X25519+Kyber768 · Sig = Ed25519 ET Dilithium3 · AEAD = cascade XChaCha20∘AES-GCM ·
-Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de domaine partout ("obscura/<usage>/v1").
+KEM = X25519+ML-KEM-768 (FIPS 203) · Sig = Ed25519 ET ML-DSA-65 (FIPS 204) · AEAD =
+cascade XChaCha20∘AES-GCM · Hash = BLAKE3‖SHA3-256 jamais tronqué. Séparation de
+domaine partout ("obscura/<usage>/v1"). Depuis T1 : version d'algo 0x02 (FIPS), le
+round-3 (0x01) est REFUSÉ PAR SON NOM (`CryptoError::AlgoPerime`), jamais cohabité.
 
 ## État
 

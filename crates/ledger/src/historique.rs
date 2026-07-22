@@ -70,7 +70,7 @@
 //! # Le COÛT, chiffré
 //!
 //! Une entrée pèse au plus [`TAILLE_SORTIE_MAX`] = 32 (commitment) + 4 + 1121 (`kem_ct`
-//! hybride X25519+Kyber768) + 4 + 256 (`enc_note`) ≈ **1,4 Kio**, dominée par le
+//! hybride X25519+ML-KEM-768) + 4 + 256 (`enc_note`) ≈ **1,4 Kio**, dominée par le
 //! ciphertext KEM post-quantique. Un bloc plein (512 transactions × 2 sorties = 1024
 //! entrées) pèse donc ≈ **1,4 Mio**, et une chaîne scellant un bloc plein toutes les
 //! 10 s produirait ≈ **12 Gio par jour**. Ce n'est pas une structure en mémoire vive

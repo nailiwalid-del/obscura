@@ -157,7 +157,7 @@ fn main() {
     });
 
     // ---- 4. Handshake post-quantique et soumission ----
-    println!("\n[4/5] Handshake post-quantique (X25519+Kyber768 / Ed25519+Dilithium3)");
+    println!("\n[4/5] Handshake post-quantique (X25519+ML-KEM-768 / Ed25519+ML-DSA-65)");
     let mut a = Runtime::new(Noeud::new(SigKeypair::generate(), etat, [1u8; 32]));
     let debut_hs = Instant::now();
     let pair_b = a.connecter(adresse, &id_a).expect("handshake");

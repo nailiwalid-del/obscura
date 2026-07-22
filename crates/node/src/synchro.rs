@@ -421,7 +421,7 @@ mod tests {
     }
 
     /// Sorties SYNTHÉTIQUES : le contenu d'une enveloppe est opaque au format de fil,
-    /// et fabriquer 1481 vraies enveloppes coûterait autant d'encapsulations Kyber pour
+    /// et fabriquer 1481 vraies enveloppes coûterait autant d'encapsulations ML-KEM pour
     /// tester des octets que personne ne déchiffre ici. La forme réelle (émission de
     /// genèse vs sortie de transaction, longueurs identiques) est éprouvée par
     /// `ledger::historique::emission_et_sortie_ont_la_meme_forme`.

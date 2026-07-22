@@ -26,7 +26,7 @@
 //!
 //! # Pourquoi c'est si long
 //!
-//! Une clé publique Kyber768 pèse 1 184 octets. Une adresse post-quantique fait donc
+//! Une clé publique ML-KEM-768 pèse 1 184 octets. Une adresse post-quantique fait donc
 //! ~2,5 Kio en hexadécimal, là où une adresse Bitcoin tient en 35 caractères. Ce
 //! n'est pas un défaut d'encodage : c'est le prix des clés post-quantiques, et il
 //! n'est pas réductible par troncature — tronquer une clé publique la détruit.
@@ -44,17 +44,19 @@ use proved_hash::digest::{Digest, DIGEST_BYTES};
 pub const PREFIXE: &str = "obs1";
 
 /// Version du FORMAT d'adresse — distincte de la version d'ALGORITHME portée par la
-/// clé KEM elle-même (`KEM_ALGO_VERSION`). Les deux sont vérifiées : la migration
-/// FIPS 203 produira des adresses qu'un décodeur round-3 doit REFUSER, pas
-/// interpréter de travers.
-pub const VERSION_ADRESSE: u8 = 0x01;
+/// clé KEM elle-même (`KEM_ALGO_VERSION`). Les deux sont vérifiées. `0x01` =
+/// round-3, PÉRIMÉE et refusée PAR SON NOM (T1.4) ; `0x02` = FIPS 203 (courante),
+/// somme de contrôle recalculée sur un domaine NEUF — une adresse d'ancienne
+/// version échoue sur sa version nommée, jamais sur un découpage de travers.
+pub const VERSION_ADRESSE: u8 = 0x02;
+const VERSION_ADRESSE_PERIMEE: u8 = 0x01;
 
 /// Longueur de la somme de contrôle. Tronquée À DESSEIN — voir l'avertissement en
 /// tête de module : ce n'est pas une fonction de sécurité, donc la règle « hachage
 /// jamais tronqué » (qui vise les hachages de consensus) ne s'y applique pas.
 const SOMME: usize = 4;
 
-const DOMAINE_SOMME: &str = "obscura/adresse/v1";
+const DOMAINE_SOMME: &str = "obscura/adresse/v2";
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum AdresseError {
@@ -66,6 +68,10 @@ pub enum AdresseError {
     LongueurInvalide,
     #[error("version d'adresse inconnue : {0:#04x}")]
     VersionInconnue(u8),
+    #[error(
+        "adresse en version 0x01 (round-3, périmée) : demandez au destinataire une          adresse regénérée en FIPS 203/204 — rien d'existant n'est à migrer, aucun          réseau public n'a existé en round-3"
+    )]
+    VersionPerimee,
     #[error("somme de contrôle incorrecte — adresse abîmée en transmission")]
     SommeIncorrecte,
     #[error("identité de destinataire non canonique")]
@@ -110,6 +116,12 @@ impl Adresse {
         let (corps, somme_recue) = b.split_at(b.len() - SOMME);
         if somme(corps) != somme_recue {
             return Err(AdresseError::SommeIncorrecte);
+        }
+        if corps[0] == VERSION_ADRESSE_PERIMEE {
+            // ⚠️ Une adresse 0x01 authentique échouera le plus souvent sur sa SOMME
+            // (le domaine a changé) avant d'arriver ici ; ce refus nommé attrape le
+            // cas d'un décodeur appelé sur un corps déjà validé par ailleurs.
+            return Err(AdresseError::VersionPerimee);
         }
         if corps[0] != VERSION_ADRESSE {
             return Err(AdresseError::VersionInconnue(corps[0]));
@@ -216,19 +228,30 @@ mod tests {
 
     /// Une adresse d'une AUTRE version de format est refusée, pas réinterprétée.
     ///
-    /// La migration FIPS 203/204 produira des adresses `0x02` : les lire comme du
-    /// round-3 donnerait une clé de réception fausse — donc des fonds perdus.
+    /// Une version d'adresse qui n'est pas la courante est refusée : la lire quand
+    /// même donnerait une clé de réception fausse — donc des fonds perdus. Le 0x01
+    /// (round-3, périmé) est refusé PAR SON NOM (T1.4).
     #[test]
     fn version_inconnue_refusee() {
         let a = adresse_de_test();
         let mut corps = a.corps();
-        corps[0] = 0x02;
+        corps[0] = 0x03; // version FUTURE
         let mut b = corps.clone();
         b.extend_from_slice(&somme(&corps)); // somme RECALCULÉE : seul le format diffère
         let texte = format!("{PREFIXE}{}", hex::encode(b));
         assert!(matches!(
             Adresse::decoder(&texte),
-            Err(AdresseError::VersionInconnue(0x02))
+            Err(AdresseError::VersionInconnue(0x03))
+        ));
+
+        let mut corps = a.corps();
+        corps[0] = 0x01; // round-3, périmée
+        let mut b = corps.clone();
+        b.extend_from_slice(&somme(&corps));
+        let texte = format!("{PREFIXE}{}", hex::encode(b));
+        assert!(matches!(
+            Adresse::decoder(&texte),
+            Err(AdresseError::VersionPerimee)
         ));
     }
 

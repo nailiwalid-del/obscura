@@ -113,7 +113,7 @@ pub enum WalletError {
     )]
     ArbreHorsFrontiereDeBloc { feuilles: u64, ancre: u64 },
     /// L'adresse du destinataire porte un point X25519 d'ordre faible : chiffrer vers
-    /// elle ferait reposer la note sur Kyber seul. On refuse de payer plutôt que de
+    /// elle ferait reposer la note sur ML-KEM seul. On refuse de payer plutôt que de
     /// dégrader silencieusement la protection du bénéficiaire.
     #[error("adresse de destinataire invalide (KEM non contributif)")]
     DestinataireInvalide,

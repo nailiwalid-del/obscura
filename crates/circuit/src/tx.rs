@@ -75,7 +75,7 @@ pub struct EncNote {
 }
 
 /// Taille exacte d'un ciphertext KEM hybride sérialisé : `1 (version) + 32 (X25519) +
-/// 1088 (Kyber768) = 1121 o`. Un `kem_ct` bien formé fait EXACTEMENT cette taille.
+/// 1088 (ML-KEM-768) = 1121 o`. Un `kem_ct` bien formé fait EXACTEMENT cette taille.
 pub const KEM_CT_LEN: usize = 1121;
 /// Borne SUPÉRIEURE d'un `enc_note` (AEAD cascade d'une note de 104 o ≈ 172 o : nonces
 /// 12+24 + tags 16+16 + 104). Marge à 256. Au-delà = rejet (anti-DoS : le digest hache

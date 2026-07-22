@@ -1,33 +1,57 @@
-//! KEM hybride : X25519 (courbes elliptiques) + Kyber768 (réseaux euclidiens, round-3, byte 0x01).
-//! Le secret partagé combine les deux via KDF sur le transcript complet :
-//! il reste sûr tant que L'UN des deux problèmes sous-jacents tient.
+//! KEM hybride : X25519 (courbes elliptiques) + ML-KEM-768 (réseaux euclidiens,
+//! FIPS 203, byte 0x02). Le secret partagé combine les deux via KDF sur le
+//! transcript complet : il reste sûr tant que L'UN des deux problèmes tient.
 //!
-//! ⚠️ Zeroize (durcissement #7) : la moitié X25519 (`StaticSecret` dalek) s'efface au
-//! drop ; la moitié Kyber768 (`SecretKey` pqcrypto) NE s'efface PAS (pqcrypto n'expose
-//! pas de zeroize). Limitation assumée à revisiter à la migration FIPS 0x02.
+//! Migration T1 (plan Testnet 0) : la version round-3 (Kyber768, 0x01) est REFUSÉE
+//! PAR SON NOM (`CryptoError::AlgoPerime`), jamais réinterprétée — aucun réseau
+//! public n'a existé en round-3, il n'y avait rien à migrer sauf des fichiers
+//! locaux. Tailles identiques à round-3 (pk 1184, ct 1088) : aucun format aval ne
+//! bouge, seuls la version, l'identifiant et le domaine de dérivation changent.
+//!
+//! Zeroize : la moitié X25519 (`StaticSecret` dalek) s'efface au drop ; la moitié
+//! ML-KEM est stockée en `Zeroizing<Vec<u8>>` et le type pqcrypto est RECONSTRUIT à
+//! chaque décapsulation (repli T1.5, choisi : pqcrypto-mlkem n'expose pas de
+//! zeroize — coût, un `from_bytes` de 2400 o par usage, hors chemin chaud).
 
 use crate::CryptoError;
-use pqcrypto_kyber::kyber768;
+use pqcrypto_mlkem::mlkem768;
 use pqcrypto_traits::kem::{Ciphertext as _, PublicKey as _, SecretKey as _, SharedSecret as _};
 use rand_core::{OsRng, RngCore};
 use x25519_dalek::{PublicKey as XPublicKey, StaticSecret};
+use zeroize::Zeroizing;
 
 pub const X25519_PK_LEN: usize = 32;
 
-/// Identifiant d'algorithme (versioning explicite : la migration round-3 → FIPS 203
-/// n'est pas transparente ; deux versions peuvent cohabiter sur la chaîne).
-pub const KEM_ALGO_ID: &str = "x25519+kyber768-round3";
-pub const KEM_ALGO_VERSION: u8 = 0x01;
+/// Identifiant d'algorithme (versioning explicite). `0x01` = round-3, PÉRIMÉ et
+/// refusé par son nom ; `0x02` = FIPS 203 (courant).
+pub const KEM_ALGO_ID: &str = "x25519+mlkem768-fips203";
+pub const KEM_ALGO_VERSION: u8 = 0x02;
+const KEM_ALGO_VERSION_PERIMEE: u8 = 0x01;
+
+/// Contrôle de version d'un objet sérialisé : la version courante passe, la version
+/// round-3 est refusée PAR SON NOM, tout le reste est un encodage invalide.
+fn verifier_version(b: &[u8], quoi: &'static str) -> Result<(), CryptoError> {
+    match b.first() {
+        Some(&KEM_ALGO_VERSION) => Ok(()),
+        Some(&KEM_ALGO_VERSION_PERIMEE) => Err(CryptoError::AlgoPerime {
+            quoi,
+            version: KEM_ALGO_VERSION_PERIMEE,
+        }),
+        _ => Err(CryptoError::InvalidEncoding(quoi)),
+    }
+}
 
 #[derive(Clone)]
 pub struct KemPublicKey {
     pub x25519: [u8; 32],
-    pub kyber: kyber768::PublicKey,
+    pub mlkem: mlkem768::PublicKey,
 }
 
 pub struct KemSecretKey {
     x25519: StaticSecret,
-    kyber: kyber768::SecretKey,
+    /// Octets du secret ML-KEM, effacés au drop ; le type pqcrypto est reconstruit
+    /// à chaque décapsulation (cf. tête de module).
+    mlkem: Zeroizing<Vec<u8>>,
 }
 
 pub struct KemKeypair {
@@ -38,7 +62,7 @@ pub struct KemKeypair {
 #[derive(Clone)]
 pub struct KemCiphertext {
     pub x25519_eph: [u8; 32],
-    pub kyber_ct: kyber768::Ciphertext,
+    pub mlkem_ct: mlkem768::Ciphertext,
 }
 
 impl KemKeypair {
@@ -47,15 +71,15 @@ impl KemKeypair {
         OsRng.fill_bytes(&mut xb);
         let xsk = StaticSecret::from(xb);
         let xpk = XPublicKey::from(&xsk);
-        let (mpk, msk) = kyber768::keypair();
+        let (mpk, msk) = mlkem768::keypair();
         KemKeypair {
             public: KemPublicKey {
                 x25519: *xpk.as_bytes(),
-                kyber: mpk,
+                mlkem: mpk,
             },
             secret: KemSecretKey {
                 x25519: xsk,
-                kyber: msk,
+                mlkem: Zeroizing::new(msk.as_bytes().to_vec()),
             },
         }
     }
@@ -63,24 +87,27 @@ impl KemKeypair {
 
 /// Combine les deux secrets en liant tout le transcript (clés publiques + ciphertexts) :
 /// empêche les attaques par mélange de sessions.
-fn combine(ss1: &[u8], ss2: &[u8], eph_pk: &[u8], kyber_ct: &[u8], pk: &KemPublicKey) -> [u8; 32] {
-    let mut t =
-        Vec::with_capacity(ss1.len() + ss2.len() + eph_pk.len() + kyber_ct.len() + 32 + 1184);
+fn combine(ss1: &[u8], ss2: &[u8], eph_pk: &[u8], mlkem_ct: &[u8], pk: &KemPublicKey) -> [u8; 32] {
+    let mut t = Vec::with_capacity(
+        ss1.len() + ss2.len() + eph_pk.len() + mlkem_ct.len() + 32 + mlkem768::public_key_bytes(),
+    );
     t.extend_from_slice(ss1);
     t.extend_from_slice(ss2);
     t.extend_from_slice(eph_pk);
-    t.extend_from_slice(kyber_ct);
+    t.extend_from_slice(mlkem_ct);
     t.extend_from_slice(&pk.x25519);
-    t.extend_from_slice(pk.kyber.as_bytes());
+    t.extend_from_slice(pk.mlkem.as_bytes());
     t.push(KEM_ALGO_VERSION);
-    crate::hash::derive_key("obscura/kem/x25519+kyber768-round3/combine/v2", &t)
+    // Le domaine PORTE l'identifiant d'algo : une confusion inter-versions est
+    // structurellement impossible (T1.2) — les clés dérivées changent avec lui.
+    crate::hash::derive_key("obscura/kem/x25519+mlkem768-fips203/combine/v1", &t)
 }
 
 /// Encapsule vers `pk` : retourne (ciphertext, secret partagé 32 o).
 ///
 /// **Rejette un `pk` X25519 d'ordre faible** (`CryptoError::NonContributif`) : sans ce
 /// contrôle, le DH rendrait un secret nul et la moitié courbes du KEM disparaîtrait en
-/// silence, laissant Kyber porter seul la sécurité. Voir `NonContributif`.
+/// silence, laissant ML-KEM porter seul la sécurité. Voir `NonContributif`.
 pub fn encapsulate(pk: &KemPublicKey) -> Result<(KemCiphertext, [u8; 32]), CryptoError> {
     let mut eb = [0u8; 32];
     OsRng.fill_bytes(&mut eb);
@@ -90,7 +117,7 @@ pub fn encapsulate(pk: &KemPublicKey) -> Result<(KemCiphertext, [u8; 32]), Crypt
     if !ss1.was_contributory() {
         return Err(CryptoError::NonContributif);
     }
-    let (ss2, ct2) = kyber768::encapsulate(&pk.kyber);
+    let (ss2, ct2) = mlkem768::encapsulate(&pk.mlkem);
     let ss = combine(
         ss1.as_bytes(),
         ss2.as_bytes(),
@@ -101,7 +128,7 @@ pub fn encapsulate(pk: &KemPublicKey) -> Result<(KemCiphertext, [u8; 32]), Crypt
     Ok((
         KemCiphertext {
             x25519_eph: *epk.as_bytes(),
-            kyber_ct: ct2,
+            mlkem_ct: ct2,
         },
         ss,
     ))
@@ -111,7 +138,7 @@ pub fn encapsulate(pk: &KemPublicKey) -> Result<(KemCiphertext, [u8; 32]), Crypt
 ///
 /// **Rejette un éphémère X25519 d'ordre faible** : c'est le sens ADVERSE du même
 /// contrôle. Un expéditeur hostile qui place un point d'ordre faible dans `ct` force un
-/// secret nul côté receveur — le chiffrement des notes reposerait alors sur Kyber seul,
+/// secret nul côté receveur — le chiffrement des notes reposerait alors sur ML-KEM seul,
 /// à l'insu du receveur.
 pub fn decapsulate(kp: &KemKeypair, ct: &KemCiphertext) -> Result<[u8; 32], CryptoError> {
     let ss1 = kp
@@ -121,12 +148,16 @@ pub fn decapsulate(kp: &KemKeypair, ct: &KemCiphertext) -> Result<[u8; 32], Cryp
     if !ss1.was_contributory() {
         return Err(CryptoError::NonContributif);
     }
-    let ss2 = kyber768::decapsulate(&ct.kyber_ct, &kp.secret.kyber);
+    // Reconstruction du type pqcrypto depuis les octets zeroizés — validés à la
+    // construction, l'échec est donc un bug interne et non une entrée hostile.
+    let msk = mlkem768::SecretKey::from_bytes(&kp.secret.mlkem)
+        .map_err(|_| CryptoError::InvalidEncoding("mlkem sk (interne)"))?;
+    let ss2 = mlkem768::decapsulate(&ct.mlkem_ct, &msk);
     Ok(combine(
         ss1.as_bytes(),
         ss2.as_bytes(),
         &ct.x25519_eph,
-        ct.kyber_ct.as_bytes(),
+        ct.mlkem_ct.as_bytes(),
         &kp.public,
     ))
 }
@@ -143,41 +174,45 @@ impl KemKeypair {
     /// une clé de réception régénérée rendrait indéchiffrables toutes les notes déjà
     /// reçues — donc les fonds correspondants irrécupérables.
     ///
-    /// Format : `version ‖ x25519_sk (32 o) ‖ kyber_pk ‖ kyber_sk`. La publique
-    /// X25519 est DÉRIVÉE de la secrète ; celle de Kyber ne l'est pas avec cette
+    /// Format : `version ‖ x25519_sk (32 o) ‖ mlkem_pk ‖ mlkem_sk`. La publique
+    /// X25519 est DÉRIVÉE de la secrète ; celle de ML-KEM ne l'est pas avec cette
     /// crate, elle doit donc être stockée — asymétrie du format qui tient à la
     /// bibliothèque, pas au protocole (même situation que `SigKeypair`).
     pub fn to_bytes_secret(&self) -> Vec<u8> {
         let mut v = vec![KEM_ALGO_VERSION];
         v.extend_from_slice(&self.secret.x25519.to_bytes());
-        v.extend_from_slice(self.public.kyber.as_bytes());
-        v.extend_from_slice(self.secret.kyber.as_bytes());
+        v.extend_from_slice(self.public.mlkem.as_bytes());
+        v.extend_from_slice(&self.secret.mlkem);
         v
     }
 
-    /// Restaure une paire depuis `to_bytes_secret`.
+    /// Restaure une paire depuis `to_bytes_secret`. Un fichier round-3 (0x01) est
+    /// refusé PAR SON NOM — le wallet dit quoi regénérer au lieu d'un « illisible ».
     pub fn from_bytes_secret(b: &[u8]) -> Result<Self, CryptoError> {
-        let n_pk = kyber768::public_key_bytes();
-        let n_sk = kyber768::secret_key_bytes();
-        if b.len() != 1 + 32 + n_pk + n_sk || b[0] != KEM_ALGO_VERSION {
+        verifier_version(b, "KemKeypair")?;
+        let n_pk = mlkem768::public_key_bytes();
+        let n_sk = mlkem768::secret_key_bytes();
+        if b.len() != 1 + 32 + n_pk + n_sk {
             return Err(CryptoError::InvalidEncoding("KemKeypair"));
         }
         let mut x = [0u8; 32];
         x.copy_from_slice(&b[1..33]);
         let xsk = StaticSecret::from(x);
         let xpk = *XPublicKey::from(&xsk).as_bytes();
-        let mpk = kyber768::PublicKey::from_bytes(&b[33..33 + n_pk])
-            .map_err(|_| CryptoError::InvalidEncoding("kyber pk"))?;
-        let msk = kyber768::SecretKey::from_bytes(&b[33 + n_pk..])
-            .map_err(|_| CryptoError::InvalidEncoding("kyber sk"))?;
+        let mpk = mlkem768::PublicKey::from_bytes(&b[33..33 + n_pk])
+            .map_err(|_| CryptoError::InvalidEncoding("mlkem pk"))?;
+        // Validé ici une fois pour toutes : la reconstruction à l'usage ne revalide
+        // que par cohérence interne.
+        mlkem768::SecretKey::from_bytes(&b[33 + n_pk..])
+            .map_err(|_| CryptoError::InvalidEncoding("mlkem sk"))?;
         Ok(KemKeypair {
             public: KemPublicKey {
                 x25519: xpk,
-                kyber: mpk,
+                mlkem: mpk,
             },
             secret: KemSecretKey {
                 x25519: xsk,
-                kyber: msk,
+                mlkem: Zeroizing::new(b[33 + n_pk..].to_vec()),
             },
         })
     }
@@ -187,20 +222,21 @@ impl KemPublicKey {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut v = vec![KEM_ALGO_VERSION];
         v.extend_from_slice(&self.x25519);
-        v.extend_from_slice(self.kyber.as_bytes());
+        v.extend_from_slice(self.mlkem.as_bytes());
         v
     }
     pub fn from_bytes(b: &[u8]) -> Result<Self, CryptoError> {
-        if b.len() != 1 + 32 + kyber768::public_key_bytes() || b[0] != KEM_ALGO_VERSION {
+        verifier_version(b, "KemPublicKey")?;
+        if b.len() != 1 + 32 + mlkem768::public_key_bytes() {
             return Err(CryptoError::InvalidEncoding("KemPublicKey"));
         }
         let mut x = [0u8; 32];
         x.copy_from_slice(&b[1..33]);
-        let m = kyber768::PublicKey::from_bytes(&b[33..])
-            .map_err(|_| CryptoError::InvalidEncoding("kyber pk"))?;
+        let m = mlkem768::PublicKey::from_bytes(&b[33..])
+            .map_err(|_| CryptoError::InvalidEncoding("mlkem pk"))?;
         Ok(KemPublicKey {
             x25519: x,
-            kyber: m,
+            mlkem: m,
         })
     }
 }
@@ -209,20 +245,21 @@ impl KemCiphertext {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut v = vec![KEM_ALGO_VERSION];
         v.extend_from_slice(&self.x25519_eph);
-        v.extend_from_slice(self.kyber_ct.as_bytes());
+        v.extend_from_slice(self.mlkem_ct.as_bytes());
         v
     }
     pub fn from_bytes(b: &[u8]) -> Result<Self, CryptoError> {
-        if b.len() != 1 + 32 + kyber768::ciphertext_bytes() || b[0] != KEM_ALGO_VERSION {
+        verifier_version(b, "KemCiphertext")?;
+        if b.len() != 1 + 32 + mlkem768::ciphertext_bytes() {
             return Err(CryptoError::InvalidEncoding("KemCiphertext"));
         }
         let mut x = [0u8; 32];
         x.copy_from_slice(&b[1..33]);
-        let m = kyber768::Ciphertext::from_bytes(&b[33..])
-            .map_err(|_| CryptoError::InvalidEncoding("kyber ct"))?;
+        let m = mlkem768::Ciphertext::from_bytes(&b[33..])
+            .map_err(|_| CryptoError::InvalidEncoding("mlkem ct"))?;
         Ok(KemCiphertext {
             x25519_eph: x,
-            kyber_ct: m,
+            mlkem_ct: m,
         })
     }
 }
@@ -240,7 +277,7 @@ mod tests {
     }];
 
     /// ADVERSE — un destinataire dont la moitié X25519 est d'ordre faible doit être
-    /// REFUSÉ : sinon on chiffrerait vers lui en ne reposant que sur Kyber, sans que
+    /// REFUSÉ : sinon on chiffrerait vers lui en ne reposant que sur ML-KEM, sans que
     /// rien ne le signale.
     #[test]
     fn encapsuler_vers_un_point_dordre_faible_est_rejete() {
@@ -248,7 +285,7 @@ mod tests {
         for u in ORDRE_FAIBLE {
             let hostile = KemPublicKey {
                 x25519: u,
-                kyber: bob.public.kyber,
+                mlkem: bob.public.mlkem,
             };
             assert!(
                 matches!(encapsulate(&hostile), Err(CryptoError::NonContributif)),
@@ -268,7 +305,7 @@ mod tests {
         for u in ORDRE_FAIBLE {
             let hostile = KemCiphertext {
                 x25519_eph: u,
-                kyber_ct: ct.kyber_ct,
+                mlkem_ct: ct.mlkem_ct,
             };
             assert!(
                 matches!(
@@ -308,7 +345,7 @@ mod tests {
             &kp2,
             &KemCiphertext {
                 x25519_eph: ct.x25519_eph,
-                kyber_ct: ct.kyber_ct,
+                mlkem_ct: ct.mlkem_ct,
             },
         )
         .unwrap();
@@ -361,10 +398,25 @@ mod tests {
         trop.push(0);
         assert!(KemKeypair::from_bytes_secret(&trop).is_err());
         let mut autre_version = bon.clone();
-        autre_version[0] = 0x02; // future migration FIPS 203
+        autre_version[0] = 0x03; // version FUTURE inconnue
         assert!(
             KemKeypair::from_bytes_secret(&autre_version).is_err(),
-            "une version d'algo inconnue ne doit pas être lue comme du round-3"
+            "une version d'algo inconnue ne doit pas être lue comme du FIPS 203"
         );
+
+        // Un objet ROUND-3 (0x01) est refusé PAR SON NOM (T1.1) — jamais
+        // réinterprété, et l'erreur dit quoi regénérer.
+        let mut round3 = bon.clone();
+        round3[0] = 0x01;
+        assert!(matches!(
+            KemKeypair::from_bytes_secret(&round3),
+            Err(crate::CryptoError::AlgoPerime { version: 0x01, .. })
+        ));
+        let mut pk_round3 = kp.public.to_bytes();
+        pk_round3[0] = 0x01;
+        assert!(matches!(
+            KemPublicKey::from_bytes(&pk_round3),
+            Err(crate::CryptoError::AlgoPerime { version: 0x01, .. })
+        ));
     }
 }

@@ -1,39 +1,60 @@
-//! Signature hybride : Ed25519 + Dilithium3 (round-3, byte 0x01).
+//! Signature hybride : Ed25519 + ML-DSA-65 (FIPS 204, byte 0x02).
 //! La vérification exige que LES DEUX signatures soient valides :
 //! forger exige de casser les courbes elliptiques ET les réseaux euclidiens.
 //!
-//! ⚠️ Zeroize (durcissement #7) : la moitié Ed25519 (`SigningKey` dalek) s'efface au
-//! drop ; la moitié Dilithium3 (`SecretKey` pqcrypto) NE s'efface PAS (limitation
-//! pqcrypto). À revisiter à la migration FIPS 0x02.
+//! Migration T1 (plan Testnet 0) : la version round-3 (Dilithium3, 0x01) est
+//! REFUSÉE PAR SON NOM (`CryptoError::AlgoPerime`), jamais réinterprétée. La
+//! signature grossit de 16 o (3309 vs 3293) — sous tous les majorants du dépôt.
+//!
+//! Zeroize : la moitié Ed25519 (`SigningKey` dalek) s'efface au drop ; la moitié
+//! ML-DSA est stockée en `Zeroizing<Vec<u8>>` et le type pqcrypto RECONSTRUIT à
+//! chaque signature (repli T1.5 — pqcrypto-mldsa n'expose pas de zeroize).
 
 use crate::CryptoError;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
-use pqcrypto_dilithium::dilithium3;
+use pqcrypto_mldsa::mldsa65;
 use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _, SecretKey as _};
 use rand_core::{OsRng, RngCore};
+use zeroize::Zeroizing;
 
 pub const ED25519_SIG_LEN: usize = 64;
 
-/// Identifiant d'algorithme (versioning explicite, cf. kem.rs).
-pub const SIG_ALGO_ID: &str = "ed25519+dilithium3-round3";
-pub const SIG_ALGO_VERSION: u8 = 0x01;
+/// Identifiant d'algorithme (versioning explicite, cf. kem.rs). `0x01` = round-3,
+/// PÉRIMÉ et refusé par son nom ; `0x02` = FIPS 204 (courant).
+pub const SIG_ALGO_ID: &str = "ed25519+mldsa65-fips204";
+pub const SIG_ALGO_VERSION: u8 = 0x02;
+const SIG_ALGO_VERSION_PERIMEE: u8 = 0x01;
+
+/// Contrôle de version (cf. `kem::verifier_version` — même règle).
+fn verifier_version(b: &[u8], quoi: &'static str) -> Result<(), CryptoError> {
+    match b.first() {
+        Some(&SIG_ALGO_VERSION) => Ok(()),
+        Some(&SIG_ALGO_VERSION_PERIMEE) => Err(CryptoError::AlgoPerime {
+            quoi,
+            version: SIG_ALGO_VERSION_PERIMEE,
+        }),
+        _ => Err(CryptoError::InvalidEncoding(quoi)),
+    }
+}
 
 #[derive(Clone)]
 pub struct SigPublicKey {
     pub ed25519: VerifyingKey,
-    pub dilithium: dilithium3::PublicKey,
+    pub mldsa: mldsa65::PublicKey,
 }
 
 pub struct SigKeypair {
     pub public: SigPublicKey,
     ed25519: SigningKey,
-    dilithium: dilithium3::SecretKey,
+    /// Octets du secret ML-DSA, effacés au drop ; le type pqcrypto est reconstruit
+    /// à chaque signature (cf. tête de module).
+    mldsa: Zeroizing<Vec<u8>>,
 }
 
 #[derive(Clone)]
 pub struct HybridSignature {
     pub ed25519: Signature,
-    pub dilithium: dilithium3::DetachedSignature,
+    pub mldsa: mldsa65::DetachedSignature,
 }
 
 impl SigKeypair {
@@ -42,23 +63,26 @@ impl SigKeypair {
         OsRng.fill_bytes(&mut b);
         let esk = SigningKey::from_bytes(&b);
         let epk = esk.verifying_key();
-        let (mpk, msk) = dilithium3::keypair();
+        let (mpk, msk) = mldsa65::keypair();
         SigKeypair {
             public: SigPublicKey {
                 ed25519: epk,
-                dilithium: mpk,
+                mldsa: mpk,
             },
             ed25519: esk,
-            dilithium: msk,
+            mldsa: Zeroizing::new(msk.as_bytes().to_vec()),
         }
     }
 
     /// Signe avec les deux algorithmes (message préfixé par domaine).
     pub fn sign(&self, domain: &str, msg: &[u8]) -> HybridSignature {
         let m = frame(domain, msg);
+        // Reconstruction depuis les octets zeroizés — validés à la construction.
+        let msk = mldsa65::SecretKey::from_bytes(&self.mldsa)
+            .expect("secret ML-DSA validé à la construction");
         HybridSignature {
             ed25519: self.ed25519.sign(&m),
-            dilithium: dilithium3::detached_sign(&m, &self.dilithium),
+            mldsa: mldsa65::detached_sign(&m, &msk),
         }
     }
 }
@@ -78,7 +102,7 @@ pub fn verify(pk: &SigPublicKey, domain: &str, msg: &[u8], sig: &HybridSignature
     // `verify_strict` : rejette les S non canoniques et les clés d'ordre faible,
     // fermant la malléabilité de signature d'Ed25519 (RFC 8032 §5.4.5 / §8).
     let ed_ok = pk.ed25519.verify_strict(&m, &sig.ed25519).is_ok();
-    let pq_ok = dilithium3::verify_detached_signature(&sig.dilithium, &m, &pk.dilithium).is_ok();
+    let pq_ok = mldsa65::verify_detached_signature(&sig.mldsa, &m, &pk.mldsa).is_ok();
     ed_ok && pq_ok
 }
 
@@ -93,40 +117,43 @@ impl SigKeypair {
     /// cela ses pairs ne le reconnaissent pas, et toute réputation accumulée est
     /// perdue à chaque lancement.
     ///
-    /// Format : `version ‖ ed25519_sk (32 o) ‖ dilithium_pk ‖ dilithium_sk`.
-    /// La publique Ed25519 est DÉRIVÉE de la secrète ; celle de Dilithium ne l'est
+    /// Format : `version ‖ ed25519_sk (32 o) ‖ mldsa_pk ‖ mldsa_sk`.
+    /// La publique Ed25519 est DÉRIVÉE de la secrète ; celle de ML-DSA ne l'est
     /// pas avec cette crate, elle doit donc être stockée — asymétrie du format qui
     /// tient à la bibliothèque, pas au protocole.
     pub fn to_bytes_secret(&self) -> Vec<u8> {
         let mut v = vec![SIG_ALGO_VERSION];
         v.extend_from_slice(&self.ed25519.to_bytes());
-        v.extend_from_slice(self.public.dilithium.as_bytes());
-        v.extend_from_slice(self.dilithium.as_bytes());
+        v.extend_from_slice(self.public.mldsa.as_bytes());
+        v.extend_from_slice(&self.mldsa);
         v
     }
 
-    /// Restaure une paire depuis `to_bytes_secret`.
+    /// Restaure une paire depuis `to_bytes_secret`. Un fichier round-3 (0x01) est
+    /// refusé PAR SON NOM — le nœud dit quoi regénérer au lieu d'un « illisible ».
     pub fn from_bytes_secret(b: &[u8]) -> Result<Self, CryptoError> {
-        let n_pk = dilithium3::public_key_bytes();
-        let n_sk = dilithium3::secret_key_bytes();
-        if b.len() != 1 + 32 + n_pk + n_sk || b[0] != SIG_ALGO_VERSION {
+        verifier_version(b, "SigKeypair")?;
+        let n_pk = mldsa65::public_key_bytes();
+        let n_sk = mldsa65::secret_key_bytes();
+        if b.len() != 1 + 32 + n_pk + n_sk {
             return Err(CryptoError::InvalidEncoding("SigKeypair"));
         }
         let mut e = [0u8; 32];
         e.copy_from_slice(&b[1..33]);
         let esk = SigningKey::from_bytes(&e);
         let epk = esk.verifying_key();
-        let mpk = dilithium3::PublicKey::from_bytes(&b[33..33 + n_pk])
-            .map_err(|_| CryptoError::InvalidEncoding("dilithium pk"))?;
-        let msk = dilithium3::SecretKey::from_bytes(&b[33 + n_pk..])
-            .map_err(|_| CryptoError::InvalidEncoding("dilithium sk"))?;
+        let mpk = mldsa65::PublicKey::from_bytes(&b[33..33 + n_pk])
+            .map_err(|_| CryptoError::InvalidEncoding("mldsa pk"))?;
+        // Validé une fois pour toutes ; la reconstruction à l'usage n'échoue plus.
+        mldsa65::SecretKey::from_bytes(&b[33 + n_pk..])
+            .map_err(|_| CryptoError::InvalidEncoding("mldsa sk"))?;
         Ok(SigKeypair {
             public: SigPublicKey {
                 ed25519: epk,
-                dilithium: mpk,
+                mldsa: mpk,
             },
             ed25519: esk,
-            dilithium: msk,
+            mldsa: Zeroizing::new(b[33 + n_pk..].to_vec()),
         })
     }
 }
@@ -135,22 +162,23 @@ impl SigPublicKey {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut v = vec![SIG_ALGO_VERSION];
         v.extend_from_slice(&self.ed25519.to_bytes());
-        v.extend_from_slice(self.dilithium.as_bytes());
+        v.extend_from_slice(self.mldsa.as_bytes());
         v
     }
     pub fn from_bytes(b: &[u8]) -> Result<Self, CryptoError> {
-        if b.len() != 1 + 32 + dilithium3::public_key_bytes() || b[0] != SIG_ALGO_VERSION {
+        verifier_version(b, "SigPublicKey")?;
+        if b.len() != 1 + 32 + mldsa65::public_key_bytes() {
             return Err(CryptoError::InvalidEncoding("SigPublicKey"));
         }
         let mut e = [0u8; 32];
         e.copy_from_slice(&b[1..33]);
         let ed =
             VerifyingKey::from_bytes(&e).map_err(|_| CryptoError::InvalidEncoding("ed25519 pk"))?;
-        let ml = dilithium3::PublicKey::from_bytes(&b[33..])
-            .map_err(|_| CryptoError::InvalidEncoding("dilithium pk"))?;
+        let ml = mldsa65::PublicKey::from_bytes(&b[33..])
+            .map_err(|_| CryptoError::InvalidEncoding("mldsa pk"))?;
         Ok(SigPublicKey {
             ed25519: ed,
-            dilithium: ml,
+            mldsa: ml,
         })
     }
 }
@@ -159,22 +187,21 @@ impl HybridSignature {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut v = vec![SIG_ALGO_VERSION];
         v.extend_from_slice(&self.ed25519.to_bytes());
-        v.extend_from_slice(self.dilithium.as_bytes());
+        v.extend_from_slice(self.mldsa.as_bytes());
         v
     }
     pub fn from_bytes(b: &[u8]) -> Result<Self, CryptoError> {
-        if b.len() != 1 + ED25519_SIG_LEN + dilithium3::signature_bytes()
-            || b[0] != SIG_ALGO_VERSION
-        {
+        verifier_version(b, "HybridSignature")?;
+        if b.len() != 1 + ED25519_SIG_LEN + mldsa65::signature_bytes() {
             return Err(CryptoError::InvalidEncoding("HybridSignature"));
         }
         let mut e = [0u8; 64];
         e.copy_from_slice(&b[1..65]);
-        let ml = dilithium3::DetachedSignature::from_bytes(&b[65..])
-            .map_err(|_| CryptoError::InvalidEncoding("dilithium sig"))?;
+        let ml = mldsa65::DetachedSignature::from_bytes(&b[65..])
+            .map_err(|_| CryptoError::InvalidEncoding("mldsa sig"))?;
         Ok(HybridSignature {
             ed25519: Signature::from_bytes(&e),
-            dilithium: ml,
+            mldsa: ml,
         })
     }
 }
@@ -208,7 +235,7 @@ mod tests {
         let sig_b = kp.sign("test/v1", b"autre message");
         let hybride_invalide = HybridSignature {
             ed25519: sig_a.ed25519,
-            dilithium: sig_b.dilithium,
+            mldsa: sig_b.mldsa,
         };
         assert!(!verify(
             &kp.public,
@@ -243,8 +270,23 @@ mod tests {
         assert!(SigKeypair::from_bytes_secret(&b[..b.len() - 1]).is_err());
         assert!(SigKeypair::from_bytes_secret(&[]).is_err());
         let mut mauvaise_version = b.clone();
-        mauvaise_version[0] = 0x02;
+        mauvaise_version[0] = 0x03; // version FUTURE inconnue
         assert!(SigKeypair::from_bytes_secret(&mauvaise_version).is_err());
+
+        // Un objet ROUND-3 (0x01) est refusé PAR SON NOM (T1.1).
+        let mut round3 = b.clone();
+        round3[0] = 0x01;
+        assert!(matches!(
+            SigKeypair::from_bytes_secret(&round3),
+            Err(crate::CryptoError::AlgoPerime { version: 0x01, .. })
+        ));
+        let kp2 = SigKeypair::generate();
+        let mut sig_round3 = kp2.sign("test/v1", b"m").to_bytes();
+        sig_round3[0] = 0x01;
+        assert!(matches!(
+            HybridSignature::from_bytes(&sig_round3),
+            Err(crate::CryptoError::AlgoPerime { version: 0x01, .. })
+        ));
     }
 
     #[test]
