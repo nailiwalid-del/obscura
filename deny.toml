@@ -4,16 +4,27 @@
 [advisories]
 version = 2
 yanked = "deny"
-# Les quatre avis « unmaintained » de la famille pqcrypto round-3, IGNORÉS PAR
-# LEUR NOM et datés : c'est précisément ce que la migration FIPS (T1, spec
-# Testnet 0) remplace. ⚠️ 2026-0162/0163 (traits/internals : PQClean archivé en
-# amont) survivront à la migration vers pqcrypto-mlkem/mldsa — dette consciente,
-# la sortie propre serait un backend hors famille pqcrypto (à trancher à T1).
+# ⚠️ TOUTE LA FAMILLE pqcrypto EST « unmaintained » — PQClean est ARCHIVÉ en amont.
+#
+# La migration FIPS (T1) a DÉPLACÉ cette dette, elle ne l'a pas supprimée : les
+# crates ML-KEM/ML-DSA portent leurs propres avis (2026-0161/0166), au même titre
+# que les round-3 qu'elles remplacent. Les avis sont donc ignorés PAR LEUR NOM,
+# avec leur raison — jamais par un filtre large qui masquerait une VRAIE
+# vulnérabilité de la même famille.
+#
+# ⚠️ DETTE OUVERTE, à trancher avant le mainnet : la sortie propre est un backend
+# hors famille pqcrypto (RustCrypto `ml-kem`/`ml-dsa`, libcrux, aws-lc-rs…). Ce
+# n'est PAS un simple changement d'import — c'est le même travail que T1, avec la
+# même discipline de version d'algo.
 ignore = [
-    { id = "RUSTSEC-2024-0380", reason = "pqcrypto-dilithium remplacé par pqcrypto-mldsa — migration T1" },
-    { id = "RUSTSEC-2024-0381", reason = "pqcrypto-kyber remplacé par pqcrypto-mlkem — migration T1" },
-    { id = "RUSTSEC-2026-0162", reason = "pqcrypto-traits : PQClean archivé — suivi à T1" },
-    { id = "RUSTSEC-2026-0163", reason = "pqcrypto-internals : PQClean archivé — suivi à T1" },
+    { id = "RUSTSEC-2026-0161", reason = "pqcrypto-mlkem : PQClean archivé en amont — dette de backend, cf. en-tête" },
+    { id = "RUSTSEC-2026-0166", reason = "pqcrypto-mldsa : PQClean archivé en amont — dette de backend, cf. en-tête" },
+    { id = "RUSTSEC-2026-0162", reason = "pqcrypto-traits : PQClean archivé en amont — dette de backend" },
+    { id = "RUSTSEC-2026-0163", reason = "pqcrypto-internals : PQClean archivé en amont — dette de backend" },
+    # `paste` (macro d'assemblage d'identifiants) est tiré par pqcrypto-mldsa. Non
+    # cryptographique, sans exécution à l'exécution — il disparaîtra avec le
+    # changement de backend ci-dessus.
+    { id = "RUSTSEC-2024-0436", reason = "paste : macro non maintenue, tirée par pqcrypto-mldsa — part avec le backend" },
 ]
 
 [licenses]
@@ -28,7 +39,6 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
-    "Zlib",
     "CC0-1.0",
     "Unicode-3.0",
     "Unicode-DFS-2016",

@@ -386,6 +386,15 @@ sophistication crypto**. Reste :
   (dérivation, encodages, errata NIST) → c'est une **nouvelle version d'algo `0x02`**
   qui cohabite avec `0x01`, pas un remplacement (voir PROTOCOL.md, versioning). Prévoir
   crates FIPS, byte de version, et vecteurs de test croisés.
+- ⚠️ **DETTE DE BACKEND PQ (ouverte)** : TOUTE la famille `pqcrypto` est marquée
+  `unmaintained` (RUSTSEC 2026-0161/0166/0162/0163) — PQClean est ARCHIVÉ en amont.
+  La migration FIPS (T1) a DÉPLACÉ cette dette, pas supprimée : `pqcrypto-mlkem` et
+  `pqcrypto-mldsa` portent leurs propres avis, au même titre que les round-3
+  qu'elles remplacent. Les avis sont ignorés PAR LEUR NOM dans `deny.toml` (jamais
+  par un filtre large, qui masquerait une vraie vulnérabilité de la même famille).
+  Sortie propre = backend hors pqcrypto (RustCrypto `ml-kem`/`ml-dsa`, libcrux,
+  aws-lc-rs…) — même travail que T1, même discipline de version d'algo. À trancher
+  AVANT le mainnet.
 - **Zeroize (durcissement #7)** : `ShieldedSecret` (volatile non élidable),
   `WalletKeys::{shielded_secret, nk}` et les clés AEAD dérivées s'effacent au drop ;
   les moitiés dalek (X25519/Ed25519) aussi. ⚠️ Les `SecretKey` pqcrypto (Kyber768/
