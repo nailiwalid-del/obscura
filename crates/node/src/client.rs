@@ -77,9 +77,21 @@ const _: () = assert!(
 #[derive(Debug)]
 pub enum Arret {
     /// Silence après une demande : le nœud n'a plus rien à servir à cette hauteur. Le
-    /// cas normal d'un wallet à jour — mais aussi celui d'un nœud qui ment par omission
-    /// (indétectable auprès d'un nœud unique, cf. docs/THREAT_MODEL.md).
+    /// cas normal d'un wallet à jour — mais aussi, SANS TÉMOIN, celui d'un nœud qui
+    /// ment par omission (cf. docs/THREAT_MODEL.md et [`synchroniser_avec_temoin`]).
     AJour,
+    /// Le nœud servant et le TÉMOIN annoncent deux racines différentes pour la même
+    /// hauteur. L'un des deux ment — le protocole ne dit pas lequel, et n'a aucun
+    /// moyen de le dire. Rien n'est appliqué, la position ne bouge pas.
+    ///
+    /// ⚠️ C'est le seul arrêt qui accuse. Il ne doit JAMAIS être confondu avec
+    /// « à jour » : un wallet qui poursuivrait après ça aurait annulé le témoin.
+    Desaccord(String),
+    /// Le témoin n'a rien répondu. Ce n'est pas un accord — c'est une ABSENCE de
+    /// corroboration, et un témoin muet est un cas ordinaire (nœud sans
+    /// `--archiver`, crédit d'étranglement épuisé). La boucle s'arrête sans
+    /// appliquer plutôt que de poursuivre en donnant l'illusion d'avoir vérifié.
+    TemoinMuet,
     /// [`MAX_BLOCS_PAR_INVOCATION`] atteint : relancer pour continuer.
     LimiteAtteinte,
     /// Le nœud a servi une réponse incohérente (mauvaise hauteur, morceaux hors bornes,
@@ -117,10 +129,61 @@ pub fn synchroniser_par_connexion<S, P>(
     connexion: &mut Connexion<S>,
     wallet: &mut Wallet,
     cadence: Duration,
+    apres_bloc: P,
+) -> ResumeSynchro
+where
+    S: Read + Write,
+    P: FnMut(&Progression, &Wallet) -> Result<(), String>,
+{
+    // Le type du témoin absent doit bien être nommé quelque part ; `std::io::Empty`
+    // n'est jamais construit, il ne sert qu'à fixer `T`.
+    synchroniser_avec_temoin(
+        connexion,
+        None::<&mut Connexion<std::io::Empty>>,
+        wallet,
+        cadence,
+        apres_bloc,
+    )
+}
+
+/// Comme [`synchroniser_par_connexion`], en CORROBORANT chaque bloc auprès d'un
+/// second nœud choisi indépendamment.
+///
+/// # Le défaut que le témoin ferme
+///
+/// Un wallet qui prend l'historique ET les racines au MÊME nœud n'a rien vérifié.
+/// Taire une sortie donne une chaîne parfaitement close : le nœud annonce la racine
+/// de son arbre amputé, le wallet insère ce qu'on lui donne, recalcule la même
+/// racine et la trouve conforme. Aucun contrôle LOCAL ne peut fermer ça — il y faut
+/// un identifiant de bloc venu d'AILLEURS.
+///
+/// Le témoin est cet ailleurs : on lui demande la même hauteur et on ne retient que
+/// sa `racine_apres`. Un désaccord arrête tout AVANT application ([`Arret::Desaccord`]) ;
+/// détecter après coup ne servirait à rien, l'arbre porterait déjà des index faux.
+///
+/// # Ce qu'il ne fait pas
+///
+/// Il ne rend pas le nœud servant honnête : il exige que **deux** nœuds mentent de
+/// la même façon. Deux nœuds du même opérateur ne valent qu'un seul — le protocole
+/// ne peut pas vérifier l'indépendance, seul l'utilisateur le peut.
+///
+/// # Le prix
+///
+/// Le témoin sert le bloc ENTIER (la racine voyage dans chaque morceau, mais les
+/// morceaux doivent tous être consommés pour que le flux reste aligné) : la bande
+/// passante double. Le SCAN, lui, ne double pas — une seule décapsulation KEM par
+/// sortie, du côté servant. C'est le vrai coût de la synchronisation, et il reste
+/// simple.
+pub fn synchroniser_avec_temoin<S, T, P>(
+    connexion: &mut Connexion<S>,
+    mut temoin: Option<&mut Connexion<T>>,
+    wallet: &mut Wallet,
+    cadence: Duration,
     mut apres_bloc: P,
 ) -> ResumeSynchro
 where
     S: Read + Write,
+    T: Read + Write,
     P: FnMut(&Progression, &Wallet) -> Result<(), String>,
 {
     let mut resume = ResumeSynchro {
@@ -155,6 +218,26 @@ where
             }
         };
 
+        // CORROBORATION, avant toute application. L'ordre n'est pas un détail : une
+        // vérification postérieure trouverait l'arbre déjà peuplé d'index faux, et
+        // `wallet.synchroniser` ne défait que ce qu'il vient d'insérer.
+        if let Some(t) = temoin.as_deref_mut() {
+            // `morceaux` est non vide (`collecter_bloc` en garantit au moins un) et
+            // tous portent la même racine — le décodage l'impose.
+            let annoncee = morceaux[0].racine_apres;
+            match corroborer(t, hauteur, &annoncee) {
+                Corroboration::Accord => {}
+                Corroboration::Desaccord(raison) => {
+                    resume.arret = Arret::Desaccord(raison);
+                    return resume;
+                }
+                Corroboration::Muet => {
+                    resume.arret = Arret::TemoinMuet;
+                    return resume;
+                }
+            }
+        }
+
         // Rejeu d'UN bloc, par TOUS ses morceaux d'un coup — jamais morceau par morceau
         // (le rejeu refuserait un lot incomplet, et un tampon côté client recréerait
         // l'état partiel qu'on a justement supprimé du wallet).
@@ -188,6 +271,61 @@ where
 
     resume.arret = Arret::LimiteAtteinte;
     resume
+}
+
+/// Verdict du témoin sur une hauteur.
+enum Corroboration {
+    Accord,
+    Desaccord(String),
+    /// Rien reçu, ou réponse inutilisable. Traité comme une absence de
+    /// corroboration — jamais comme un accord.
+    Muet,
+}
+
+/// Demande la même hauteur au témoin et compare SA racine à celle annoncée.
+///
+/// On consomme tous ses morceaux : la racine voyage dans chacun, mais laisser des
+/// morceaux dans le flux désalignerait la prochaine demande. Leurs sorties ne sont
+/// ni scannées ni conservées — le témoin n'apporte que 64 octets d'information, le
+/// reste est le prix du format.
+///
+/// Toute anomalie du témoin (silence, message inattendu, réponse indécodable, morceaux
+/// incohérents) vaut MUET, jamais désaccord : l'accusation est réservée au cas où deux
+/// racines sont réellement lisibles et différentes. Confondre un témoin en panne avec
+/// un nœud menteur ferait accuser au hasard.
+fn corroborer<T: Read + Write>(
+    temoin: &mut Connexion<T>,
+    hauteur: u64,
+    annoncee: &proved_hash::digest::Digest,
+) -> Corroboration {
+    if temoin
+        .envoyer(&Message::DemandeHistorique { hauteur }.to_bytes())
+        .is_err()
+    {
+        return Corroboration::Muet;
+    }
+    match collecter_bloc(temoin, hauteur) {
+        Recolte::Complet(m) => {
+            let sienne = m[0].racine_apres;
+            if sienne.to_bytes() == annoncee.to_bytes() {
+                Corroboration::Accord
+            } else {
+                Corroboration::Desaccord(format!(
+                    "hauteur {hauteur} : le nœud servant annonce la racine {}, le témoin {} \
+                     — l'un des deux ment, et rien ici ne dit lequel",
+                    court(annoncee),
+                    court(&sienne)
+                ))
+            }
+        }
+        Recolte::Silence | Recolte::Incoherent(_) => Corroboration::Muet,
+    }
+}
+
+/// Les 8 premiers octets d'une racine, pour un message lisible. La comparaison,
+/// elle, porte toujours sur la racine ENTIÈRE.
+fn court(d: &proved_hash::digest::Digest) -> String {
+    hex::encode(&d.to_bytes()[..8])
 }
 
 /// Rassemble TOUS les morceaux d'un bloc, ou renonce.

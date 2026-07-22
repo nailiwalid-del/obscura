@@ -31,7 +31,7 @@ pub mod runtime;
 pub mod synchro;
 
 pub use archive::ArchiveBlocs;
-pub use client::{synchroniser_par_connexion, Arret, ResumeSynchro};
+pub use client::{synchroniser_avec_temoin, synchroniser_par_connexion, Arret, ResumeSynchro};
 pub use etranglement::Etrangleur;
 pub use message::{Message, MessageError};
 pub use orchestration::{Action, Noeud};

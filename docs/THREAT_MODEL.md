@@ -565,8 +565,10 @@ reellement SERVIR (`historique.hauteur_max()`), pas `etat.hauteur()` : promettre
 hauteur non archivee ferait boucler le wallet sur une demande eternellement silencieuse.
 
 ⚠️ Le mensonge INVERSE — annoncer une tete plus courte que la vraie — reste indetectable
-aupres d'un noeud unique. C'est le meme trou que « mentir par omission » : un wallet qui
-prend historique ET identifiants de blocs au MEME noeud n'a rien verifie.
+aupres d'un noeud unique, et le TEMOIN ne le ferme PAS : il corrobore la racine d'une
+hauteur SERVIE, alors qu'ici les deux noeuds se taisent en fin de chaine, ce qui est
+indistinguable d'un wallet reellement a jour. Un wallet retenu en arriere ne perd rien
+(il redemandera), mais il ignore les paiements recents sans que rien ne le signale.
 
 #### Ce qui MANQUE encore, ecrit franchement
 
@@ -654,11 +656,29 @@ reinterprete avec une position par defaut.
 
 #### Ce que cela ne ferme PAS
 
-- **Le mensonge par omission reste indetectable.** La racine reconstruite est confrontee
-  a celle que le noeud ANNONCE : taire une sortie donne une chaine parfaitement close
-  dont la racine est bien celle annoncee, et le paiement omis reste invisible. Fermer ce
-  trou exige des identifiants de blocs venus d'AILLEURS (plusieurs noeuds, point de
-  controle hors bande) — meme trou que « personne n'a autorite pour sceller ».
+- **Le mensonge par omission exige desormais une COLLUSION** — mais reste possible.
+  Aupres d'un noeud UNIQUE il etait indetectable : la racine reconstruite est confrontee
+  a celle que le noeud ANNONCE, donc taire une sortie donne une chaine parfaitement close
+  dont la racine est bien celle annoncee, et le paiement omis reste invisible. Aucun
+  controle LOCAL ne pouvait fermer ca : il y fallait un identifiant de bloc venu
+  d'AILLEURS.
+  C'est ce qu'apporte le TEMOIN (`obscura-wallet synchroniser --temoin <ip:port>`,
+  `node::client::synchroniser_avec_temoin`) : un second noeud, interroge sur la MEME
+  hauteur, dont on ne retient que la `racine_apres`. Un desaccord arrete la boucle AVANT
+  toute application (`Arret::Desaccord`) — verifier apres coup ne servirait a rien,
+  l'arbre porterait deja des index faux. Un temoin MUET n'est pas un accord : c'est une
+  absence de corroboration (`Arret::TemoinMuet`), et la boucle s'arrete plutot que de
+  laisser croire qu'elle a verifie. Teste sur de vraies sockets
+  (`crates/node/tests/temoin.rs`).
+  ⚠️ Trois limites, ecrites parce qu'elles sont structurelles :
+  (1) le temoin n'a de valeur que choisi INDEPENDAMMENT — deux noeuds du meme operateur
+  ne valent qu'un seul, et le protocole ne peut pas verifier l'independance ;
+  (2) le desaccord n'ACCUSE personne : il dit que l'un des deux ment, jamais lequel ;
+  (3) il est OPTIONNEL et OFF par defaut, donc un utilisateur qui ne le passe pas est
+  exactement dans l'ancienne situation — le CLI le lui dit alors a chaque
+  synchronisation, et distingue « a jour, corrobore » de « a jour SELON CE NOEUD ».
+  Le point de controle hors bande (un identifiant de bloc publie hors du protocole)
+  reste la seule reponse a une collusion generale.
 - **La boucle de synchronisation est cablee** (`node::client::synchroniser_par_connexion`,
   exposee par `obscura-wallet synchroniser`). Elle demande `hauteur = prochaine_hauteur()`,
   rassemble tous les morceaux du bloc, rejoue UNE fois, enregistre APRES chaque bloc, et

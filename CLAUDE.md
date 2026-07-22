@@ -251,7 +251,22 @@ round-3 (0x01) est REFUSÉ PAR SON NOM (`CryptoError::AlgoPerime`), jamais cohab
   même pas) ; `DejaApplique` n'est PAS un pas (arrêt, sinon boucle sur place) ; le
   travail est BORNÉ par invocation (`MAX_BLOCS_PAR_INVOCATION`, abandon nommé plutôt que
   boucle sur un nœud qui sert sans fin). Débit réglé par la FRÉQUENCE des demandes,
-  jamais par un champ sur le fil. `envoyer` REFUSE si `prochaine_hauteur() == 0` (jamais
+  jamais par un champ sur le fil.
+  **TÉMOIN** (`synchroniser_avec_temoin`, `obscura-wallet synchroniser --temoin`) : un
+  SECOND nœud interrogé sur la MÊME hauteur, dont on ne retient que `racine_apres`. Ferme
+  le mensonge par OMISSION — qui était indétectable auprès d'un nœud unique, parce que
+  taire une sortie donne une chaîne close dont la racine annoncée est cohérente ; aucun
+  contrôle LOCAL ne pouvait le démentir, il fallait un identifiant venu d'AILLEURS. La
+  comparaison a lieu AVANT application (vérifier après coup laisserait l'arbre peuplé
+  d'index faux, et `synchroniser` ne défait que ce qu'il vient d'insérer). Un témoin MUET
+  n'est PAS un accord (`Arret::TemoinMuet` : arrêt sans appliquer — un nœud sans
+  `--archiver` ou à crédit épuisé se tait, et poursuivre serait un placebo). Toute
+  anomalie du témoin vaut MUET, jamais désaccord : `Arret::Desaccord` est le seul arrêt
+  qui accuse, et il dit qu'un des deux ment sans dire lequel. ⚠️ N'a de valeur que choisi
+  INDÉPENDAMMENT (le protocole ne peut pas vérifier l'indépendance) ; ne ferme PAS la
+  tête RACCOURCIE (deux nœuds silencieux en fin de chaîne = wallet à jour, indistinguable).
+  Le prix est le doublement de la BANDE PASSANTE, pas du scan (une seule décapsulation
+  KEM par sortie, côté servant). `envoyer` REFUSE si `prochaine_hauteur() == 0` (jamais
   synchronisé) et propose `--noeud-synchro` DISTINCT de `--noeud` (avertissement quand
   ils coïncident) : enchaîner synchro puis envoi depuis la même IP relie les deux et
   désigne l'émetteur, alors qu'un relais Dandelion++ ne vient jamais de se synchroniser.
