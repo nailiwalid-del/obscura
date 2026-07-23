@@ -58,8 +58,9 @@ consensus est le statement STARK (docs/STARK_STATEMENT.md, P1–P7), appliquée 
 `ProvedLedgerState::appliquer_bloc` ; le witness-hiding (phase 3z) et la variabilité de
 forme (3z-c2) sont livrés. L'**élection de producteur** existe désormais (autorités
 gravées en genèse, tour de rôle, bloc signé — voir « Qui a autorité pour sceller ») ;
-ce qui reste ouvert est la LIVENESS (option A : une autorité absente fige la chaîne) et
-la gouvernance du remplacement d'autorité. **Prototype non audité — testnet uniquement.**
+le **certificat de quorum** `2f+1` (J1-a) donne la FINALITÉ. Ce qui reste ouvert est la
+LIVENESS — le protocole de vue est J1-b, et sans lui une chaîne à `n ≥ 4` ne produit
+aucun bloc — et la gouvernance du remplacement d'autorité (J1-c). **Prototype non audité — testnet uniquement.**
 
 ## Garanties additionnelles exigées (v0.2)
 
@@ -248,7 +249,7 @@ reproduira :
    quiconque - partition definitive, l'etat etant append-only. Regle qui en decoule :
    *toute borne de `from_bytes` doit exister aussi dans le constructeur*.
    **La variante OCTETS du meme defaut a ete fermee depuis** : `MAX_TX_PAR_BLOC` borne
-   le NOMBRE, pas le POIDS (a ≈ 104 Kio la transaction, une dizaine suffit a depasser
+   le NOMBRE, pas le POIDS (a ≈ 105 Kio la transaction, une dizaine suffit a depasser
    le cadre reseau de 1 Mio). `MAX_OCTETS_BLOC` (cadre − surcout AEAD − marge message)
    est desormais verifie au scellement ET au decodage — et comme le cadre borne le
    CHIFFRE, le surcout de la cascade est soustrait du budget, sinon un bloc scelle a la
@@ -418,7 +419,8 @@ ce qui rend l'erreur détectable.
   SÉPARÉ : le jour où une coinbase shielded aura un sens, elle exigera une règle qui
   **borne le montant émis** — or ce montant est précisément ce que le chiffrement
   cache. C'est une brique de conception, pas un champ à débloquer.
-- **FERMÉ — l'état grave désormais sa genèse** (`VERSION_ETAT` 0x03) : l'identifiant du
+- **FERMÉ — l'état grave désormais sa genèse** (`VERSION_ETAT` 0x03 à l'époque, 0x04
+  aujourd'hui) : l'identifiant du
   bloc 0 est sérialisé dans `etat.bin` et confronté au `--genese` demandé À CHAQUE
   démarrage. Un répertoire peuplé par une autre chaîne est refusé avec les deux
   identifiants dans le message (`GeneseDifferente`) — avant toute confrontation
@@ -494,7 +496,8 @@ pour la genese, ses emissions). La liste des sorties d'une hauteur est donc inte
 liee a l'identifiant du bloc — verifie mecaniquement par
 `historique_est_exactement_ce_que_le_bloc_engage`. `racine_apres` et `fin` sont DERIVEES
 de (etat avant ‖ contenu du bloc) : les inscrire changerait le format de consensus
-(`VERSION_BLOC` 0x03) et obligerait le scelleur a appliquer son bloc speculativement,
+(un bump de `VERSION_BLOC`, alors 0x03) et obligerait le scelleur a appliquer son bloc
+speculativement,
 sans ajouter un seul bit d'authentification.
 
 ⚠️ **Ce que cela laisse ouvert.** Un wallet qui prend l'historique ET les identifiants de

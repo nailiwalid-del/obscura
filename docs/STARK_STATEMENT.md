@@ -331,9 +331,12 @@
 > ⚠️ **Ces tailles sont CADUQUES depuis le durcissement de soundness du 2026-07-22**
 > (32 → 48 requêtes FRI, cf. « Le chiffre inconfortable » plus bas). Mesures
 > COURANTES, même commande (`cargo test -p circuit --release --lib mesure_formes --
-> --ignored --nocapture`) : 1/1 → **78,5 Kio** / 1,9 ms ; 1/2 → 78,4 Kio ; 2/2 →
-> **96,1 Kio** / 4,0 ms ; 4/4 → **114,3 Kio** / 12,3 ms. Sur le fil, une `ProvedTx`
-> 2/2 complète pèse **≈104 Kio**. Les temps, eux, n'ont pas bougé : le durcissement
+> --ignored --nocapture`) : 1/1 → **≈78 Kio** / 1,9 ms ; 1/2 → ≈78 Kio ; 2/2 →
+> **≈97 Kio** / 4,0 ms ; 4/4 → **≈114 Kio** / 12,3 ms. Sur le fil, une `ProvedTx`
+> 2/2 complète pèse **≈105 Kio**. ⚠️ Ces tailles se donnent à ±1,5 Kio près, et ce
+> n'est pas de la coquetterie : le masquage tire de l'aléa FRAIS à chaque preuve,
+> donc deux preuves de la même transaction ne pèsent pas le même nombre d'octets.
+> Une non-régression de taille doit se lire comme une bande, jamais comme une égalité. Les temps, eux, n'ont pas bougé : le durcissement
 > se paie en OCTETS — le coût permanent, supporté par chaque nœud qui stocke et
 > relaie, pour toujours.
 >

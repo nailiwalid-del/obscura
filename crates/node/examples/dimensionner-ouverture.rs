@@ -14,11 +14,21 @@
 //! `R(h)` étant publique, `R(h) < 2^60` se vérifie en clair, sans preuve. On mesure
 //! donc les deux moitiés séparément.
 //!
-//! ⚠️ Ce que ce chiffre N'EST PAS. Les gadgets autonomes du crate sont
-//! **validity-only** : ils prouvent que l'énoncé est prouvable à cette taille, pas
-//! qu'il cache son témoin. Une émission de production exige le masquage
-//! (l'équivalent de 3z-b1 pour le monolithe), dont le coût s'ajoute. Le chiffre
-//! mesuré ici est donc un **plancher**, pas un devis.
+//! ⚠️⚠️ **CE N'EST PAS UNE MESURE DE CONSENSUS.** Deux écarts, tous deux dans le
+//! sens de la sous-estimation, séparent ce chiffre d'un devis :
+//!
+//! 1. **Paramètres de DEV.** Les gadgets autonomes appellent `proof_options()` —
+//!    32 requêtes, blowup 8. Le consensus utilise `proof_options_hi()` — 48
+//!    requêtes, blowup 16 — parce qu'à 32 la sécurité PROUVÉE n'est que de 62 bits.
+//!    Le durcissement du 2026-07-22 a coûté ~43 % de taille sur le monolithe.
+//! 2. **Validity-only.** Les gadgets prouvent que l'énoncé est prouvable à cette
+//!    taille, pas qu'il CACHE son témoin. Le masquage (équivalent de 3z-b1)
+//!    s'ajoute, et rend la taille VARIABLE d'une preuve à l'autre (aléa frais) —
+//!    à lire comme une bande, jamais comme une égalité.
+//!
+//! `proof_options_hi` étant `pub(crate)`, la mesure de consensus demande un test
+//! de mesure DANS `crates/circuit`, sur le modèle de `mesure_formes`. Tant qu'il
+//! n'existe pas, ce chiffre est un **plancher**, et l'ADR le dit.
 //!
 //! ```text
 //! cargo run -p node --example dimensionner-ouverture --release --features circuit/dev-circuits
