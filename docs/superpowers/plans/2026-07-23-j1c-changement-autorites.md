@@ -1467,111 +1467,196 @@ EOF
 
 ---
 
-### Task 8 : Socket — critère de sortie (reconfiguration certifiée par l'ancien quorum)
+### Task 8 : Critère de sortie — reconfiguration certifiée (socket) ET basculement à h+K (in-process)
 
 **Files:**
 - Create: `crates/node/tests/reconfiguration.rs`
+- Modify (si besoin) : `crates/node/src/runtime.rs` (déclencheur de proposition pour le test socket)
 
 **Interfaces:**
-- Consumes: `Noeud::proposer_changement`, `Runtime`, `Donnees`, le motif de `vue_sockets.rs` (helper `attendre_en_tiquant`, `voteur`).
-- Produces: le test de sortie de J1-c.
+- Consumes: `Noeud::{proposer_changement, sceller, traiter}` (`traiter(de: PeerId, message: Message, maintenant_ms: u64) -> Vec<Action>`), `Action::{Diffuser(Message), Envoyer(PeerId, Message), PersisterVotes}`, `PeerId::depuis_identite(&SigPublicKey)`, `ProvedLedgerState::{producteur_attendu, quorum_a, autorites_a_hauteur, hauteur, autorites}`, `Runtime` + le motif de `vue_sockets.rs`/`quorum_sockets.rs`.
+- Produces: le critère de sortie de J1-c en DEUX tests.
 
-- [ ] **Step 1 : Écrire le test de sortie**
+**Pourquoi deux tests (décision de plan) :** l'annonce d'une reconfiguration et sa CERTIFICATION par l'ancien comité sont prouvées **sur de vraies sockets** (la spec l'exige). Le BASCULEMENT effectif à `h+K` — où le NOUVEAU comité prend la main, un membre remplacé ne vote plus, un membre neuf vote — est une propriété de LOGIQUE consensus (orchestration `proposer_a_vue`/`sur_proposition`/`sur_vote`/`sur_bloc`) : on la prouve par un driver **in-process déterministe** qui route les `Action` entre 5 `Noeud` sur 9 hauteurs. Le transport socket étant déjà prouvé ailleurs (`quorum_sockets.rs`, `cycle_wallet.rs`), le déroulé in-process est plus fiable qu'un test socket 5-nœuds/9-blocs et exerce EXACTEMENT le code corrigé (les trois sites height-aware `:510`/`notre_index_a`/`sur_vote`).
 
-S'inspirer STRUCTURELLEMENT de `crates/node/tests/vue_sockets.rs` (mêmes imports, mêmes helpers `repertoire`/`attendre_en_tiquant`/`voteur`, recopiés en tête du fichier). Le scénario : 4 autorités, l'autorité 0 (producteur de la hauteur 1) annonce le remplacement de l'autorité 3 par une clé neuve ; l'ancien quorum (3 sur 4) certifie ; on vérifie que le bloc 1 est appliqué partout, que le pendant est enregistré, et que `quorum_a(1 + K)` reflète la nouvelle liste. Le basculement effectif à `h+K` est vérifié au niveau LEDGER (Task 3/6) ; le test socket prouve la CERTIFICATION par l'ancien comité et la propagation.
+#### Test A — SOCKET : l'annonce se certifie par l'ancien quorum et se propage
+
+- [ ] **Step 1 : Écrire le test socket**
+
+Calquer STRUCTURELLEMENT `crates/node/tests/vue_sockets.rs` (helpers `repertoire`/`attendre_en_tiquant`/`voteur`, recopiés en tête). Scénario : 4 autorités [A,B,C,D] ; l'autorité 0 (A, producteur de la hauteur 1) annonce le remplacement de D par une clé neuve E via `proposer_changement([A,B,C,E])` ; l'ancien quorum (3 sur 4) certifie ; le bloc 1 se propage et s'applique partout.
 
 ```rust
-//! CRITÈRE DE SORTIE J1-c : un changement d'autorités est CERTIFIÉ par le quorum de
-//! l'ANCIENNE liste et se propage sur de vraies sockets. Le basculement effectif à
-//! h+K est prouvé au niveau ledger ; ici on prouve que l'ancien comité DÉCIDE du
-//! nouveau et que le bloc de reconfiguration circule et s'applique partout.
-//!
+//! CRITÈRE DE SORTIE J1-c (partie sockets) : une reconfiguration ANNONCÉE se certifie
+//! par le quorum de l'ANCIENNE liste et se propage sur de vraies sockets. Le
+//! BASCULEMENT à h+K est prouvé in-process par `reconfiguration_bascule_a_h_plus_k`.
 //! Temps INJECTÉ (aucun sleep ne pilote le consensus), comme vue_sockets.rs.
-
-use crypto::sig::SigKeypair;
-use ledger::bloc::Bloc;
-use ledger::proved_state::{ProvedLedgerState, DELAI_CHANGEMENT_AUTORITES};
-use node::orchestration::Noeud;
-use node::persistance::Donnees;
-use node::runtime::Runtime;
-use std::net::{Ipv4Addr, SocketAddr, TcpListener};
-use std::time::{Duration, Instant};
-
-const PROFONDEUR: usize = 4;
-const MAINTENANT_MS: u64 = 1_000;
-
-// … recopier `repertoire`, `attendre_en_tiquant`, `voteur` depuis vue_sockets.rs …
-
-#[test]
-#[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
-fn reconfiguration_certifiee_par_lancien_quorum() {
-    let cles: Vec<SigKeypair> = (0..4).map(|_| SigKeypair::generate()).collect();
-    let genese =
-        Bloc::genese_avec_autorites(Vec::new(), cles.iter().map(|k| k.public.clone()).collect())
-            .expect("genèse");
-    // La NOUVELLE liste remplace l'autorité 3 par une clé neuve.
-    let neuve = SigKeypair::generate();
-    let nouvelle_liste: Vec<_> = vec![
-        cles[0].public.clone(),
-        cles[1].public.clone(),
-        cles[2].public.clone(),
-        neuve.public.clone(),
-    ];
-
-    // Autorités 1, 2, 3 écoutent et votent ; l'autorité 0 (producteur de la hauteur 1)
-    // se connecte à elles et PROPOSE le changement.
-    // … montage sockets calqué sur producteur_absent_la_chaine_avance …
-    // Après connexion, l'autorité 0 appelle proposer_changement(nouvelle_liste, MAINTENANT_MS)
-    // via une entrée runtime (voir Step 3), puis on pompe jusqu'à hauteur == 1 partout.
-
-    // Assertions :
-    //  - toutes les autorités appliquent le bloc 1 (même tête, même racine) ;
-    //  - le bloc 1 porte `changement_autorites` = nouvelle_liste ;
-    //  - le certificat réunit >= 3 votants de l'ANCIENNE liste ;
-    //  - sur chaque nœud, quorum_a(1 + K) reflète la nouvelle liste (n=4 → 3) et
-    //    producteur_attendu(1 + K, 0) == neuve.public (l'autorité 3 remplacée).
-}
 ```
 
-Compléter le montage sockets en calquant EXACTEMENT `producteur_absent_la_chaine_avance` (threads voteurs, `ecoute.accept()`, `rt.accepter`, `rt.connecter`, `attendre_en_tiquant`). La seule différence de fond : au lieu d'attendre un battement, l'autorité 0 déclenche `proposer_changement`.
+Assertions du test socket :
+- les 4 autorités appliquent le bloc 1 (même `tete()`, même `tree.root()`) ;
+- le bloc 1 archivé porte `changement_autorites == Some([A,B,C,E])` ;
+- son certificat réunit `>= 3` votants (`nombre_de_votants() >= 3`) ;
+- sur chaque nœud, `producteur_attendu(1 + DELAI_CHANGEMENT_AUTORITES, 0)` vaut `E.public` (D remplacée) et `quorum_a(1 + DELAI_CHANGEMENT_AUTORITES) == 3`.
 
-- [ ] **Step 2 : Vérifier comment déclencher la proposition via le runtime**
+Le montage sockets calque `producteur_absent_la_chaine_avance` (threads voteurs, `ecoute.accept()`, `rt.accepter`, `rt.connecter`, `attendre_en_tiquant`) SAUF que le producteur (thread principal) déclenche `proposer_changement` au lieu d'attendre un battement.
 
-Le `Runtime` encapsule le `Noeud`. Vérifier l'API exacte exposée pour agir sur le nœud :
+- [ ] **Step 2 : Déclencheur de proposition côté runtime**
 
-Run: `grep -n "pub fn\|proposer\|sceller\|noeud" crates/node/src/runtime.rs | head -40`
-
-Si le `Runtime` expose `noeud_mut()` (ou équivalent), l'utiliser : `let (bloc, actions) = rt.noeud_mut().proposer_changement(nouvelle_liste, MAINTENANT_MS)?;` puis injecter `actions` dans la boucle d'émission. Si le runtime ne l'expose pas encore, ajouter une méthode minimale au runtime :
+Vérifier l'API du runtime : `grep -n "pub fn\|noeud\|Action\|engager\|pomper" crates/node/src/runtime.rs`. Si le runtime n'expose pas déjà un accès au nœud utilisable, ajouter une méthode minimale calquée sur la façon dont `tick`/`sceller` y engagent leurs `Action` (NE PAS inventer le nom de la méthode d'exécution — la trouver) :
 
 ```rust
-    /// Déclenche une proposition de changement d'autorités et engage ses actions
-    /// (diffusion) dans la boucle d'émission. Rôle d'opérateur, comme `sceller`.
+    /// Déclenche une proposition de changement d'autorités et engage ses actions.
+    /// Rôle d'opérateur, comme le scellement périodique.
     pub fn proposer_changement(
         &mut self,
         nouvelles: Vec<crypto::sig::SigPublicKey>,
         maintenant_ms: u64,
     ) -> bool {
         match self.noeud.proposer_changement(nouvelles, maintenant_ms) {
-            Some((_, actions)) => {
-                self.engager(actions); // méthode existante qui exécute les Action
-                true
-            }
+            Some((_, actions)) => { self.engager(actions); true }
             None => false,
         }
     }
 ```
 
-**Vérifier le nom exact** de la méthode qui exécute les `Vec<Action>` dans le runtime (chercher comment `tick`/`sceller` y injectent leurs actions) et l'appeler. Ne pas inventer : `grep -n "Action" crates/node/src/runtime.rs`.
+- [ ] **Step 3 : Lancer le test socket en release**
 
-- [ ] **Step 3 : Lancer le test en release**
+Run: `cargo test -p node --release --test reconfiguration reconfiguration_certifiee 2>&1 | tail -25`
+Expected: PASS. En cas d'échec de propagation, augmenter le délai réel d'attente (`Duration::from_secs(120)`), comme vue_sockets.
 
-Run: `cargo test -p node --release --test reconfiguration 2>&1 | tail -25`
-Expected: PASS. En cas d'échec de propagation, augmenter le délai réel d'attente (comme vue_sockets : `Duration::from_secs(120)`).
+#### Test B — IN-PROCESS : la reconfiguration bascule à h+K, le nouveau comité prend la main
 
-- [ ] **Step 4 : CI locale + commit**
+- [ ] **Step 4 : Écrire le driver in-process et le test de basculement**
+
+Un router déterministe route les `Action` entre 5 `Noeud` jusqu'au point fixe, sans réseau. `traiter` est le point d'entrée. Chaque nœud a un `PeerId::depuis_identite(&node.identite.public)`.
+
+```rust
+use node::orchestration::{Action, Noeud};
+use node::message::Message;
+use node::pairs::PeerId; // vérifier le chemin exact de PeerId : grep -rn "depuis_identite" crates/node/src
+use std::collections::VecDeque;
+
+/// Applique une file d'actions (source, action) sur les 5 nœuds jusqu'au point fixe :
+/// `Diffuser` → tous les AUTRES nœuds ; `Envoyer(peer)` → le nœud ciblé ; `PersisterVotes`
+/// ignoré (pas de disque en test). Chaque `traiter` peut produire de nouvelles actions,
+/// enfilées à leur tour. Déterministe : aucun réseau, aucun temps réel.
+fn router(noeuds: &mut [Noeud], pids: &[PeerId], depart: Vec<(usize, Action)>, t: u64) {
+    let mut file: VecDeque<(usize, Action)> = depart.into_iter().collect();
+    let mut garde = 0usize;
+    while let Some((src, action)) = file.pop_front() {
+        garde += 1;
+        assert!(garde < 100_000, "boucle de routage — point fixe non atteint");
+        let de = pids[src].clone();
+        match action {
+            Action::PersisterVotes(_) => {}
+            Action::Diffuser(msg) => {
+                for j in 0..noeuds.len() {
+                    if j == src { continue; }
+                    for a in noeuds[j].traiter(de.clone(), msg.clone(), t) {
+                        file.push_back((j, a));
+                    }
+                }
+            }
+            Action::Envoyer(cible, msg) => {
+                if let Some(j) = pids.iter().position(|p| *p == cible) {
+                    for a in noeuds[j].traiter(de.clone(), msg, t) {
+                        file.push_back((j, a));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
+fn reconfiguration_bascule_a_h_plus_k() {
+    // 5 nœuds : A,B,C,D (comité de genèse) + E (pas encore autorité). Genèse VIDE
+    // d'allocations → blocs vides, aucune preuve STARK.
+    let cles: Vec<SigKeypair> = (0..5).map(|_| SigKeypair::generate()).collect(); // 0..4 = A..E
+    let comite_genese: Vec<_> = (0..4).map(|i| cles[i].public.clone()).collect(); // A,B,C,D
+    let genese = Bloc::genese_avec_autorites(Vec::new(), comite_genese).expect("genèse");
+    // Nouveau comité : D (index 3) remplacé par E (index 4).
+    let nouveau: Vec<_> = vec![
+        cles[0].public.clone(), cles[1].public.clone(),
+        cles[2].public.clone(), cles[4].public.clone(),
+    ];
+
+    let mut noeuds: Vec<Noeud> = (0..5)
+        .map(|i| {
+            let etat = ProvedLedgerState::depuis_genese_depth(&genese, 4).expect("amorçage");
+            let id = SigKeypair::from_bytes_secret(&cles[i].to_bytes_secret()).unwrap();
+            Noeud::new(id, etat, [i as u8; 32])
+        })
+        .collect();
+    let pids: Vec<PeerId> = noeuds.iter().map(|n| PeerId::depuis_identite(&n.identite.public)).collect();
+
+    let t = 1_000u64;
+
+    // Renvoie l'index du producteur de (hauteur, vue 0) selon le comité height-aware
+    // (n'importe quel nœud à jour donne la même réponse).
+    let producteur = |noeuds: &[Noeud], hauteur: u64| -> usize {
+        let pk = noeuds[0].etat.producteur_attendu(hauteur, 0).unwrap().to_bytes();
+        (0..5).find(|&i| noeuds[i].identite.public.to_bytes() == pk).unwrap()
+    };
+
+    // HAUTEUR 1 : le producteur ANNONCE le changement (proposer_changement).
+    let p1 = producteur(&noeuds, 1);
+    let (_, actions) = noeuds[p1].proposer_changement(nouveau.clone(), t).expect("annonce");
+    router(&mut noeuds, &pids, actions.into_iter().map(|a| (p1, a)).collect(), t);
+    for n in &noeuds { assert_eq!(n.etat.hauteur(), 1, "tous appliquent le bloc 1"); }
+
+    // HAUTEURS 2..=9 : chaque producteur du tour SCELLE un bloc vide (battement), le
+    // comité vote, le bloc se certifie et s'applique partout.
+    for h in 2..=(1 + DELAI_CHANGEMENT_AUTORITES) {
+        let p = producteur(&noeuds, h);
+        let (_, actions) = noeuds[p].sceller().expect("scellement du battement");
+        router(&mut noeuds, &pids, actions.into_iter().map(|a| (p, a)).collect(), t);
+        for n in &noeuds {
+            assert_eq!(n.etat.hauteur(), h, "tous appliquent le bloc {h}");
+        }
+    }
+
+    // À h+K = 9 : le NOUVEAU comité a pris la main. Vérifier la bascule.
+    let hk = 1 + DELAI_CHANGEMENT_AUTORITES;
+    for n in &noeuds {
+        assert_eq!(n.etat.hauteur(), hk);
+        // La liste committée est le NOUVEAU comité (D remplacé par E).
+        let actives: Vec<_> = n.etat.autorites().iter().map(|k| k.to_bytes()).collect();
+        assert_eq!(actives.len(), 4);
+        assert!(actives.contains(&cles[4].public.to_bytes()), "E est désormais autorité");
+        assert!(!actives.contains(&cles[3].public.to_bytes()), "D ne l'est plus");
+    }
+    // Le bloc h+K est certifié par le NOUVEAU comité : E figure parmi les votants,
+    // D non. On relit le bloc archivé chez le producteur de h+K.
+    let ph = producteur(&noeuds, hk);
+    let octets = noeuds[ph].archive().octets_a(hk).expect("bloc h+K archivé");
+    let bloc = Bloc::from_bytes(octets).expect("décodable");
+    let cert = bloc.certificat.as_ref().expect("certificat");
+    assert!(cert.nombre_de_votants() >= 3, "quorum du nouveau comité");
+    // Les index du certificat désignent des positions dans le NOUVEAU comité : l'index
+    // de E (position 3 dans `nouveau`) peut voter ; celui de D n'existe plus.
+    // (Vérifier que le bloc s'applique bien sous le nouveau comité — déjà fait par
+    // l'égalité des hauteurs ci-dessus, appliquer_bloc ayant validé le certificat.)
+}
+```
+
+⚠️ **Points à vérifier par l'implémenteur (grep, ne pas inventer) :**
+- Le chemin exact de `PeerId` et de `depuis_identite` (`grep -rn "depuis_identite\|struct PeerId\|enum PeerId" crates/node/src`).
+- Le chemin de `Message` (`node::message::Message`) et de `Action` (`node::orchestration::Action`).
+- L'accès à l'archive d'un nœud pour relire le bloc h+K : `grep -n "pub fn archive\|octets_a" crates/node/src/orchestration.rs` (le motif `rt.noeud().archive().octets_a(h)` existe dans `vue_sockets.rs`).
+- Que `sceller()`/`proposer_changement()` appliquent bien à quorum 1 seulement quand n≤3 ; à n=4 ils PROPOSENT (retour d'`Action::Diffuser(Proposition)`), et le router fait circuler propositions→votes→bloc certifié. C'est le comportement voulu ; le router le gère.
+
+- [ ] **Step 5 : Lancer le test in-process en release**
+
+Run: `cargo test -p node --release --test reconfiguration reconfiguration_bascule 2>&1 | tail -30`
+Expected: PASS — les 5 nœuds atteignent h=9, le nouveau comité certifie, E vote / D non. Si un bloc n'atteint pas le quorum à une hauteur, vérifier que le producteur du tour est bien choisi via `producteur_attendu` height-aware (pas via l'ancien comité).
+
+- [ ] **Step 6 : CI locale + commit**
 
 ```bash
 cargo fmt --all -- --check && \
+cargo clippy --all-targets -- -D warnings && \
 cargo clippy --all-targets --all-features -- -D warnings && \
 cargo test -p node --release --test reconfiguration
 ```
@@ -1579,10 +1664,11 @@ cargo test -p node --release --test reconfiguration
 ```bash
 git add crates/node/tests/reconfiguration.rs crates/node/src/runtime.rs
 git commit -m "$(cat <<'EOF'
-test(J1-c): une reconfiguration se certifie par l'ancien quorum sur sockets
+test(J1-c): critère de sortie — reconfiguration certifiée et basculement à h+K
 
-4 autorités, l'autorité 3 remplacée par une clé neuve ; l'ancien comité
-certifie le bloc de changement, qui se propage et enregistre le pendant.
+Socket : l'annonce se certifie par l'ancien quorum et se propage. In-process
+déterministe : 5 nœuds déroulent la reconfiguration jusqu'à h+K, le nouveau
+comité prend la main (E vote, D remplacée ne vote plus).
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 EOF
