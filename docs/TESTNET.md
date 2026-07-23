@@ -64,12 +64,19 @@ de décisions écrites, et chacune renvoie à son document de référence.
   les chaînes à `n ≤ 3` (`f = 0`, quorum 1) avancent. Ce n'est pas une panne à
   signaler : c'est l'état du jalon, et ce document existe pour qu'il ne soit pas
   découvert au démarrage.
-- **Une autorité absente fige la chaîne jusqu'à son retour.** Les transactions
-  s'accumulent en mempool, rien n'est perdu, mais **plus aucun bloc n'est
-  produit** tant que l'autorité du tour ne revient pas. Le mécanisme qui ferme ce
-  trou — le **changement de vue** — est décidé (ADR-001) et le format le porte
-  déjà (le champ `vue` est dans l'identifiant du bloc) ; c'est son protocole qui
-  reste à écrire.
+- **Une autorité absente est CONTOURNÉE par changement de vue** (J1-b2) : passé
+  un délai (à backoff exponentiel), les autres passent à la vue suivante et la
+  chaîne continue avec le producteur suivant. La panne d'un participant ne fige
+  donc plus la chaîne.
+  ⚠️ **Limite restante — le split de votes.** Si un producteur était « à moitié
+  joignable » au moment exact du basculement de vue, les votes peuvent se
+  partitionner : un nœud vote pour le bloc de la vue `v`, un autre pour celui de
+  la vue `v+1`. Aucun n'atteint alors le quorum, et comme un vote est
+  **définitif à sa hauteur** (règle de sûreté), la hauteur peut **caler pour
+  toujours** — recovery par nouvelle chaîne (§2). C'est rare (il faut un
+  producteur partiellement joignable pile au basculement), c'est le prix assumé
+  de « arrêt plutôt que divergence », et ce n'est **jamais silencieux** : le
+  statut passe en préoccupant et le journal émet une `ERREUR` dédiée.
 - **Aucune réorganisation n'est possible.** L'état est append-only de bout en
   bout. Toute divergence est **définitive** : un nœud qui diverge ne se répare
   pas, il se réamorce. Avec la finalité instantanée, cette limite devient une
