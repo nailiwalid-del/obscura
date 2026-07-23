@@ -1,22 +1,25 @@
-//! Registre des votes ÉMIS — la règle de sûreté du consensus (ADR J1, J1-b1).
+//! Registre des votes ÉMIS — la règle de sûreté du consensus (ADR J1).
 //!
-//! # La règle
+//! # La règle (modèle A, J1-b2)
 //!
-//! Un nœud ne vote **qu'une fois par `(hauteur, vue)`**. Sans elle, deux blocs
-//! différents peuvent réunir `2f+1` votes à la même hauteur, et deux nœuds
+//! Un nœud ne vote **qu'une fois par HAUTEUR**, toutes vues confondues. Sans elle,
+//! deux blocs différents peuvent réunir le quorum à la même hauteur, et deux nœuds
 //! honnêtes appliquent des blocs différents. Sur un ledger **append-only**, cette
-//! divergence est **définitive** : il n'existe aucune réorganisation pour la
-//! résorber, et les deux moitiés du réseau se rejettent ensuite tout.
+//! divergence est **définitive** : aucune réorganisation ne la résorbe, et les
+//! deux moitiés du réseau se rejettent ensuite tout.
 //!
-//! C'est donc la propriété qui rend l'absence de réorganisation TENABLE. Le reste
-//! du consensus peut échouer bruyamment ; celle-ci échoue en silence.
+//! C'est la propriété qui rend l'absence de réorganisation TENABLE, et — sous le
+//! modèle A — elle rend la preuve de sûreté triviale : deux quorums à la même
+//! hauteur ont un votant honnête commun, qui n'a voté qu'un id. **La vue n'entre
+//! jamais dans la décision** (contrairement à J1-b1, où la clé était
+//! `(hauteur, vue)` — voir le format `0x02`).
 //!
 //! # Pourquoi c'est PERSISTÉ
 //!
 //! Un registre en mémoire seule ne protège que le processus en cours. Un nœud qui
 //! redémarre — panne, mise à jour, simple `systemctl restart` — aurait tout oublié
-//! et pourrait voter une seconde fois, pour un AUTRE bloc, à la même
-//! `(hauteur, vue)`. La panne la plus banale produirait la faute la plus grave.
+//! et pourrait voter une seconde fois, pour un AUTRE bloc, à la même hauteur. La
+//! panne la plus banale produirait la faute la plus grave.
 //!
 //! ⚠️ **L'ordre d'écriture est la garantie, et il n'est pas symétrique.** Le vote
 //! est persisté AVANT d'être émis. Si la machine tombe entre les deux, on a promis
@@ -25,13 +28,13 @@
 //! autre chose. C'est la même discipline que « l'historique avant l'état » dans
 //! [`crate::persistance`].
 //!
-//! # Pourquoi trois champs suffisent
+//! # Pourquoi DEUX champs suffisent
 //!
-//! Le registre est **monotone** : on ne vote que pour une `(hauteur, vue)`
-//! strictement supérieure à la dernière, ou pour exactement le même bloc à la même
-//! position. Il n'y a donc rien à conserver d'autre que le dernier vote — pas
-//! d'historique, pas d'élagage, pas de fichier qui croît. Même forme qu'une
-//! frontier de Merkle : on ne garde que ce qui interdit de revenir en arrière.
+//! Le registre est **monotone** en hauteur : on ne vote que pour une hauteur
+//! strictement supérieure à la dernière, ou pour exactement le même id à la même
+//! hauteur. Rien à conserver d'autre que le dernier vote — pas d'historique, pas
+//! d'élagage, pas de fichier qui croît. Même forme qu'une frontier de Merkle : on
+//! ne garde que ce qui interdit de revenir en arrière.
 
 /// Version du format du registre. `0x02` (J1-b2) : clé HAUTEUR seule, la `vue` a
 /// disparu (modèle A). Un `0x01` (J1-b1) est refusé par son nom, jamais
