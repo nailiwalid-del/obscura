@@ -321,6 +321,25 @@ impl Runtime {
         self.executer(actions);
     }
 
+    /// Déclenche une proposition de changement d'autorités et engage ses actions.
+    /// Rôle d'opérateur, exactement comme le scellement périodique : à n ≥ 4, le nœud
+    /// DIFFUSE une proposition (`Action::Diffuser(Message::Proposition(..))`), collecte
+    /// les votes et assemble le bloc certifié. Renvoie `true` si la proposition a bien
+    /// été émise (notre tour, chaîne à autorités), `false` sinon.
+    pub fn proposer_changement(
+        &mut self,
+        nouvelles: Vec<crypto::sig::SigPublicKey>,
+        maintenant_ms: u64,
+    ) -> bool {
+        match self.noeud.proposer_changement(nouvelles, maintenant_ms) {
+            Some((_, actions)) => {
+                self.executer(actions);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Nombre de liens ouverts.
     pub fn liens_ouverts(&self) -> usize {
         self.liens.lock().unwrap().len()
