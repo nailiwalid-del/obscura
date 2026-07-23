@@ -148,17 +148,20 @@ impl Journal {
 
 /// Instantané d'exploitation — LA ligne qu'un opérateur surveille.
 ///
-/// Elle réunit les cinq chiffres qui disent si un nœud va bien, et surtout
-/// `desaccords` : un nœud FIGÉ (qui refuse tous les blocs parce qu'il a manqué une
-/// hauteur) reste sinon indiscernable d'un nœud au repos — il sert un historique
-/// plus court mais parfaitement cohérent. C'est le mode de panne le plus coûteux du
-/// protocole, et le seul que ces chiffres rendent visible.
+/// Elle réunit les chiffres qui disent si un nœud va bien, et surtout les deux
+/// pannes SILENCIEUSES du protocole : `desaccords` (un nœud figé sert un historique
+/// plus court mais cohérent, indiscernable du repos) et `hauteurs_calees` (un split
+/// de votes a figé une hauteur définitivement — cf. J1-b2). Toutes deux rendent le
+/// statut préoccupant : le pire mode d'échec serait un arrêt muet.
 pub struct Statut {
     pub hauteur: u64,
     pub pairs: usize,
     pub liens: usize,
     pub mempool: usize,
     pub desaccords: u64,
+    /// Hauteurs CALÉES (split de votes, une nouvelle chaîne est nécessaire). Non
+    /// nul rend le statut préoccupant — jamais un arrêt silencieux.
+    pub hauteurs_calees: u64,
 }
 
 impl Statut {
@@ -166,8 +169,13 @@ impl Statut {
     /// capturer la sortie d'erreur.
     pub fn ligne(&self) -> String {
         format!(
-            "statut — hauteur {} | pairs {} | liens {} | mempool {} | désaccords {}",
-            self.hauteur, self.pairs, self.liens, self.mempool, self.desaccords
+            "statut — hauteur {} | pairs {} | liens {} | mempool {} | désaccords {} | calées {}",
+            self.hauteur,
+            self.pairs,
+            self.liens,
+            self.mempool,
+            self.desaccords,
+            self.hauteurs_calees
         )
     }
 
@@ -177,7 +185,7 @@ impl Statut {
     /// Zéro lien n'est pas anodin — un nœud sans pair ne reçoit rien, ne diffuse
     /// rien, et continue pourtant de répondre normalement à qui l'interroge.
     pub fn preoccupant(&self) -> bool {
-        self.liens == 0 || self.desaccords > 0
+        self.liens == 0 || self.desaccords > 0 || self.hauteurs_calees > 0
     }
 }
 
@@ -222,6 +230,7 @@ mod tests {
             liens: 2,
             mempool: 7,
             desaccords: 0,
+            hauteurs_calees: 0,
         };
         let l = s.ligne();
         for attendu in [
@@ -230,6 +239,7 @@ mod tests {
             "liens 2",
             "mempool 7",
             "désaccords 0",
+            "calées 0",
         ] {
             assert!(l.contains(attendu), "« {attendu} » manque dans : {l}");
         }
@@ -251,6 +261,7 @@ mod tests {
             liens: 0,
             mempool: 0,
             desaccords: 0,
+            hauteurs_calees: 0,
         };
         assert!(sans_lien.preoccupant(), "aucun lien : le nœud est isolé");
 
@@ -260,7 +271,21 @@ mod tests {
             liens: 3,
             mempool: 0,
             desaccords: 9,
+            hauteurs_calees: 0,
         };
         assert!(fige.preoccupant(), "des blocs refusés : le nœud décroche");
+
+        let cale = Statut {
+            hauteur: 5,
+            pairs: 4,
+            liens: 3,
+            mempool: 0,
+            desaccords: 0,
+            hauteurs_calees: 1,
+        };
+        assert!(
+            cale.preoccupant(),
+            "une hauteur calée : split de votes, jamais muet"
+        );
     }
 }

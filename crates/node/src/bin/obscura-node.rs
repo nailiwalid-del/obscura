@@ -65,8 +65,10 @@ fn usage() -> ! {
     eprintln!("    équivocation = faute prouvable). Sur une chaîne OUVERTE (genèse sans");
     eprintln!("    autorités, le défaut), tout nœud qui l'active fabrique des blocs :");
     eprintln!("    ordre CONVENU, pas DÉFENDU — testnet local uniquement.");
-    eprintln!("    ⚠️  LIVENESS (option A assumée) : une autorité absente FIGE la chaîne");
-    eprintln!("    à son tour ; les transactions attendent au mempool, rien n'est perdu.");
+    eprintln!("    ⚠️  LIVENESS (J1-b2) : une autorité absente est CONTOURNÉE par");
+    eprintln!("    changement de vue après un délai ; la chaîne continue avec le");
+    eprintln!("    producteur suivant. Un split de votes peut caler une hauteur");
+    eprintln!("    définitivement — signalé (statut préoccupant), jamais silencieux.");
     std::process::exit(2)
 }
 
@@ -380,6 +382,7 @@ fn main() {
     let mut derniere_sauvegarde = 0u64;
     let mut dernier_scellement = 0u64;
     let mut dernier_statut = 0u64;
+    let mut derniere_calees = 0u64;
     loop {
         let maintenant = depart.elapsed().as_millis() as u64;
 
@@ -434,11 +437,22 @@ fn main() {
                 liens: rt.liens_ouverts(),
                 mempool: rt.noeud().mempool.len(),
                 desaccords: rt.noeud().blocs_desaccordes(),
+                hauteurs_calees: rt.noeud().hauteurs_calees(),
             };
             if statut.preoccupant() {
                 journal.avert(&statut.ligne());
             } else {
                 journal.info(&statut.ligne());
+            }
+            // Le CALAGE est un événement CRITIQUE, pas une simple ligne de statut :
+            // il appelle une nouvelle chaîne. On le journalise au passage du
+            // compteur, une fois, à part du battement de statut.
+            let calees = rt.noeud().hauteurs_calees();
+            if calees > derniere_calees {
+                journal.erreur(
+                    "hauteur CALÉE : split de votes, aucun producteur ne peut plus                      atteindre le quorum à cette hauteur — une NOUVELLE CHAÎNE est                      nécessaire (cf. docs/TESTNET.md)",
+                );
+                derniere_calees = calees;
             }
         }
 
