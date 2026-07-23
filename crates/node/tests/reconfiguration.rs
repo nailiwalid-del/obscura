@@ -7,11 +7,15 @@
 //! - `reconfiguration_certifiee_sur_sockets` : l'annonce et sa certification par
 //!   l'ancien quorum passent sur de VRAIES sockets (la spec l'exige). Temps INJECTÉ,
 //!   aucun `sleep` ne pilote le consensus — exactement comme `vue_sockets.rs`.
-//! - `reconfiguration_bascule_a_h_plus_k` : le basculement effectif à `h+K` est une
-//!   propriété de LOGIQUE consensus (les trois sites height-aware). On la prouve par un
-//!   driver in-process déterministe qui route les `Action` entre 5 `Noeud` sur 9
+//! - `reconfiguration_bascule_a_h_plus_k` : le basculement effectif à `h+K` est prouvé
+//!   par un driver in-process déterministe qui route les `Action` entre 5 `Noeud` sur 9
 //!   hauteurs — plus fiable qu'un test socket 5-nœuds/9-blocs, et le transport est déjà
-//!   prouvé ailleurs (`quorum_sockets.rs`, `cycle_wallet.rs`).
+//!   prouvé ailleurs (`quorum_sockets.rs`, `cycle_wallet.rs`). ⚠️ Ce test prouve la
+//!   bascule et distingue le site height-aware du VOTEUR (`notre_index_a`) : « E vote /
+//!   D non » à h+K (et, symétriquement, à h=6) échoue si ce fix est reverté. Les sites
+//!   producteur et assemblage reposent sur le raisonnement de la revue T7 — ce test ne
+//!   les distingue pas, la taille du comité restant 4→4 et le quorum se refermant sur
+//!   les index communs.
 
 use crypto::sig::SigKeypair;
 use ledger::bloc::Bloc;
@@ -340,8 +344,15 @@ fn reconfiguration_bascule_a_h_plus_k() {
 
     // HAUTEURS 2..=9 : chaque producteur du tour SCELLE un bloc vide (battement), le
     // comité vote, le bloc se certifie et s'applique partout. On retient les VOTEURS de
-    // la dernière hauteur (h+K) — c'est là que le nouveau comité doit avoir pris la main.
+    // la dernière hauteur (h+K) — c'est là que le nouveau comité doit avoir pris la main
+    // — ET ceux de h=6 (comité ANCIEN), le miroir AVANT bascule.
+    //
+    // h=6 est choisi plutôt que h=8 : le producteur de (6, 0) est [A,B,C,D][(6-1)%4] =
+    // index 1 = B, donc D y est VOTEUSE non-productrice — contrairement à h=8, où D
+    // ([A,B,C,D][(8-1)%4] = index 3) serait productrice et « D a voté » y serait trivial
+    // (le producteur signe toujours son propre vote).
     let mut voteurs_hk = std::collections::BTreeSet::new();
+    let mut voteurs_h6 = std::collections::BTreeSet::new();
     for h in 2..=(1 + DELAI_CHANGEMENT_AUTORITES) {
         let p = producteur(&noeuds, h);
         let (_, actions) = noeuds[p].sceller().expect("scellement du battement");
@@ -351,10 +362,27 @@ fn reconfiguration_bascule_a_h_plus_k() {
             actions.into_iter().map(|a| (p, a)).collect(),
             t,
         );
+        if h == 6 {
+            voteurs_h6 = voteurs_hk.clone();
+        }
         for n in &noeuds {
             assert_eq!(n.etat.hauteur(), h, "tous appliquent le bloc {h}");
         }
     }
+
+    // AVANT la bascule (h=6, comité ANCIEN [A,B,C,D]) : D (nœud 3) est encore autorité et
+    // vote ; E (nœud 4) n'en est pas encore une et ne vote pas. Miroir exact de
+    // l'assertion h+K plus bas — c'est le CONTRASTE avant/après qui prouve que le
+    // basculement change effectivement quelque chose, et pas seulement qu'après h+K le
+    // nouveau comité est en place.
+    assert!(
+        voteurs_h6.contains(&3),
+        "D (nœud 3, encore autorité avant bascule) vote à h=6 — voteurs = {voteurs_h6:?}"
+    );
+    assert!(
+        !voteurs_h6.contains(&4),
+        "E (nœud 4, pas encore autorité) ne vote pas à h=6 — voteurs = {voteurs_h6:?}"
+    );
 
     // À h+K = 9 : le NOUVEAU comité a pris la main. Vérifier la bascule.
     let hk = 1 + DELAI_CHANGEMENT_AUTORITES;
