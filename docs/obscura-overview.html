@@ -196,7 +196,7 @@
       <div class="stat"><b>35&nbsp;677</b><span>lignes de code</span></div>
       <div class="stat"><b>515</b><span>tests</span></div>
       <div class="stat"><b>P1–P7</b><span>prouvés en circuit</span></div>
-      <div class="stat"><b>≈96<small> Kio</small></b><span>preuve d'une tx</span></div>
+      <div class="stat"><b>≈97<small> Kio</small></b><span>preuve d'une tx</span></div>
     </div>
   </div>
 </header>
@@ -521,14 +521,14 @@
 
   <div class="bench">
     <div class="metric"><b>≈1,6<small> s</small></b><span>Génération de preuve</span></div>
-    <div class="metric"><b>4,1<small> ms</small></b><span>Vérification</span></div>
-    <div class="metric"><b>95,8<small> Kio</small></b><span>Taille de preuve</span></div>
-    <div class="metric"><b>103,8<small> Kio</small></b><span>Tx sur le fil</span></div>
+    <div class="metric"><b>≈4<small> ms</small></b><span>Vérification</span></div>
+    <div class="metric"><b>≈97<small> Kio</small></b><span>Taille de preuve</span></div>
+    <div class="metric"><b>≈105<small> Kio</small></b><span>Tx sur le fil</span></div>
   </div>
 
-  <div class="callout"><span class="lab">Le chemin parcouru — et l'enseignement</span><p>L'assemblage v1 (15 preuves séparées) pesait <strong>~219 Kio</strong> pour ~225 ms. Le monolithe (3z-a) a ramené la taille à 85 Kio ; le witness-hiding (3z-b1) l'a portée à 90,5 Kio ; la disposition <strong>segmentée</strong> (3z-c1) l'a réduite à 67,9 Kio à 2/2. Puis le <strong>durcissement de soundness</strong> (32 → 48 requêtes FRI) l'a fait remonter à <strong>95,8 Kio</strong> — et c'est un prix payé volontairement, pas une régression : à 32 requêtes, la sécurité <em>prouvée</em> n'était que de 62 bits. Depuis <strong>3z-c2</strong>, la forme est VARIABLE (1 à 4 entrées/sorties) et la taille suit la forme : une transaction à note unique (1/1) pèse <strong>78,5 Kio</strong>, le défaut 2/2 <strong>96,1 Kio</strong>, et le pire cas 4/4 monte à <strong>114,3 Kio</strong> — la vérification restant sous 13 ms. C'est elle qui compte pour le réseau, chaque nœud vérifiant chaque transaction. La forme est publique : le wallet vise 2/2 par défaut (vie privée).</p></div>
+  <div class="callout"><span class="lab">Le chemin parcouru — et l'enseignement</span><p>L'assemblage v1 (15 preuves séparées) pesait <strong>~219 Kio</strong> pour ~225 ms. Le monolithe (3z-a) a ramené la taille à 85 Kio ; le witness-hiding (3z-b1) l'a portée à 90,5 Kio ; la disposition <strong>segmentée</strong> (3z-c1) l'a réduite à 67,9 Kio à 2/2. Puis le <strong>durcissement de soundness</strong> (32 → 48 requêtes FRI) l'a fait remonter à <strong>≈97 Kio</strong> — et c'est un prix payé volontairement, pas une régression : à 32 requêtes, la sécurité <em>prouvée</em> n'était que de 62 bits. Depuis <strong>3z-c2</strong>, la forme est VARIABLE (1 à 4 entrées/sorties) et la taille suit la forme : une transaction à note unique (1/1) pèse <strong>≈78 Kio</strong>, le défaut 2/2 <strong>≈97 Kio</strong>, et le pire cas 4/4 monte à <strong>≈114 Kio</strong> — la vérification restant sous 13 ms. C'est elle qui compte pour le réseau, chaque nœud vérifiant chaque transaction. La forme est publique : le wallet vise 2/2 par défaut (vie privée). Les tailles sont données à ±1,5 Kio près : le masquage <em>witness-hiding</em> tire de l'aléa frais à chaque preuve, donc deux preuves de la même transaction ne pèsent pas exactement pareil.</p></div>
 
-  <div class="callout secret"><span class="lab">Ce que la taille coûte au consensus</span><p>Un bloc est borné à ≈1 Mio pour rester diffusable en un cadre réseau. À ≈104 Kio la transaction, <strong>un bloc plein en porte environ 9</strong> — contre ~15 avant le durcissement. C'est aussi ce qui rend le certificat de quorum comparable en coût : à 64 autorités, ses 43 signatures valent l'équivalent d'une transaction et demie.</p></div>
+  <div class="callout secret"><span class="lab">Ce que la taille coûte au consensus</span><p>Un bloc est borné à ≈1 Mio pour rester diffusable en un cadre réseau. À ≈105 Kio la transaction, <strong>un bloc plein en porte environ 9</strong> — contre ~15 avant le durcissement. C'est aussi ce qui rend le certificat de quorum comparable en coût : à 64 autorités, ses 43 signatures valent l'équivalent d'une transaction et demie.</p></div>
 
   <!-- ============ PARTIE V ============ -->
   <section class="part-divider big" id="p5">
