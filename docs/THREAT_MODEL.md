@@ -58,9 +58,11 @@ consensus est le statement STARK (docs/STARK_STATEMENT.md, P1–P7), appliquée 
 `ProvedLedgerState::appliquer_bloc` ; le witness-hiding (phase 3z) et la variabilité de
 forme (3z-c2) sont livrés. L'**élection de producteur** existe désormais (autorités
 gravées en genèse, tour de rôle, bloc signé — voir « Qui a autorité pour sceller ») ;
-le **certificat de quorum** `2f+1` (J1-a) donne la FINALITÉ. Ce qui reste ouvert est la
-LIVENESS — le protocole de vue est J1-b, et sans lui une chaîne à `n ≥ 4` ne produit
-aucun bloc — et la gouvernance du remplacement d'autorité (J1-c). **Prototype non audité — testnet uniquement.**
+le **certificat de quorum** `⌊2n/3⌋+1` (J1-a) donne la FINALITÉ. La LIVENESS est
+désormais FERMÉE — le protocole de vue (votes sur le fil, délais, changement de vue,
+J1-b1/J1-b2) est livré, une chaîne à `n ≥ 4` produit des blocs et une autorité absente
+est contournée par changement de vue — et le remplacement d'autorité certifié par
+l'ANCIENNE liste (J1-c) est livré. **Prototype non audité — testnet uniquement.**
 
 ## Garanties additionnelles exigées (v0.2)
 
@@ -168,20 +170,21 @@ tout nœud peut sceller, ordre convenu, pas défendu — mode testnet local, et 
 scellement y est REFUSÉ (deux encodages valides du même bloc casseraient la
 canonicité).
 
-Ce que cela ne ferme PAS : le **remplacement d'autorité** (liste statique : en changer
-= nouvelle genèse = nouvelle chaîne — c'est une fédération, assumée ; le changement
-d'ensemble certifié par l'ANCIENNE liste est prévu par l'ADR, jalon J1-c) ; la
-**censure par le producteur du tour** (il choisit ses transactions ; le tri par
-`tx_digest` est une convention de reproductibilité, pas une défense — la tx censurée
-attend le producteur suivant). Spec :
+Le **remplacement d'autorité** n'est plus statique : le changement d'ensemble certifié
+par l'ANCIENNE liste, effectif à `h + K` (`DELAI_CHANGEMENT_AUTORITES = 8`), est LIVRÉ
+(J1-c) — changer un participant n'impose plus une nouvelle chaîne. Ce que l'élection de
+producteur ne ferme PAS : la **censure par le producteur du tour** (il choisit ses
+transactions ; le tri par `tx_digest` est une convention de reproductibilité, pas une
+défense — la tx censurée attend le producteur suivant). Spec :
 `docs/superpowers/specs/2026-07-21-election-producteur-design.md`.
 
-### Le certificat de quorum — finalité, et ce qu'elle défend (J1-a, format livré)
+### Le certificat de quorum — finalité, et ce qu'elle défend (J1 complet, livré)
 
 L'ADR-001 (`docs/superpowers/specs/2026-07-22-j1-consensus-adr.md`, ACCEPTÉ le
 2026-07-22) a tranché le modèle de consensus : **BFT à finalité instantanée, à comité
-borné, sans réorganisation**. Le format `VERSION_BLOC 0x04` et sa vérification sont
-livrés ; le protocole qui fait circuler les votes ne l'est pas (voir plus bas).
+borné, sans réorganisation**. Le format `VERSION_BLOC 0x05` (le `0x04` qui a porté
+J1-a/J1-b est désormais REFUSÉ par son nom) et sa vérification sont livrés, et le
+protocole qui fait circuler les votes l'est aussi (J1-b1/J1-b2, voir plus bas).
 
 Un bloc porte désormais une **vue** (dans l'identifiant) et un **certificat de quorum**
 (hors de l'identifiant, comme le scellement — une signature sur l'id ne peut pas y
@@ -215,13 +218,16 @@ bornée par le budget du bloc**, et `MAX_AUTORITES = 64` devra probablement desc
 Toute migration de backend PQ change ce calcul (`docs/BACKEND_PQ.md`) ; l'outil de
 mesure existe (`cargo run -p node --example dimensionner-quorum --release`).
 
-⚠️ **Ce que J1-a ne ferme PAS — la liveness.** Aucun vote ne circule sur le fil, aucun
-délai n'existe, la vue reste à 0. Le producteur ne rassemble que son propre vote, donc
-**sur une chaîne à `n ≥ 4` aucun bloc n'est produit** : il en fabrique un, le refuse
-lui-même pour `QuorumInsuffisant`, et rien n'est diffusé. Seules les chaînes à `n ≤ 3`
-(`f = 0`, quorum 1) et les chaînes ouvertes avancent aujourd'hui. Le changement de vue
-— le mécanisme qui empêchera une autorité absente de figer la chaîne — est le jalon
-**J1-b**. Le dire évite de croire la liveness fermée par le format.
+✅ **La liveness, fermée par J1-b2.** Les votes circulent désormais sur le fil, les
+délais existent et la vue avance. Le producteur rassemble les votes des autres et, dès
+`⌊2n/3⌋+1` réunis, le bloc est finalisé et diffusé : **une chaîne à `n ≥ 4` produit des
+blocs**. Une autorité absente ne fige plus la chaîne — passé un délai (à backoff
+exponentiel) les participants passent à la vue suivante et le producteur suivant reprend
+la main (changement de vue, J1-b2). ⚠️ **Limite restante — le split de votes.** Un
+producteur « à moitié en ligne » qui émet un bloc sans rassembler le quorum peut
+retarder la finalité jusqu'au changement de vue ; la chaîne rattrape, mais la latence
+n'est pas bornée sous adversaire byzantin actif — c'est la frontière connue du
+protocole, pas un trou de format.
 
 L'ordre interne d'un bloc est le tri par `tx_digest` : deux nœuds scellant le même
 mempool produisent le même bloc, ce qui rend les collisions inoffensives. Ce critère est
@@ -419,7 +425,7 @@ ce qui rend l'erreur détectable.
   SÉPARÉ : le jour où une coinbase shielded aura un sens, elle exigera une règle qui
   **borne le montant émis** — or ce montant est précisément ce que le chiffrement
   cache. C'est une brique de conception, pas un champ à débloquer.
-- **FERMÉ — l'état grave désormais sa genèse** (`VERSION_ETAT` 0x03 à l'époque, 0x04
+- **FERMÉ — l'état grave désormais sa genèse** (`VERSION_ETAT` 0x03 à l'époque, 0x05
   aujourd'hui) : l'identifiant du
   bloc 0 est sérialisé dans `etat.bin` et confronté au `--genese` demandé À CHAQUE
   démarrage. Un répertoire peuplé par une autre chaîne est refusé avec les deux

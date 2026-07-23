@@ -174,6 +174,14 @@ découvrir au moment des faits.
   refusera au démarrage en affichant les deux identifiants de genèse. C'est
   volontaire, et c'est ce qui empêche une divergence silencieuse.
 
+### 2.4 Avant de graver la genèse (pré-requis bloquant)
+
+**Pré-requis bloquant** avant toute exécution de `obscura-genese` en
+production : rejouer et **consigner** le re-test de `docs/BACKEND_PQ.md`
+(section « Re-test avant le gel de genèse ») — le gel rend le format wire
+définitif, donc la décision « ne pas migrer le backend PQ » doit être
+re-confirmée à cette date précise, pas héritée d'une lecture plus ancienne.
+
 ---
 
 ## 3. Si la chaîne acquiert une valeur malgré nous

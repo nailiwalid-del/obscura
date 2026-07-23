@@ -115,6 +115,20 @@ La migration devient la bonne décision dès que **l'un** de ces faits est vrai 
 définitif, et changer de backend après coup coûterait le même travail que T1 —
 version d'algo `0x03`, refus nommé du `0x02`, nouvelle chaîne.
 
+## Re-test avant le gel de genèse (gate de T5)
+
+**Avant d'exécuter `obscura-genese` en production**, rejouer les critères de
+déclenchement ci-dessus et **consigner le résultat dans le dépôt**, même s'il est
+« toujours non ». La décision « ne pas migrer » n'est valable qu'à sa date ; la
+graver dans une chaîne exige de la re-confirmer.
+
+**Critère ACVP ajouté :** un backend permettant l'**injection d'aléa officiel**
+(graine de `keyGen`) rendrait `keyGen`/`encap`/`sigGen` vérifiables par vecteurs
+ACVP complets — et supprimerait le trou nommé en porte AUD (aujourd'hui seuls
+`decap`/`sigVer`, déterministes, sont couverts — voir
+`crates/crypto/tests/acvp_mlkem768.rs` et `acvp_mldsa65.rs`). Son apparition
+**déclenche** une ré-évaluation du backend.
+
 ## Ce qu'il faudra vérifier au moment de migrer (et pas avant)
 
 Ces points ne sont **pas vérifiés** dans ce document — les mesurer sur un candidat

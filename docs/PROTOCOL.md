@@ -166,7 +166,7 @@ attendant le circuit. Fonctions suffixées `_transparent` dans le code.
   (migrera vers Rescue-Prime avec le circuit).
 - Racines récentes conservées pour valider des tx construites sur un état légèrement ancien.
 
-## Finalité : le bloc (`VERSION_BLOC = 0x04`)
+## Finalité : le bloc (`VERSION_BLOC = 0x05`)
 
 L'unité d'application n'est pas la transaction isolée mais le **bloc** : un lot
 *ordonné* de transactions, chaîné à son parent, appliqué **atomiquement**
@@ -193,10 +193,12 @@ id = dual_hash("obscura/bloc/v1", encode_sans_signatures(bloc))   // 64 o, jamai
   vérifiées **au scellement ET au décodage** — un bloc valide est toujours
   diffusable en un cadre.
 
-**Versions périmées refusées par leur nom.** Un bloc `0x03` rend
-`BlocDecodeError::VersionPerimee`, jamais une réinterprétation. Même discipline
-que `CryptoError::AlgoPerime` et `VERSION_ETAT`. Aucune chaîne publique n'a
-existé en `0x03` : il n'y avait rien à migrer.
+**Versions périmées refusées par leur nom.** Un bloc `0x03` ou `0x04` (J1-a/b —
+autorités de scellement gravées, mais sans le changement d'autorités en
+attente de J1-c) rend `BlocDecodeError::VersionPerimee`, jamais une
+réinterprétation. Même discipline que `CryptoError::AlgoPerime` et
+`VERSION_ETAT`. Aucune chaîne publique n'a existé en `0x03` ni en `0x04` : il
+n'y avait rien à migrer.
 
 ### Élection de producteur et vue
 
@@ -219,6 +221,81 @@ est accepté (`ScellementInattendu`), aucun certificat non plus
 (`CertificatInattendu`) — la canonicité interdit deux encodages valides du même
 bloc.
 
+#### J1-b : le protocole de vue (votes sur le fil, changement de vue)
+
+Le format de `0x04` ne suffisait pas à faire avancer une chaîne à `n ≥ 4` : il
+fallait que les votes circulent et que la vue change. **J1-b le livre.**
+
+```
+Message::Proposition(Bloc)   // le producteur du tour diffuse son bloc
+Message::Vote(Vote)          // chaque autorité vote sur l'id qu'elle a reçu
+vote = HybridSig("obscura/bloc/vote/v1", id)
+```
+
+- **Délai de vue à backoff exponentiel** : `delai_vue(vue) = base × 2^vue`,
+  plafonné (`PLAFOND_DELAI_VUE_MS`). Passé ce délai sans quorum, l'autorité
+  passe à la vue suivante : `producteur_attendu(h, vue + 1)` prend la main.
+  Sans backoff, un décalage persistant referait rater les vues indéfiniment
+  (livelock) ; le backoff garantit qu'une vue finit par durer assez longtemps
+  pour aboutir.
+- **Fenêtre d'adoption** : une proposition à une vue strictement future n'est
+  adoptée que si elle reste dans une fenêtre étroite au-delà de la vue
+  courante (`FENETRE_VUE`) — un producteur d'une vue lointaine ne peut pas
+  tirer tout le monde en avant d'un coup. Adopter une vue future réarme le
+  minuteur, sinon elle expirerait au tick suivant et la vue remonterait en
+  boucle.
+- **Plafond de vues par hauteur** (`MAX_VUE_PAR_HAUTEUR`) : au-delà, la
+  hauteur est déclarée CALÉE (split de votes) — aucun incrément de plus,
+  journal CRITIQUE, compteur exposé. C'est un aveu explicite plutôt qu'une
+  boucle silencieuse.
+- **Sûreté du vote (modèle A, J1-b2)** : un nœud ne vote **qu'une fois par
+  HAUTEUR, toutes vues confondues** (`node::votes::RegistreVotes`, persisté
+  AVANT l'émission). Revoter le même id à la même hauteur est idempotent
+  (un vote peut se perdre) ; voter un autre id à la même hauteur — même à une
+  vue supérieure — est refusé. C'est ce qui rend la preuve de sûreté triviale :
+  deux quorums à la même hauteur partagent un votant honnête, qui n'a signé
+  qu'un id, quelle que soit la vue. **La vue n'entre jamais dans la décision
+  de voter** — le format COURANT est `0x02` (`VERSION_VOTES`, clé `hauteur`
+  seule) ; l'ancien format `0x01` de J1-b1 avait pour clé `(hauteur, vue)`.
+- **Conséquence directe** : une chaîne à `n ≥ 4` produit désormais des blocs —
+  la liveness que J1-a laissait ouverte est fermée par J1-b.
+
+#### J1-c : changement d'ensemble d'autorités certifié
+
+Reconfigurer un comité (ajouter, retirer, remplacer une autorité) sans J1-c
+imposait de graver une nouvelle genèse — donc une nouvelle chaîne. **J1-c le
+ferme** : le changement est un CHAMP du bloc, certifié par le quorum de
+l'**ancienne** liste, effectif après un délai.
+
+```
+Bloc { …, changement_autorites: Option<Vec<SigPublicKey>> }
+```
+
+- **Certifié par l'ancienne liste** : un bloc portant `changement_autorites`
+  doit réunir le quorum de l'ensemble d'autorités ACTUELLEMENT en vigueur —
+  l'ancienne liste autorise sa propre succession, jamais la nouvelle
+  elle-même.
+- **Effet différé à `h + K`**, `K = DELAI_CHANGEMENT_AUTORITES = 8` : le délai
+  n'achète pas de la sûreté (sous finalité BFT, juger `h+1` suppose déjà avoir
+  appliqué `h`, donc tout le monde connaît la nouvelle liste — `K = 1` serait
+  sûr) mais de la COORDINATION, le temps qu'une nouvelle autorité soit en
+  ligne et synchronisée. Généreux à dessein, pensé pour un réseau fédéré
+  coordonné hors bande.
+- **Un seul changement en vol** : `changement_en_attente` est un
+  `Option<(Vec<SigPublicKey>, u64)>` — tant qu'un basculement n'a pas pris
+  effet, aucun second ne peut être proposé.
+- **Comité actif height-aware** (`autorites_a(hauteur)`) : entre `h` (annonce)
+  et `h + K` (effet), l'ancien comité reste actif ; à `h + K` et au-delà, le
+  nouveau prend le relais — pour l'élection de producteur ET pour le quorum
+  requis, dérivé du comité en vigueur à CETTE hauteur.
+- **Bloc de gouvernance vide de transactions** : un bloc portant
+  `changement_autorites` ne porte aucune transaction, pour que la
+  reconfiguration reste un événement isolé, jamais mêlé à l'activité normale
+  du ledger.
+- **Persistance** : `VERSION_ETAT = 0x05` grave `changement_en_attente` dans le
+  dump — sans quoi un nœud redémarré entre `h+1` et `h+K` oublierait le
+  basculement en cours.
+
 ### Certificat de quorum
 
 ```
@@ -226,10 +303,13 @@ Certificat { masque: u64, signatures: [HybridSig] }
 vote = HybridSig("obscura/bloc/vote/v1", id)
 ```
 
-- **Quorum** : `2f + 1` signatures valides et **distinctes**, avec `n = 3f + 1`
+- **Quorum** : `⌊2n/3⌋ + 1` signatures valides et **distinctes**
+  (`quorum_pour`), sûr pour tout `n` — et égal à `2f + 1` quand `n = 3f + 1`,
   donc `f = (n − 1) / 3`. À `n = 4` (`f = 1`) il faut 3 votes ; à `n ≤ 3`
   (`f = 0`) un seul suffit — c'est ce que « tolérer zéro faute » signifie, pas une
-  faiblesse du calcul.
+  faiblesse du calcul. Depuis J1-c, le comité et donc `n` peuvent changer d'une
+  hauteur à l'autre (`quorum_a(hauteur)`) : le quorum requis est TOUJOURS dérivé
+  du comité en vigueur à CETTE hauteur, jamais d'un `n` figé à la genèse.
 - **Masque de bits** plutôt que liste d'index : 8 octets pour 64 autorités, et
   surtout les **doublons deviennent structurellement impossibles** — un bit est
   mis ou ne l'est pas. C'est ce qui rend le comptage de votants distincts sûr
@@ -262,20 +342,30 @@ anti-DoS, pas une élégance :
 Inverser 4 et 5 offrirait à un pair hostile de déclencher la vérification de
 preuves avec un certificat bidon.
 
-### État de la mise en œuvre (J1-a)
+### État de la mise en œuvre (J1 complet)
 
-Le **format et sa vérification** sont livrés : un bloc porte sa vue et son
-certificat, et un bloc sans quorum est refusé (`QuorumInsuffisant`,
-`VoteInvalide`, `VotantInconnu`).
+La porte de consensus **J1 est close** — format, protocole de vue et
+changement d'autorités sont livrés et testés sur sockets réelles :
 
-⚠️ **Le protocole de vue ne l'est pas encore (J1-b).** Aucun vote ne circule sur
-le fil, aucun délai n'existe, la vue reste à 0 et un producteur ne rassemble que
-son propre vote. **Conséquence directe : sur une chaîne à `n ≥ 4`, aucun bloc
-n'est produit** — le producteur en fabrique un, le refuse lui-même pour quorum
-insuffisant, et rien n'est diffusé. Seules les chaînes à `n ≤ 3` (quorum 1) et
-les chaînes ouvertes avancent aujourd'hui. Le dire évite de croire la liveness
-fermée par ce jalon. Modèle et arbitrages :
-`docs/superpowers/specs/2026-07-22-j1-consensus-adr.md` (ADR-001, accepté).
+- **J1-a (format)** : un bloc porte sa vue et son certificat, et un bloc sans
+  quorum est refusé (`QuorumInsuffisant`, `VoteInvalide`, `VotantInconnu`).
+- **J1-b1 (votes sur le fil)** : `Message::Proposition` et `Message::Vote`
+  circulent réellement entre nœuds — un producteur rassemble les votes des
+  autres autorités, pas seulement le sien.
+- **J1-b2 (changement de vue, liveness fermée)** : délai de vue à backoff
+  exponentiel, fenêtre d'adoption d'une vue future, plafond de vues par
+  hauteur (hauteur CALÉE au-delà), et registre de votes persisté qui
+  n'autorise qu'un id par hauteur toutes vues confondues (modèle A). **Une
+  chaîne à `n ≥ 4` produit désormais des blocs** — ce que J1-a laissait
+  ouvert est fermé.
+- **J1-c (reconfiguration certifiée)** : `changement_autorites` certifié par
+  le quorum de l'ancienne liste, effectif à `h + K` (`K = 8`), un seul
+  basculement en vol, comité height-aware (`autorites_a`/`quorum_a`),
+  `VERSION_ETAT = 0x05`. Changer une autorité n'impose plus une nouvelle
+  chaîne.
+
+Modèle et arbitrages : `docs/superpowers/specs/2026-07-22-j1-consensus-adr.md`
+(ADR-001, accepté).
 
 ## Primitives (crate `crypto`) — inchangées en v0.2
 
