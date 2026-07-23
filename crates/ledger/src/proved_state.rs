@@ -1433,6 +1433,73 @@ mod tests {
         ));
     }
 
+    /// ATOMICITÉ : un bloc REFUSÉ à la hauteur d'effet ne bascule NI la liste committée
+    /// NI le pendant. Un changement est en attente à l'effet 1 ; un bloc au quorum
+    /// INSUFFISANT à cette hauteur est refusé — le commit d'activation (postérieur au
+    /// contrôle de quorum) n'est jamais atteint.
+    #[test]
+    fn bloc_refuse_a_leffet_ne_mute_rien() {
+        let (mut etat, ancien) = chaine_a(4);
+        let nouvelles: Vec<_> = (0..4)
+            .map(|_| crypto::sig::SigKeypair::generate())
+            .collect();
+        etat.injecter_changement_pour_test(nouvelles.iter().map(|k| k.public.clone()).collect(), 1);
+        // Bloc à la hauteur d'effet 1, jugé sous la NOUVELLE liste (producteur de (1,0)
+        // = nouvelles[0]), mais seulement 2 votes alors que le quorum est 3.
+        let mut b = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new()).unwrap();
+        b.signer_scellement(&nouvelles[0]);
+        b.signer_vote(0, &nouvelles[0]);
+        b.signer_vote(1, &nouvelles[1]);
+        assert!(matches!(
+            etat.appliquer_bloc(&b),
+            Err(BlocRefus::QuorumInsuffisant {
+                obtenu: 2,
+                requis: 3
+            })
+        ));
+        // La liste COMMITTÉE n'a pas basculé (toujours l'ancienne).
+        assert_eq!(etat.autorites()[0].to_bytes(), ancien[0].public.to_bytes());
+        assert_eq!(etat.hauteur(), 0, "la hauteur ne doit pas avoir avancé");
+        // Le pendant est intact : un bloc valide à l'effet basculerait encore.
+        assert_eq!(etat.quorum_a(1), 3);
+    }
+
+    /// BACK-TO-BACK : un bloc à la hauteur d'effet ACTIVE le changement précédent ET
+    /// en annonce un nouveau. Le verrou « un seul en vol » ne le refuse pas, parce que
+    /// le pendant est activé par ce bloc même.
+    #[test]
+    fn back_to_back_active_et_annonce() {
+        // n=4 → après activation, nouvelle liste n=4 (mêmes tailles pour simplifier le
+        // scellement/vote). On installe un pendant à effet = 1 (activé par le bloc 1).
+        let (mut etat, _cles_ancien) = chaine_a(4);
+        let nouvelles_cles: Vec<_> = (0..4)
+            .map(|_| crypto::sig::SigKeypair::generate())
+            .collect();
+        etat.injecter_changement_pour_test(
+            nouvelles_cles.iter().map(|k| k.public.clone()).collect(),
+            1,
+        );
+        // Le bloc 1 est jugé sous la NOUVELLE liste (effet == 1) : producteur et votes
+        // viennent de `nouvelles_cles`. Il annonce ENCORE un changement.
+        let encore: Vec<_> = (0..4)
+            .map(|_| crypto::sig::SigKeypair::generate().public)
+            .collect();
+        let mut b = crate::bloc::Bloc::sceller_changement(&etat.tete(), 1, encore.clone()).unwrap();
+        b.signer_scellement(&nouvelles_cles[0]);
+        for (i, cle) in nouvelles_cles.iter().enumerate().take(etat.quorum_a(1)) {
+            b.signer_vote(i, cle);
+        }
+        etat.appliquer_bloc(&b).expect("back-to-back accepté");
+        // Activation : la liste courante est désormais `nouvelles_cles`.
+        assert_eq!(
+            etat.autorites()[0].to_bytes(),
+            nouvelles_cles[0].public.to_bytes()
+        );
+        // Annonce : un changement à effet 1 + K est enregistré (quorum de `encore`,
+        // n=4 → 3).
+        assert_eq!(etat.quorum_a(1 + DELAI_CHANGEMENT_AUTORITES), 3);
+    }
+
     use circuit::{prove_tx, ProvedInput, SpendNote};
     use proved_hash::domain::Domain;
     use proved_hash::felt::Felt;
