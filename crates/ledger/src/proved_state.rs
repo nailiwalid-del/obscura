@@ -125,6 +125,24 @@ const _: () = assert!(RECENT_ROOTS_WINDOW > crate::bloc::MAX_TX_PAR_BLOC);
 /// changent : un dump antérieur porte une tête périmée, refusé plutôt que relu.
 pub const VERSION_ETAT: u8 = 0x04;
 
+/// `K` de `h + K` : délai entre l'annonce d'un changement d'autorités et son effet.
+///
+/// N'achète pas de la sûreté (sous finalité BFT, juger `h+1` exige d'avoir appliqué
+/// `h`, donc tout le monde connaît déjà la nouvelle liste ; `K=1` serait sûr) mais de
+/// la COORDINATION : le temps qu'une nouvelle autorité soit en ligne et synchronisée.
+/// Généreux à dessein — réseau fédéré coordonné hors bande.
+pub const DELAI_CHANGEMENT_AUTORITES: u64 = 8;
+
+/// Quorum `⌊2n/3⌋ + 1` (0 si `n = 0`). Sûr pour tout `n`, égal à `2f+1` quand
+/// `n = 3f+1` (cf. `quorum_requis`).
+fn quorum_pour(n: usize) -> usize {
+    if n == 0 {
+        0
+    } else {
+        (2 * n) / 3 + 1
+    }
+}
+
 pub struct ProvedLedgerState {
     pub tree: MerkleFrontier,
     nullifiers: HashSet<[u8; 32]>,
@@ -148,6 +166,14 @@ pub struct ProvedLedgerState {
     /// `appliquer_bloc`. Sérialisée dans le dump d'état : un nœud rechargé doit
     /// appliquer la même règle sans relire la genèse.
     autorites: Vec<crypto::sig::SigPublicKey>,
+    /// Changement d'autorités EN ATTENTE : `(nouvelle liste, hauteur d'effet)`.
+    ///
+    /// `None` en régime normal. Un seul en vol (invariant de protocole). Écrit
+    /// uniquement au COMMIT d'`appliquer_bloc`, après succès complet — jamais avant,
+    /// pour qu'un bloc refusé ne le mute pas (il n'a donc pas besoin de rejoindre
+    /// l'instantané d'atomicité de la frontier). Persisté dans le dump d'état (0x05) :
+    /// un nœud redémarré dans la fenêtre `[h+1, h+K)` doit retrouver le basculement.
+    changement_en_attente: Option<(Vec<crypto::sig::SigPublicKey>, u64)>,
     /// Historique des sorties — `None` par DÉFAUT.
     ///
     /// Un `Option` et pas un champ toujours présent : l'archivage est un rôle
@@ -379,6 +405,7 @@ impl ProvedLedgerState {
             hauteur: 0,
             genese: Bloc::genese().id(),
             autorites: Vec::new(),
+            changement_en_attente: None,
             historique: None,
         };
         let root = s.tree.root();
@@ -501,16 +528,35 @@ impl ProvedLedgerState {
         &self.autorites
     }
 
+    /// Liste d'autorités ACTIVE pour un bloc à `hauteur` : la nouvelle liste SI un
+    /// changement prend effet EXACTEMENT à cette hauteur, sinon la liste courante.
+    ///
+    /// C'est l'unique endroit qui « voit » le basculement avant qu'il ne soit commité.
+    /// Producteur et quorum en dérivent, donc le nœud qui PROPOSE `h+K` et le nœud qui
+    /// VALIDE `h+K` calculent le même comité — sans que `self.autorites` ait bougé.
+    fn autorites_a(&self, hauteur: u64) -> &[crypto::sig::SigPublicKey] {
+        match &self.changement_en_attente {
+            Some((nouvelle, e)) if *e == hauteur => nouvelle,
+            _ => &self.autorites,
+        }
+    }
+
+    /// Quorum requis pour un bloc à `hauteur`, liste active de cette hauteur comprise.
+    pub fn quorum_a(&self, hauteur: u64) -> usize {
+        quorum_pour(self.autorites_a(hauteur).len())
+    }
+
     /// Producteur LÉGITIME de la hauteur `hauteur` : tour de rôle
     /// `autorites[(hauteur − 1) mod n]`. `None` sur une chaîne ouverte, ou pour la
     /// hauteur 0 (la genèse n'a pas de producteur, elle amorce).
     pub fn producteur_attendu(&self, hauteur: u64, vue: u32) -> Option<&crypto::sig::SigPublicKey> {
-        if self.autorites.is_empty() || hauteur == 0 {
+        let liste = self.autorites_a(hauteur);
+        if liste.is_empty() || hauteur == 0 {
             return None;
         }
-        let n = self.autorites.len() as u64;
+        let n = liste.len() as u64;
         let i = ((hauteur - 1 + vue as u64) % n) as usize;
-        Some(&self.autorites[i])
+        Some(&liste[i])
     }
 
     /// Quorum requis : `⌊2n/3⌋ + 1`.
@@ -533,11 +579,19 @@ impl ProvedLedgerState {
     /// ne finalise plus rien, ce qui était le défaut silencieux de l'ancienne
     /// formule (elle rendait 1).
     pub fn quorum_requis(&self) -> usize {
-        let n = self.autorites.len();
-        if n == 0 {
-            return 0;
-        }
-        (2 * n) / 3 + 1
+        quorum_pour(self.autorites.len())
+    }
+
+    /// Installe un changement en attente SANS passer par un bloc — éprouve la
+    /// sémantique height-aware (`autorites_a`/`quorum_a`) sans dérouler K blocs
+    /// prouvés. Tests seulement.
+    #[cfg(test)]
+    fn injecter_changement_pour_test(
+        &mut self,
+        nouvelle: Vec<crypto::sig::SigPublicKey>,
+        effet: u64,
+    ) {
+        self.changement_en_attente = Some((nouvelle, effet));
     }
 
     /// Historique des sorties, si ce nœud tient le rôle d'archiviste.
@@ -673,6 +727,12 @@ impl ProvedLedgerState {
             });
         }
 
+        // LISTE ACTIVE LOCALE (point 3 de la revue) : le bloc à la hauteur d'effet est
+        // jugé sous le NOUVEAU régime, sans rien muter avant le succès. Clonée (≤ 64
+        // clés) pour n'avoir aucun emprunt de `self` en travers de la mutation finale.
+        let autorites_actives: Vec<crypto::sig::SigPublicKey> =
+            self.autorites_a(bloc.hauteur).to_vec();
+
         // ÉLECTION DE PRODUCTEUR — après le chaînage (un bloc d'une autre chaîne
         // tombe en `ParentInattendu`, sans accusation), avant tout coût STARK (une
         // vérification de signature contre ~4 ms × n transactions). Chaîne OUVERTE :
@@ -693,7 +753,8 @@ impl ProvedLedgerState {
                 }
                 if !bloc.verifier_scellement(attendu) {
                     let attendu = ((bloc.hauteur - 1 + bloc.vue as u64)
-                        % self.autorites.len() as u64) as usize;
+                        % autorites_actives.len() as u64)
+                        as usize;
                     return Err(BlocRefus::ScellementInvalide {
                         hauteur: bloc.hauteur,
                         attendu,
@@ -707,14 +768,14 @@ impl ProvedLedgerState {
         // STARK. L'ordre importe : le certificat coûte jusqu'à `2f+1` vérifications
         // hybrides, la preuve en coûte davantage. L'inverser offrirait à un pair
         // hostile de déclencher la vérification de preuves avec un certificat bidon.
-        if self.autorites.is_empty() {
+        if autorites_actives.is_empty() {
             // Chaîne OUVERTE : aucun quorum n'y a de sens. L'accepter donnerait deux
             // encodages valides du même bloc — même raison que `ScellementInattendu`.
             if bloc.certificat.is_some() {
                 return Err(BlocRefus::CertificatInattendu);
             }
         } else {
-            let requis = self.quorum_requis();
+            let requis = quorum_pour(autorites_actives.len());
             let Some(cert) = bloc.certificat.as_ref() else {
                 return Err(BlocRefus::QuorumInsuffisant { obtenu: 0, requis });
             };
@@ -723,7 +784,7 @@ impl ProvedLedgerState {
             // `votants()` est croissant et sans doublon PAR CONSTRUCTION (un bit est
             // mis ou non) : c'est ce qui rend ce comptage sûr sans déduplication.
             for (rang, index) in cert.votants().enumerate() {
-                let Some(pk) = self.autorites.get(index) else {
+                let Some(pk) = autorites_actives.get(index) else {
                     return Err(BlocRefus::VotantInconnu { index });
                 };
                 let Some(sig) = cert.signatures.get(rang) else {
@@ -789,6 +850,20 @@ impl ProvedLedgerState {
 
         self.tete = bloc.id();
         self.hauteur = bloc.hauteur;
+        // COMMIT DU CHANGEMENT D'AUTORITÉS (J1-c) — seulement après succès complet.
+        // Ordre : activer d'abord (vider le pendant), annoncer ensuite. Ce couple rend
+        // le cas back-to-back correct — un bloc à h+K peut activer le précédent ET en
+        // annoncer un nouveau à h+2K.
+        if let Some((nouvelle, e)) = self.changement_en_attente.clone() {
+            if e == bloc.hauteur {
+                self.autorites = nouvelle;
+                self.changement_en_attente = None;
+            }
+        }
+        if let Some(nouvelle) = &bloc.changement_autorites {
+            let effet = bloc.hauteur + DELAI_CHANGEMENT_AUTORITES;
+            self.changement_en_attente = Some((nouvelle.clone(), effet));
+        }
         // Seul endroit, avec `amorcer`, où l'historique est écrit — et il l'est APRÈS
         // que l'arbre a fini de bouger, donc `racine_apres` est bien la racine de fin
         // de bloc sur laquelle un wallet à jour doit s'ancrer.
@@ -935,6 +1010,7 @@ impl ProvedLedgerState {
             hauteur,
             genese,
             autorites,
+            changement_en_attente: None,
             // L'historique vit dans un fichier SÉPARÉ et se rattache par
             // `adopter_historique`, qui le confronte à cet état. L'embarquer ici
             // aurait forcé TOUS les nœuds à porter un dump de plusieurs Gio pour un
@@ -988,6 +1064,67 @@ mod tests {
         let mut b = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new()).expect("scellement");
         b.signer_scellement(&cles[0]);
         b
+    }
+
+    /// Bloc VIDE de hauteur `h` en vue 0, scellé et voté au quorum par les `q`
+    /// premières autorités de `cles` (indices producteur = (h−1) mod n).
+    ///
+    /// Pas encore appelé dans CE jalon (T3) : réservé aux tests d'atomicité et de
+    /// back-to-back des jalons suivants (T4/T5), qui doivent certifier un bloc à une
+    /// hauteur arbitraire sans reconstruire ce boilerplate à chaque fois.
+    #[allow(dead_code)]
+    fn bloc_certifie(
+        parent: [u8; crate::bloc::TAILLE_ID],
+        h: u64,
+        cles: &[crypto::sig::SigKeypair],
+        q: usize,
+    ) -> crate::bloc::Bloc {
+        let n = cles.len() as u64;
+        let prod = ((h - 1) % n) as usize;
+        let mut b = crate::bloc::Bloc::sceller(&parent, h, Vec::new()).unwrap();
+        b.signer_scellement(&cles[prod]);
+        for (i, c) in cles.iter().enumerate().take(q) {
+            b.signer_vote(i, c);
+        }
+        b
+    }
+
+    /// Un bloc de changement enregistre l'attente, sans encore basculer la liste.
+    #[test]
+    fn changement_enregistre_lattente() {
+        let (mut etat, cles) = chaine_a(4);
+        let nouvelle: Vec<_> = (0..4)
+            .map(|_| crypto::sig::SigKeypair::generate().public)
+            .collect();
+        let mut b =
+            crate::bloc::Bloc::sceller_changement(&etat.tete(), 1, nouvelle.clone()).unwrap();
+        b.signer_scellement(&cles[0]);
+        for (i, c) in cles.iter().enumerate().take(3) {
+            b.signer_vote(i, c);
+        }
+        etat.appliquer_bloc(&b).expect("changement accepté");
+        assert_eq!(etat.hauteur(), 1);
+        // La liste ACTIVE n'a pas bougé : le basculement est à h+K.
+        assert_eq!(etat.autorites().len(), 4);
+        assert_eq!(etat.autorites()[0].to_bytes(), cles[0].public.to_bytes());
+    }
+
+    /// L'attente bascule EXACTEMENT à h+K : avant, ancien producteur ; à h+K, nouveau
+    /// quorum. On observe le basculement via `quorum_a`.
+    #[test]
+    fn le_changement_bascule_a_h_plus_k() {
+        let (etat, _) = chaine_a(4);
+        // K = DELAI_CHANGEMENT_AUTORITES. On vérifie la sémantique de `quorum_a`/
+        // `autorites_a` directement, sans appliquer 8 blocs de preuves.
+        let nouvelle: Vec<_> = (0..7)
+            .map(|_| crypto::sig::SigKeypair::generate().public)
+            .collect();
+        let mut etat = etat;
+        etat.injecter_changement_pour_test(nouvelle, 1 + DELAI_CHANGEMENT_AUTORITES);
+        // Avant l'effet : quorum de l'ANCIENNE liste (n=4 → 3).
+        assert_eq!(etat.quorum_a(2), 3);
+        // À l'effet : quorum de la NOUVELLE liste (n=7 → 5).
+        assert_eq!(etat.quorum_a(1 + DELAI_CHANGEMENT_AUTORITES), 5);
     }
 
     /// Quorum = ⌊2n/3⌋+1, qui égale 2f+1 quand n = 3f+1 et reste SÛR partout.
