@@ -13,9 +13,16 @@
 //!   prouvé ailleurs (`quorum_sockets.rs`, `cycle_wallet.rs`). ⚠️ Ce test prouve la
 //!   bascule et distingue le site height-aware du VOTEUR (`notre_index_a`) : « E vote /
 //!   D non » à h+K (et, symétriquement, à h=6) échoue si ce fix est reverté. Les sites
-//!   producteur et assemblage reposent sur le raisonnement de la revue T7 — ce test ne
-//!   les distingue pas, la taille du comité restant 4→4 et le quorum se refermant sur
-//!   les index communs.
+//!   producteur et assemblage restent COMMUNS aux index partagés ici, la taille du
+//!   comité restant 4→4 — c'est le test suivant qui les sépare.
+//! - `reconfiguration_change_de_taille_a_h_plus_k` : un changement de TAILLE de comité
+//!   (n=4 → n=7) déroulé jusqu'à `h+K` sur 8 `Noeud`. C'est ce que le test précédent ne
+//!   pouvait pas faire : distinguer les DEUX sites height-aware restants. À h+K le
+//!   producteur vient du NOUVEAU comité (index de vote `% 7`, site producteur) et le
+//!   quorum de 5 se referme sur des positions de comité (3, 4) qui n'existent PAS dans
+//!   l'ancien comité de 4 (clés retrouvées par `autorites_a_hauteur(9).get`, site
+//!   assemblage). Sans ces deux fix, le bloc 9 ne se certifierait pas et la chaîne
+//!   stallerait — donc le seul fait qu'elle atteigne h+K partout les prouve.
 
 use crypto::sig::SigKeypair;
 use ledger::bloc::Bloc;
@@ -471,4 +478,176 @@ fn le_pendant_survit_au_redemarrage() {
         );
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ──────────────── Test D — CHANGEMENT DE TAILLE (sites producteur & assemblage) ────────────────
+
+/// Un changement de TAILLE de comité (n=4 → n=7) déroulé jusqu'à `h+K`. Là où
+/// `reconfiguration_bascule_a_h_plus_k` distingue le site height-aware du VOTEUR
+/// (`notre_index_a`), ce test distingue les DEUX sites restants — que SEUL un changement
+/// de taille sépare, l'ancien et le nouveau comité ne partageant plus tous leurs index :
+///
+/// - **Site PRODUCTEUR** (l'index du vote que le producteur signe lui-même,
+///   `orchestration.rs` : `(prochaine − 1 + vue) % autorites_a_hauteur(prochaine).len()`).
+///   À h+K le producteur est `new[(9−1) % 7] = new[1] = B`. Son index de vote est sa
+///   POSITION dans le nouveau comité, 1. Sans le fix (`% 4`), il vaudrait `8 % 4 = 0`
+///   (la position de A) : `appliquer_bloc` opposerait alors la clé de A à la signature
+///   de B → `VoteInvalide`. Que le bloc 9 se certifie et s'applique le prouve.
+/// - **Site ASSEMBLAGE** (la clé de vérification retrouvée par
+///   `autorites_a_hauteur(h+1).get(vote.index)`). Le quorum de 5 se referme sur les 5
+///   plus petites POSITIONS de comité {0,1,2,3,4} = A,B,C,E,F. Les positions 3 et 4
+///   (E, F) N'EXISTENT PAS dans l'ancien comité de 4 : sans le fix, `get(3)` rendrait D
+///   (clé fausse → `VoteInvalide`) et `get(4)` serait hors liste (`VotantInconnu`) → le
+///   certificat ne validerait pas et la chaîne stallerait à h=9.
+///
+/// ⚠️ Ne PAS confondre POSITION DE COMITÉ et INDEX DE NŒUD. Dans le nouveau comité
+/// [A,B,C,E,F,G,H], E est en position 3 et F en position 4 ; mais les NŒUDS E, F sont aux
+/// index 4, 5 dans `noeuds`/`cles` (D, retirée, garde l'index de nœud 3). Les voteurs
+/// capturés sont indexés par NŒUD.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
+fn reconfiguration_change_de_taille_a_h_plus_k() {
+    // 8 nœuds : A,B,C,D (comité de genèse) + E,F,G,H (pas encore autorités). Genèse VIDE
+    // d'allocations → blocs vides, aucune preuve STARK.
+    let cles: Vec<SigKeypair> = (0..8).map(|_| SigKeypair::generate()).collect(); // 0..7 = A..H
+    let comite_genese: Vec<_> = (0..4).map(|i| cles[i].public.clone()).collect(); // A, B, C, D
+    let genese = Bloc::genese_avec_autorites(Vec::new(), comite_genese).expect("genèse");
+    // Nouveau comité : D (index de nœud 3) RETIRÉE, E,F,G,H (index de nœud 4..8) AJOUTÉS.
+    // Taille 4 → 7. Positions de comité : A=0, B=1, C=2, E=3, F=4, G=5, H=6.
+    let nouveau: Vec<_> = vec![
+        cles[0].public.clone(),
+        cles[1].public.clone(),
+        cles[2].public.clone(),
+        cles[4].public.clone(),
+        cles[5].public.clone(),
+        cles[6].public.clone(),
+        cles[7].public.clone(),
+    ];
+
+    let mut noeuds: Vec<Noeud> = (0..8)
+        .map(|i| {
+            let etat =
+                ProvedLedgerState::depuis_genese_depth(&genese, PROFONDEUR).expect("amorçage");
+            let id = SigKeypair::from_bytes_secret(&cles[i].to_bytes_secret()).unwrap();
+            Noeud::new(id, etat, [i as u8; 32])
+        })
+        .collect();
+    let pids: Vec<PeerId> = noeuds
+        .iter()
+        .map(|n| PeerId::depuis_identite(&n.identite.public))
+        .collect();
+
+    let t = 1_000u64;
+
+    // Index de NŒUD du producteur de `(hauteur, vue 0)` selon le comité height-aware
+    // (n'importe quel nœud à jour donne la même réponse). Calqué sur le test précédent,
+    // étendu à 8 nœuds.
+    let producteur = |noeuds: &[Noeud], hauteur: u64| -> usize {
+        let pk = noeuds[0]
+            .etat
+            .producteur_attendu(hauteur, 0)
+            .unwrap()
+            .to_bytes();
+        (0..8)
+            .find(|&i| noeuds[i].identite.public.to_bytes() == pk)
+            .unwrap()
+    };
+
+    // HAUTEUR 1 : le producteur du tour (A, sous l'ANCIEN comité) ANNONCE le nouveau
+    // comité de 7. Certifié par l'ancien quorum (3 de [A,B,C,D]).
+    let p1 = producteur(&noeuds, 1);
+    let (_, actions) = noeuds[p1]
+        .proposer_changement(nouveau.clone(), t)
+        .expect("annonce");
+    router(
+        &mut noeuds,
+        &pids,
+        actions.into_iter().map(|a| (p1, a)).collect(),
+        t,
+    );
+    for n in &noeuds {
+        assert_eq!(n.etat.hauteur(), 1, "tous appliquent le bloc 1");
+    }
+
+    // HAUTEURS 2..=9 : chaque producteur du tour SCELLE un bloc vide (battement), le
+    // comité vote, le bloc se certifie et s'applique partout. On retient les VOTEURS de
+    // la dernière hauteur (h+K) — c'est là que le NOUVEAU comité de 7 prend la main.
+    let mut voteurs_hk = std::collections::BTreeSet::new();
+    for h in 2..=(1 + DELAI_CHANGEMENT_AUTORITES) {
+        let p = producteur(&noeuds, h);
+        let (_, actions) = noeuds[p].sceller().expect("scellement du battement");
+        voteurs_hk = router(
+            &mut noeuds,
+            &pids,
+            actions.into_iter().map(|a| (p, a)).collect(),
+            t,
+        );
+        for n in &noeuds {
+            assert_eq!(n.etat.hauteur(), h, "tous appliquent le bloc {h}");
+        }
+    }
+
+    let hk = 1 + DELAI_CHANGEMENT_AUTORITES; // = 9
+
+    // (1) Les 8 nœuds atteignent h+K, et (2) le comité committé est le NOUVEAU (taille 7 :
+    // E,F,G,H présents, D absente). Que le bloc 9 se soit APPLIQUÉ partout prouve DÉJÀ les
+    // sites producteur et assemblage : sans eux, `appliquer_bloc` aurait rejeté le
+    // certificat sous le nouveau comité et la chaîne aurait stallé à h=9.
+    for n in &noeuds {
+        assert_eq!(n.etat.hauteur(), hk);
+        let actives: Vec<_> = n.etat.autorites().iter().map(|k| k.to_bytes()).collect();
+        assert_eq!(actives.len(), 7, "le comité committé est de taille 7");
+        for (i, cle) in cles.iter().enumerate().take(8).skip(4) {
+            assert!(
+                actives.contains(&cle.public.to_bytes()),
+                "le membre neuf (nœud {i}) est désormais autorité"
+            );
+        }
+        assert!(
+            !actives.contains(&cles[3].public.to_bytes()),
+            "D (nœud 3) n'est plus autorité"
+        );
+        // (3) Le quorum du nouveau comité de 7 est ⌊2·7/3⌋ + 1 = 5.
+        assert_eq!(n.etat.quorum_a(hk), 5, "quorum du comité de taille 7 à h+K");
+    }
+
+    // À h+K le producteur est `new[(9−1) % 7] = new[1] = B` (nœud 1), issu du NOUVEAU
+    // comité — c'est le prérequis du site producteur (son index de vote est `% 7`).
+    let ph = producteur(&noeuds, hk);
+    assert_eq!(
+        ph, 1,
+        "à h+K le producteur est new[(9-1)%7] = new[1] = B (nœud 1)"
+    );
+
+    // (4) Le bloc h+K archivé porte un certificat du NOUVEAU comité : au moins 5 votants.
+    // Le certificat canonique retient les 5 plus petites positions {0,1,2,3,4} =
+    // A,B,C,E,F ; les positions 3 et 4 (E, F) ne se vérifient que sous
+    // `autorites_a_hauteur(9)` — c'est le site assemblage.
+    let octets = noeuds[ph].archive().octets_a(hk).expect("bloc h+K archivé");
+    let bloc = Bloc::from_bytes(octets).expect("décodable");
+    let cert = bloc.certificat.as_ref().expect("certificat");
+    assert!(
+        cert.nombre_de_votants() >= 5,
+        "quorum du nouveau comité (≥ 5 votants) — votants = {}",
+        cert.nombre_de_votants()
+    );
+
+    // (5) BASCULE prouvée par les VOTEURS effectifs de la ronde h+K, capturés AVANT que
+    // le quorum ne se referme (donc indépendamment de l'ordre de livraison). E (nœud 4,
+    // position de comité 3) et F (nœud 5, position de comité 4) sont les membres neufs
+    // ESSENTIELS — leurs positions figurent dans les 5 plus petites que le certificat
+    // canonique retient. Leur vote passe par `notre_index_a(9)` height-aware (site
+    // voteur) ; D (nœud 3), retirée, ne vote plus.
+    assert!(
+        voteurs_hk.contains(&4),
+        "E (nœud 4, position de comité 3, membre neuf essentiel) a voté à h+K — voteurs = {voteurs_hk:?}"
+    );
+    assert!(
+        voteurs_hk.contains(&5),
+        "F (nœud 5, position de comité 4, membre neuf essentiel) a voté à h+K — voteurs = {voteurs_hk:?}"
+    );
+    assert!(
+        !voteurs_hk.contains(&3),
+        "D (nœud 3, retirée) ne vote plus à h+K — voteurs = {voteurs_hk:?}"
+    );
 }
