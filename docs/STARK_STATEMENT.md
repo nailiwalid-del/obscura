@@ -435,32 +435,30 @@ sous cet angle, pas seulement pour son gain de taille.
 - Le consensus vérifie enfin ce qu'il ne pouvait pas vérifier : liaison nullifier↔note
   existante, autorité de dépense, équilibre des montants (point 1 de la revue).
 
-## Witness-hiding du monolithe — argument HVZK (3z-b1)
+## Witness-hiding du monolithe — argument HVZK honnête-vérifieur en ROM (3z-b1)
 
 Depuis 3z-b1, la preuve monolithique (`prove_tx`/`verify_tx`) est revendiquée
 **witness-hiding**, au sens précis suivant : **zero-knowledge à vérifieur
-honnête (HVZK) dans le modèle de l'oracle aléatoire (ROM)** — et rien de plus.
+honnête (HVZK honnête-vérifieur) dans le modèle de l'oracle aléatoire (ROM)** —
+et rien de plus. La revendication n'a de valeur qu'attaquable : cette section la
+range en **trois registres visuellement distincts** pour qu'un auditeur cible une
+hypothèse précise sans avoir à démêler ce qui est établi de ce qui est supposé.
 
-### Cadre exact de la revendication
+- **Prouvé** — ce que le code et les forges RED établissent (comptage exact,
+  liaison de forme, soundness).
+- **Supposé** — chaque hypothèse NOMMÉE, ISOLÉE, RÉFUTABLE, avec sa CONSÉQUENCE
+  si elle tombe (ROM, honnête-vérifieur, indépendance des primitives, non-audité).
+- **Hors modèle** — ce que cet argument ne prétend PAS couvrir (canaux
+  auxiliaires, malléabilité hors intention, graphe transactionnel réseau).
 
-- **Non-interactif via Fiat-Shamir** : winterfell dérive tous les défis du
-  vérifieur — le point hors-domaine `z` et les positions des `q` requêtes FRI —
-  du TRANSCRIPT (hachages des engagements), modélisé comme un oracle aléatoire.
-  Les points d'évaluation révélés sont donc distribués uniformément et ne sont
-  PAS choisis par un adversaire : c'est exactement le cadre « honnête-vérifieur ».
-  Aucune revendication n'est faite contre un vérifieur malveillant qui choisirait
-  ses défis (malicious-verifier ZK), et il ne s'agit PAS de « perfect ZK ».
-- **Argument, pas preuve formelle** : ce qui suit est un argument en deux
-  étages (comptage exact par colonne de trace + heuristique de taille de la
-  région de blinding) plus une esquisse de simulateur (style « randomized
-  AIR », ethSTARK) — suffisant pour un prototype, non formalisé au niveau
-  publication.
-- **Prototype non audité**, comme tout Obscura.
+Aucune phrase ne doit mélanger les deux premiers registres : un comptage exact
+est PROUVÉ, l'uniformité qui en découle est SUPPOSÉE (elle dépend du ROM).
 
-### Ce que la preuve révèle (périmètre exact, winter-verifier 0.13.1)
+### Prouvé — le code et les forges RED
 
-La preuve révèle trois familles de valeurs — TOUTES fonctions déterministes de
-la trace COMMITTÉE COMPLÈTE, laquelle inclut la région de blinding :
+**Périmètre révélé (fait, winter-verifier 0.13.1).** La preuve révèle trois
+familles de valeurs — TOUTES fonctions déterministes de la trace COMMITTÉE
+COMPLÈTE, laquelle inclut la région de blinding :
 
 - **Colonnes de trace** : chaque colonne est un polynôme `f` de degré `< n`
   (`n = trace_len`) interpolant ses `n` cellules sur le domaine de trace `H`.
@@ -485,49 +483,108 @@ la trace COMMITTÉE COMPLÈTE, laquelle inclut la région de blinding :
   dérivées du polynôme DEEP, donc de la trace committée. (C'est la surface qui
   motive le salage de FRI dans ethSTARK ; winterfell ne sale pas FRI.)
 
-### L'argument, en deux étages
-
-**Étage 1 — comptage exact, par colonne de trace.** Chaque colonne témoin porte
+**Comptage exact par colonne de trace (prouvé).** Chaque colonne témoin porte
 `b = BLIND_ROWS = 40` cellules d'aléa uniforme **frais par preuve** (région de
 blinding `[used, trace_len)`, OsRng), avec `b = q + 2 + 6 ≥ q + 2` verrouillé
 par une assertion de construction contre tout changement de `proof_options`.
 Ces cellules sont LIBRES : aucune contrainte de transition ne les lie (gating
 global `blind_off`) et aucune assertion ne vise une ligne `≥ used` (inertie
-testée white-box).
+testée white-box). Les 34 évaluations révélées d'une colonne sont des fonctions
+AFFINES de ses 40 cellules d'aléa (les cellules utiles — le témoin — fixent le
+terme constant, l'aléa fait le reste). Retrouver le témoin exigerait de résoudre
+34 équations (36 sur le corps de base) à 40 inconnues uniformes indépendantes :
+le système est **sous-déterminé** (`q + 2 = 34 < b = 40`). Ce comptage est EXACT
+et ne suppose rien ; ce qu'il n'établit pas seul — l'uniformité de la
+distribution révélée — relève du registre « Supposé » (rang plein sous ROM).
+La disjonction observée entre les ouvertures de deux preuves du même témoin
+(test de masquage 3z-b1c, ouvertures DISJOINTES par colonne témoin) est la
+manifestation empirique attendue.
 
-Les 34 évaluations révélées d'une colonne sont des fonctions AFFINES de ses 40
-cellules d'aléa (les cellules utiles — le témoin — fixent le terme constant,
-l'aléa fait le reste). Retrouver le témoin exigerait de résoudre 34 équations
-(36 sur le corps de base) à 40 inconnues uniformes indépendantes : le système
-est **sous-déterminé** (`34 < 40`). Plus précisément, dès que la matrice 34×40
-des coefficients (évaluations des polynômes de Lagrange des positions de
-blinding aux 34 points révélés) est de rang plein 34, le vecteur des 34
-évaluations révélées est **uniforme et indépendant des cellules utiles** — pour
-tout témoin, la distribution des valeurs révélées est identique. Les 34 points
-étant distincts, hors de `H` et dérivés de l'oracle aléatoire (donc uniformes,
-non adverses), un défaut de rang est un événement négligeable : c'est ici que
-le modèle ROM intervient. La disjonction observée entre les ouvertures de deux
-preuves du même témoin (test de masquage 3z-b1c) est la manifestation empirique
-de cette uniformité. Le comptage vaut colonne par colonne ; l'aléa étant tiré
-indépendamment par colonne, il s'étend au vecteur joint des ouvertures de
-TRACE.
+**Liaison de forme et soundness sous forme variable (prouvé, C2-T4 / D7, forges
+RED).** La forme `m`-in/`n`-out est portée par les LONGUEURS des publics et
+PRÉFIXÉE dans Fiat-Shamir ; l'AIR dérive sa forme de la LARGEUR de trace commise
+(bijective avec `(m, n)`), jamais des publics — une forme mentie est rejetée par
+Fiat-Shamir, jamais un accès hors cadre. Trois garanties que la variabilité
+aurait pu supprimer, chacune avec forge RED : (D7.1) la forme est liée
+(re-présenter une preuve 2/2 en 1/3 est rejeté) ; (D7.2) l'équilibre `S = fee`
+est scellé à `used_rows(m, n)−1`, ligne dépendante de la forme ; (D7.3) chaque
+public est lié à SON segment, position par position. Le masquage est re-vérifié
+sur 1/1 et 4/4 (le gating `blind_off` couvre toute porteuse nouvelle sans liste
+manuelle), et `forme_2_2_identique_aux_constantes` interdit à un refactor de
+`Forme` de déplacer un offset 2/2 en silence.
 
-**Étage 2 — taille de la région de blinding (composition + FRI).** Le comptage
-ci-dessus ne couvre QUE les évaluations de trace ; les ouvertures de
-composition/quotient et les valeurs FRI dépendent elles aussi du témoin. Pour
-elles, la garantie repose sur la TAILLE de la région de blinding :
-`trace_len − used = next_pow2(used + 40) − used` lignes ENTIÈRES — 512 lignes à
+**Forges à reconstruction d'arbre à la profondeur CONSENSUS (prouvé, D8,
+soldée).** Les cinq forges à reconstruction (OwnerConsomme, RhoCommitment,
+CmFeuille, LeafChemin, PaddingCommitment) sont rejouées RED à la profondeur 32
+(`forges_a_reconstruction_rejetees_a_la_profondeur_consensus`, avec contrôle
+honnête sur le même témoin) : c'est à cette profondeur que le chemin de Merkle
+domine la trace, où une liaison qui n'aurait mordu qu'aux petites profondeurs
+serait invisible.
+
+### Supposé — hypothèses nommées, isolées, réfutables
+
+Chaque hypothèse ci-dessous est ISOLÉE pour qu'un auditeur puisse la cibler
+seule. Aucune n'est établie par le code ; chacune vient avec sa CONSÉQUENCE si
+elle tombe.
+
+**Hypothèse 1 — modèle de l'oracle aléatoire (ROM, Fiat-Shamir).** winterfell
+dérive tous les défis du vérifieur — le point hors-domaine `z` et les positions
+des `q` requêtes FRI — du TRANSCRIPT (hachages des engagements), modélisé comme
+un oracle aléatoire. On SUPPOSE que les points révélés sont donc uniformes et
+non adverses, et que la matrice 34×40 des coefficients (polynômes de Lagrange
+des positions de blinding aux 34 points révélés) est de rang plein 34 sauf
+événement négligeable — condition sous laquelle le vecteur des 34 évaluations
+devient uniforme et indépendant des cellules utiles. L'esquisse de simulateur
+(plus bas) suppose de plus la **programmabilité** de l'oracle.
+*Conséquence si l'hypothèse tombe* : la non-interactivité n'est plus sûre — un
+hachage qui s'écarte du ROM (défis prédictibles ou biaisés, défaut de rang non
+négligeable) rend les évaluations révélées corrélées au témoin, et le masquage
+« exact » de l'étage 1 perd sa garantie.
+
+**Hypothèse 2 — vérifieur honnête (pas de malicious-verifier ZK, pas de perfect
+ZK).** La revendication ne couvre QUE le cadre « honnête-vérifieur » : les défis
+sont ceux du ROM, pas ceux d'un adversaire qui les choisirait. Aucune
+revendication n'est faite contre un vérifieur malveillant.
+*Conséquence si l'hypothèse tombe* : un vérifieur malicieux qui choisirait ses
+défis (positions de requête, point OOD) pourrait extraire de l'information du
+witness — le comptage `34 < 40` ne protège que contre des points tirés
+uniformément.
+
+**Hypothèse 3 — taille de la région de blinding (heuristique composition + FRI).**
+Le comptage exact ne couvre QUE les évaluations de trace. Pour les ouvertures de
+composition/quotient et les valeurs FRI (qui dépendent aussi du témoin), la
+garantie repose HEURISTIQUEMENT sur la TAILLE de la région de blinding :
+`trace_len − used = next_pow2(used + 40) − used` lignes ENTIÈRES — 512 à
 profondeur 32 (1024 − 512), 256 en dev (512 − 256) — sur les 201 colonnes, soit
-**≈ 51 000 à 103 000 cellules aléatoires fraîches** injectées dans la trace
-committée, contre un total révélé de l'ordre de 10⁴ éléments du corps de base
-au plus (ouvertures de trace ≈ 6 400, composition, frames OOD, couches FRI et
-reste compris). Toute valeur révélée étant une fonction de cette trace
-massivement randomisée, sa distribution JOINTE est — **heuristiquement** —
-indépendante du témoin. `34 < 40` reste le comptage exact par colonne de
-trace ; il n'est PAS, à lui seul, le périmètre complet de l'argument.
+**≈ 51 000 à 103 000 cellules aléatoires fraîches** injectées dans la trace,
+contre un total révélé de l'ordre de 10⁴ éléments du corps de base au plus
+(ouvertures de trace ≈ 6 400, composition, frames OOD, couches FRI et reste
+compris). On SUPPOSE que toute valeur révélée, fonction de cette trace
+massivement randomisée, a une distribution jointe indépendante du témoin.
+winterfell ne sale PAS FRI (contrairement à ethSTARK) : le polynôme de reste
+(révélé en entier) et les couches repliées ont le même statut heuristique.
+*Conséquence si l'hypothèse tombe* : les ouvertures de composition/quotient ou
+les valeurs FRI pourraient fuiter le témoin — `34 < 40` reste vrai pour la
+trace, mais il n'est PAS, à lui seul, le périmètre complet de l'argument.
 
-### Esquisse de simulateur
+**Hypothèse 4 — indépendance des primitives (défense en profondeur).** La
+posture du projet est que chaque fonction de sécurité tient si l'UNE de ses deux
+familles mathématiques indépendantes tient. On SUPPOSE cette indépendance.
+*Conséquence si l'hypothèse tombe* : la marge « une des deux tient » s'effondre —
+une faiblesse corrélée aux deux familles ramène la sécurité à celle d'une
+primitive unique, sans la redondance annoncée.
 
+**Statut (pas une hypothèse mathématique, énoncé quand même) — prototype non
+audité, argument non formalisé.** Ce qui précède est un ARGUMENT, pas une preuve
+formelle : deux étages (comptage exact + heuristique de taille) plus une esquisse
+de simulateur (style « randomized AIR », ethSTARK). Il n'a fait l'objet d'AUCUN
+audit externe. Un passage au niveau publication exigerait de traiter : les
+ouvertures de composition/quotient (heuristique, pas comptage exact) ; le reste
+FRI et les couches repliées (FRI non salé) ; la programmabilité de l'oracle
+(utilisée sans être formalisée) ; l'argument de rang plein (probabiliste,
+probabilité d'échec négligeable mais non bornée explicitement).
+
+**Esquisse de simulateur (à l'appui des hypothèses 1–3, non formalisée).**
 Simulateur `S`, à partir des SEULES entrées publiques (`root`, `nullifiers`,
 `output_commitments`, `fee`, `depth`) :
 
@@ -543,33 +600,32 @@ Simulateur `S`, à partir des SEULES entrées publiques (`root`, `nullifiers`,
 3. bâtir les engagements Merkle et chemins d'authentification autour de ces
    valeurs en **programmant l'oracle aléatoire** pour que les défis (`z`,
    positions de requête) tombent sur les points choisis — latitude standard du
-   ROM.
+   ROM (hypothèse 1).
 
 La transcription produite VISE la même distribution qu'une preuve réelle : les
-évaluations de trace y sont uniformes (étage 1, exact) ; les valeurs de
-composition et FRI y sont cohérentes avec les seuls tests du vérifieur et,
-dans une preuve honnête, sont des fonctions d'une trace committée massivement
-randomisée (étage 2, heuristique). C'est une esquisse : elle rend plausible
-qu'aucun distingueur n'existe, elle ne le démontre pas.
+évaluations de trace y sont uniformes (comptage exact, sous hypothèse 1) ; les
+valeurs de composition et FRI y sont cohérentes avec les seuls tests du
+vérifieur et, dans une preuve honnête, fonctions d'une trace massivement
+randomisée (hypothèse 3). C'est une esquisse : elle rend plausible qu'aucun
+distingueur n'existe, elle ne le démontre pas.
 
-Limites assumées de l'esquisse — surfaces résiduelles NON formellement
-traitées par cet argument :
+### Hors modèle — ce que cet argument ne couvre pas
 
-- les **ouvertures de composition/quotient** : leur indépendance du témoin ne
-  repose que sur l'heuristique de taille (étage 2), pas sur un comptage exact ;
-- le **polynôme de reste FRI** (révélé en entier) et les couches repliées :
-  winterfell ne sale PAS FRI (contrairement à ethSTARK) — même statut
-  heuristique ;
-- la **programmabilité de l'oracle** est utilisée sans être formalisée
-  (winterfell enchaîne des engagements réels) ;
-- l'argument de **rang plein** (étage 1) est probabiliste (probabilité d'échec
-  négligeable, non bornée explicitement).
-
-Un passage au niveau publication exigerait de traiter ces quatre points. Par
-ailleurs, les entrées PUBLIQUES restent publiques par définition (root,
-nullifiers, output_commitments, fee) : le witness-hiding porte sur le témoin
-(notes, montants, `shielded_secret`, `nk`, chemins de Merkle), pas sur le
-graphe transactionnel observable au niveau réseau (phase 4).
+- **Canaux auxiliaires** (temps, cache, mémoire des implémentations) : hors du
+  modèle de cet argument, qui porte sur la DISTRIBUTION des valeurs révélées par
+  la preuve, pas sur le comportement physique du prouveur. Traités séparément —
+  voir `docs/THREAT_MODEL.md`, section « Canaux auxiliaires : ce qui est traité,
+  et ce qui ne l'est pas ».
+- **Malléabilité hors intention** : la preuve STARK ne lie PAS `tx_digest` /
+  `signer` (le digest est calculé APRÈS la preuve, il n'est pas un public du
+  monolithe). Un relais actif peut re-signer un substitut ; impact borné (déni
+  de scan du destinataire, PAS vol ni inflation — P5/P7 tiennent). Détail dans
+  la section « Cohérence commitment ↔ note chiffrée » ci-dessous.
+- **Graphe transactionnel observable au niveau réseau** : les entrées PUBLIQUES
+  restent publiques par définition (root, nullifiers, output_commitments, fee).
+  Le witness-hiding porte sur le TÉMOIN (notes, montants, `shielded_secret`,
+  `nk`, chemins de Merkle), pas sur le graphe des transactions vu au niveau
+  réseau (protégé, lui, par Dandelion++ — phase 4, hors de ce statement).
 
 ## Cohérence commitment ↔ note chiffrée (P8, différé)
 
