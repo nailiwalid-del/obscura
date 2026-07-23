@@ -655,8 +655,14 @@ impl Noeud {
             Ok(b) => b,
             Err(_) => return Vec::new(),
         };
+        // CERTIFICAT CANONIQUE : exactement le quorum, pas un vote de plus. Les
+        // signatures PQ ne s'agrègent pas — chaque vote surnuméraire serait de la
+        // bande passante et une vérification en plus, pour rien. On pose les
+        // `quorum` plus petits index, triés.
+        let requis = self.etat.quorum_requis();
         let mut votants: Vec<u16> = recus.keys().copied().collect();
         votants.sort_unstable();
+        votants.truncate(requis);
         for index in votants {
             if let Some(sig) = recus.get(&index) {
                 bloc.poser_vote(index as usize, sig.clone());
@@ -1102,6 +1108,39 @@ mod tests {
             ProvedLedgerState::with_depth(4),
             [7u8; 32],
         )
+    }
+
+    /// Le certificat que NOUS produisons porte EXACTEMENT le quorum, même si plus
+    /// de votes sont reçus — pas de surplus sur le fil.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
+    fn certificat_scelle_par_nous_est_canonique() {
+        let (mut n, cles) = noeud_a_quatre_autorites();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+        let bloc = proposition_de(&n, &cles[0]);
+        let id = bloc.id();
+        n.proposition_en_cours = Some(bloc);
+        n.votes_recus
+            .entry(id)
+            .or_default()
+            .insert(0, cles[0].sign(ledger::bloc::DOMAINE_VOTE, &id));
+        // On envoie QUATRE votes alors que le quorum est 3.
+        for i in 1..4u16 {
+            let v = Vote {
+                id,
+                index: i,
+                signature: cles[i as usize].sign(ledger::bloc::DOMAINE_VOTE, &id),
+            };
+            n.traiter(p, Message::Vote(Box::new(v)), 0);
+        }
+        let octets = n.archive().octets_a(1).expect("bloc 1 archivé");
+        let certifie = Bloc::from_bytes(octets).unwrap();
+        assert_eq!(
+            certifie.certificat.as_ref().unwrap().nombre_de_votants(),
+            n.etat.quorum_requis(),
+            "EXACTEMENT le quorum, pas les 4 votes reçus"
+        );
     }
 
     #[test]
