@@ -155,6 +155,15 @@ de décisions écrites, et chacune renvoie à son document de référence.
   imprimé au démarrage de votre nœud. 32 octets, pas 8 — la forme courte est un
   diagnostic, pas une ancre.
 - **Le mempool n'est pas persisté** (sans gravité : les pairs réannoncent).
+- **Une synchronisation de wallet peut être interrompue par un nœud très actif.**
+  `obscura-wallet synchroniser` tolère les messages diffusés (annonces, blocs,
+  propositions) qui arrivent pendant qu'il attend l'historique, mais dans un budget
+  BORNÉ — sans borne, un nœud qui parle sans jamais répondre obtiendrait une boucle
+  gratuite. Au-delà, la synchronisation s'arrête en le NOMMANT plutôt que de conclure
+  « à jour » à tort. ⚠️ **Ce budget n'est dimensionné par aucune mesure** : sous une
+  chaîne qui scelle très fréquemment, une synchronisation honnête peut donc s'arrêter
+  ainsi. L'échec est sûr — rien n'est appliqué, rien n'est perdu — et **il suffit de
+  relancer la commande**.
 - **La clé d'identité d'un nœud n'est pas chiffrée au repos.**
 - **L'arbre du wallet est en O(n)** : pas de client léger, la mémoire croît avec
   la chaîne.
