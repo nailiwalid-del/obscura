@@ -1254,6 +1254,7 @@ mod tests {
             transactions: Vec::new(),
             emissions: Vec::new(),
             autorites: vec![crypto::sig::SigKeypair::generate().public],
+            changement_autorites: None,
             extension: Vec::new(),
             scellement: None,
             certificat: None,
@@ -1309,6 +1310,7 @@ mod tests {
             autorites: (0..crate::bloc::MAX_AUTORITES + 1)
                 .map(|_| pk.clone())
                 .collect(),
+            changement_autorites: None,
             extension: Vec::new(),
             scellement: None,
             certificat: None,
@@ -1948,6 +1950,7 @@ mod tests {
             transactions: trop,
             emissions: Vec::new(),
             autorites: Vec::new(),
+            changement_autorites: None,
             extension: Vec::new(),
             scellement: None,
             certificat: None,

@@ -140,16 +140,17 @@ pub const TAILLE_AUTORITE_MAX: usize = 4096;
 ///
 /// `0x02` : ajout des émissions. `0x03` : ajout des AUTORITÉS de scellement (genèse),
 /// du champ `scellement` (élection de producteur) et de l'EN-TÊTE EXTENSIBLE réservé
-/// (vide, verrouillé — la place de la future coinbase). Ce n'est pas cosmétique :
+/// (vide, verrouillé — la place de la future coinbase). `0x04` : vue + certificat de
+/// quorum (ADR J1). `0x05` : ajout du CHANGEMENT D'AUTORITÉS (reconfiguration
+/// certifiée, J1-c) dans le corps, donc dans l'identifiant. Ce n'est pas cosmétique :
 /// l'encodage entrant dans `Bloc::id`, l'identifiant de la genèse VIDE change à
 /// chaque passage. Un état dumpé par une version antérieure porte donc une tête
 /// périmée — d'où le bump simultané de `proved_state::VERSION_ETAT`, qui le refuse
 /// au lieu de le lire de travers.
-pub const VERSION_BLOC: u8 = 0x04;
-/// Version PÉRIMÉE, refusée par son nom (ADR J1). Aucune chaîne publique n'a
-/// existé en `0x03` : il n'y a rien à migrer, et supporter deux versions
-/// n'achèterait qu'une surface de confusion.
-const VERSION_BLOC_PERIMEE: u8 = 0x03;
+pub const VERSION_BLOC: u8 = 0x05;
+/// Version PÉRIMÉE, refusée par son nom (J1-c). `0x04` a porté J1-a/J1-b mais aucune
+/// chaîne publique n'a existé : rien à migrer, refus franc plutôt que relecture.
+const VERSION_BLOC_PERIMEE: u8 = 0x04;
 const DOMAINE_ID: &str = "obscura/bloc/id/v1";
 
 /// Taille indicative d'une `ProvedTx` **sur le fil** et cadre maximal de
@@ -203,6 +204,21 @@ pub fn cout_transaction(octets_tx: usize) -> usize {
     4 + octets_tx
 }
 
+/// `true` si deux clés de `liste` sont identiques (comparaison par encodage :
+/// `SigPublicKey` n'est ni `Hash` ni `Ord`). O(n²), mais `n ≤ MAX_AUTORITES = 64`.
+/// Partagé par le décodage, les constructeurs, la genèse et le chargement d'état.
+pub(crate) fn liste_a_un_doublon(liste: &[SigPublicKey]) -> bool {
+    let mut vues: Vec<Vec<u8>> = Vec::with_capacity(liste.len());
+    for pk in liste {
+        let o = pk.to_bytes();
+        if vues.contains(&o) {
+            return true;
+        }
+        vues.push(o);
+    }
+    false
+}
+
 /// Taille maximale d'une émission sérialisée : commitment + les deux champs de
 /// l'`EncNote`, chacun préfixé de sa longueur.
 const TAILLE_EMISSION_MAX: usize = DIGEST_BYTES + 4 + KEM_CT_LEN + 4 + MAX_ENC_NOTE_LEN;
@@ -247,6 +263,12 @@ pub enum BlocDecodeError {
     VersionPerimee { version: u8 },
     #[error("extension non vide : aucun contenu n'est défini en version {VERSION_BLOC:#04x}")]
     ExtensionInconnue,
+    #[error("liste de changement d'autorités trop longue (borne : {MAX_AUTORITES})")]
+    ChangementTropDAutorites,
+    #[error("autorité de changement indécodable ou hors bornes en position {0}")]
+    ChangementAutoriteInvalide(usize),
+    #[error("doublon dans la liste de changement d'autorités")]
+    ChangementDoublon,
 }
 
 /// Erreur de CONSTRUCTION d'un bloc de genèse. Distincte du décodage : elle protège
@@ -404,6 +426,12 @@ pub struct Bloc {
     /// La liste entre dans l'IDENTIFIANT de la genèse : deux réseaux aux autorités
     /// différentes sont deux chaînes distinctes dès l'octet zéro.
     pub autorites: Vec<SigPublicKey>,
+    /// La NOUVELLE liste d'autorités, si ce bloc annonce une reconfiguration (J1-c).
+    /// `None` pour un bloc ordinaire. **Dans le corps → dans l'identifiant** : le
+    /// certificat de l'ANCIEN comité signe donc SUR la nouvelle liste. Encodage
+    /// `0 = absent` ; une liste VIDE n'existe pas sur le fil (indistinguable d'un bloc
+    /// ordinaire) — le refus de la liste vide est au CONSTRUCTEUR.
+    pub changement_autorites: Option<Vec<SigPublicKey>>,
     /// EN-TÊTE EXTENSIBLE — la place RÉSERVÉE d'une future coinbase prouvée et d'un
     /// collecteur de frais (plan Testnet 0, T2). **Obligatoirement VIDE en 0x03** :
     /// son contenu n'est défini par aucune règle, donc `from_bytes` refuse le
@@ -439,6 +467,7 @@ impl Bloc {
             transactions: Vec::new(),
             emissions: Vec::new(),
             autorites: Vec::new(),
+            changement_autorites: None,
             extension: Vec::new(),
             scellement: None,
             certificat: None,
@@ -486,6 +515,7 @@ impl Bloc {
             transactions: Vec::new(),
             emissions,
             autorites,
+            changement_autorites: None,
             extension: Vec::new(),
             scellement: None,
             certificat: None,
@@ -521,6 +551,7 @@ impl Bloc {
             transactions,
             emissions: Vec::new(),
             autorites: Vec::new(),
+            changement_autorites: None,
             vue: 0,
             extension: Vec::new(),
             scellement: None,
@@ -631,6 +662,19 @@ impl Bloc {
             let o = pk.to_bytes();
             b.extend_from_slice(&(o.len() as u32).to_le_bytes());
             b.extend_from_slice(&o);
+        }
+        // CHANGEMENT D'AUTORITÉS (J1-c) : `0 = absent`, sinon `len ‖ [len(pk) ‖ pk]`.
+        // DANS le corps → engagé par l'identifiant, donc couvert par le certificat.
+        match &self.changement_autorites {
+            None => b.extend_from_slice(&0u32.to_le_bytes()),
+            Some(liste) => {
+                b.extend_from_slice(&(liste.len() as u32).to_le_bytes());
+                for pk in liste {
+                    let o = pk.to_bytes();
+                    b.extend_from_slice(&(o.len() as u32).to_le_bytes());
+                    b.extend_from_slice(&o);
+                }
+            }
         }
         // En-tête extensible (réservé, vide en 0x03) — DANS le corps, donc engagé
         // par l'identifiant.
@@ -761,6 +805,32 @@ impl Bloc {
             autorites.push(pk);
         }
 
+        // CHANGEMENT D'AUTORITÉS (J1-c). `0 = absent`. Bornes AVANT allocation, comme
+        // partout dans ce décodeur, et doublons refusés (une clé à deux index voterait
+        // deux fois).
+        let nc = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap()) as usize;
+        let changement_autorites = if nc == 0 {
+            None
+        } else {
+            if nc > MAX_AUTORITES {
+                return Err(BlocDecodeError::ChangementTropDAutorites);
+            }
+            let mut liste = Vec::with_capacity(nc);
+            for k in 0..nc {
+                let lp = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap()) as usize;
+                if lp > TAILLE_AUTORITE_MAX {
+                    return Err(BlocDecodeError::ChangementAutoriteInvalide(k));
+                }
+                let pk = SigPublicKey::from_bytes(prendre(b, &mut pos, lp)?)
+                    .map_err(|_| BlocDecodeError::ChangementAutoriteInvalide(k))?;
+                liste.push(pk);
+            }
+            if liste_a_un_doublon(&liste) {
+                return Err(BlocDecodeError::ChangementDoublon);
+            }
+            Some(liste)
+        };
+
         // En-tête extensible : RÉSERVÉ, donc verrouillé VIDE — aucun contenu n'est
         // défini en 0x03, le moindre octet est refusé (fail-closed, avant allocation).
         let lx = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap()) as usize;
@@ -802,6 +872,7 @@ impl Bloc {
             transactions,
             emissions,
             autorites,
+            changement_autorites,
             extension: Vec::new(),
             scellement,
             certificat,
@@ -915,6 +986,7 @@ mod tests {
             transactions: Vec::new(),
             emissions: Vec::new(),
             autorites: trop,
+            changement_autorites: None,
             extension: Vec::new(),
             scellement: None,
             certificat: None,
@@ -1036,18 +1108,6 @@ mod tests {
         assert_ne!(a.id(), b.id(), "la vue doit changer l'identifiant");
     }
 
-    /// Un bloc de l'ANCIENNE version est refusé par une variante QUI LE NOMME,
-    /// jamais réinterprété comme un 0x04 mal formé.
-    #[test]
-    fn version_0x03_refusee_par_son_nom() {
-        let mut octets = Bloc::genese().to_bytes();
-        octets[0] = 0x03;
-        assert!(matches!(
-            Bloc::from_bytes(&octets),
-            Err(BlocDecodeError::VersionPerimee { version: 0x03 })
-        ));
-    }
-
     /// Aller-retour wire avec une vue non nulle : la vue survit, l'identifiant aussi.
     #[test]
     fn aller_retour_avec_vue() {
@@ -1143,13 +1203,13 @@ mod tests {
         ));
         // Une version FUTURE est inconnue, pas périmée.
         assert!(matches!(
-            Bloc::from_bytes(&[0x05]),
-            Err(BlocDecodeError::VersionInconnue(0x05))
+            Bloc::from_bytes(&[0x06]),
+            Err(BlocDecodeError::VersionInconnue(0x06))
         ));
-        // Les versions PRÉCÉDENTES sont refusées, pas réinterprétées : le 0x01 n'a
-        // pas de compteur d'émissions, le 0x02 ni autorités ni scellement, le 0x03
-        // pas de vue — les lire comme la version courante ferait dériver toutes les
-        // longueurs suivantes.
+        // Les versions ENCORE PLUS ANCIENNES sont inconnues, pas réinterprétées : le
+        // 0x01 n'a pas de compteur d'émissions, le 0x02 ni autorités ni scellement, le
+        // 0x03 ni vue ni certificat — les lire comme la version courante ferait
+        // dériver toutes les longueurs suivantes.
         assert!(matches!(
             Bloc::from_bytes(&[0x01]),
             Err(BlocDecodeError::VersionInconnue(0x01))
@@ -1158,12 +1218,16 @@ mod tests {
             Bloc::from_bytes(&[0x02]),
             Err(BlocDecodeError::VersionInconnue(0x02))
         ));
-        // Le 0x03 est la version IMMÉDIATEMENT précédente : refusée par une variante
+        assert!(matches!(
+            Bloc::from_bytes(&[0x03]),
+            Err(BlocDecodeError::VersionInconnue(0x03))
+        ));
+        // Le 0x04 est la version IMMÉDIATEMENT précédente : refusée par une variante
         // qui la NOMME, pour qu'un opérateur sache qu'il a un artefact périmé et non
         // un fichier corrompu.
         assert!(matches!(
-            Bloc::from_bytes(&[0x03]),
-            Err(BlocDecodeError::VersionPerimee { version: 0x03 })
+            Bloc::from_bytes(&[0x04]),
+            Err(BlocDecodeError::VersionPerimee { version: 0x04 })
         ));
         assert!(matches!(
             Bloc::from_bytes(&[VERSION_BLOC]),
@@ -1436,5 +1500,74 @@ mod tests {
     fn un_bloc_scelle_na_jamais_demission() {
         let b = Bloc::sceller(&[1u8; TAILLE_ID], 9, Vec::new()).unwrap();
         assert!(b.emissions.is_empty());
+    }
+
+    // ================================================================================
+    // CHANGEMENT D'AUTORITÉS (J1-c)
+    // ================================================================================
+
+    /// Le changement d'autorités entre dans l'IDENTIFIANT (le certificat de l'ancien
+    /// comité doit signer SUR la nouvelle liste) et survit à l'aller-retour wire.
+    #[test]
+    fn changement_dans_lidentifiant_et_sur_le_fil() {
+        let a = SigKeypair::generate().public;
+        let b = SigKeypair::generate().public;
+        let sans = Bloc::sceller(&Bloc::genese().id(), 1, Vec::new()).unwrap();
+        let mut avec = Bloc::sceller(&Bloc::genese().id(), 1, Vec::new()).unwrap();
+        avec.changement_autorites = Some(vec![a.clone(), b.clone()]);
+        assert_ne!(sans.id(), avec.id(), "le changement doit entrer dans l'id");
+
+        let relu = Bloc::from_bytes(&avec.to_bytes()).expect("décodable");
+        assert_eq!(relu.id(), avec.id(), "identifiant stable au fil");
+        let liste = relu.changement_autorites.expect("changement présent");
+        assert_eq!(liste.len(), 2);
+        assert_eq!(liste[0].to_bytes(), a.to_bytes());
+        assert_eq!(liste[1].to_bytes(), b.to_bytes());
+    }
+
+    /// `0 = absent` : un bloc ordinaire n'a pas de changement, et le décodage le rend
+    /// bien `None` (jamais `Some(vec![])`).
+    #[test]
+    fn absence_de_changement_decode_none() {
+        let b = Bloc::sceller(&Bloc::genese().id(), 1, Vec::new()).unwrap();
+        assert!(b.changement_autorites.is_none());
+        let relu = Bloc::from_bytes(&b.to_bytes()).unwrap();
+        assert!(relu.changement_autorites.is_none());
+    }
+
+    /// Une liste de changement trop longue est refusée AVANT allocation.
+    #[test]
+    fn changement_trop_dautorites_refuse_au_decodage() {
+        let pk = SigKeypair::generate().public;
+        let mut b = Bloc::sceller(&Bloc::genese().id(), 1, Vec::new()).unwrap();
+        b.changement_autorites = Some((0..MAX_AUTORITES + 1).map(|_| pk.clone()).collect());
+        assert!(matches!(
+            Bloc::from_bytes(&b.to_bytes()),
+            Err(BlocDecodeError::ChangementTropDAutorites)
+        ));
+    }
+
+    /// Un doublon dans la liste de changement est refusé au décodage : sinon une clé
+    /// à deux index compterait deux votes dans le masque de quorum.
+    #[test]
+    fn changement_doublon_refuse_au_decodage() {
+        let pk = SigKeypair::generate().public;
+        let mut b = Bloc::sceller(&Bloc::genese().id(), 1, Vec::new()).unwrap();
+        b.changement_autorites = Some(vec![pk.clone(), pk.clone()]);
+        assert!(matches!(
+            Bloc::from_bytes(&b.to_bytes()),
+            Err(BlocDecodeError::ChangementDoublon)
+        ));
+    }
+
+    /// Un bloc de l'ANCIENNE version (0x04) est refusé par une variante qui le NOMME.
+    #[test]
+    fn version_0x04_refusee_par_son_nom() {
+        let mut octets = Bloc::genese().to_bytes();
+        octets[0] = 0x04;
+        assert!(matches!(
+            Bloc::from_bytes(&octets),
+            Err(BlocDecodeError::VersionPerimee { version: 0x04 })
+        ));
     }
 }
