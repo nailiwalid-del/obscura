@@ -22,6 +22,17 @@
 //! échec a été la PREMIÈRE chose que le changement de format a produite — c'est
 //! exactement ce pour quoi elle existe. Une v2 datée plutôt qu'un écrasement :
 //! le remplacement doit rester visible dans l'historique.
+//!
+//! # v3 — pourquoi la v2 a disparu
+//!
+//! `VERSION_BLOC 0x05` (J1-c : le changement d'ensemble d'autorités entre dans
+//! l'identifiant, via le champ `changement_autorites`) change à son tour
+//! l'identifiant de genèse. La fixture v2 est devenue invalide **par
+//! construction** — `Bloc::from_bytes` sur son `genese.bin` rend
+//! `VersionPerimee { version: 0x04 }`, refusé par son nom, jamais réinterprété.
+//! Son échec est la PREMIÈRE chose que ce bump de format a produite, exactement
+//! comme pour v1 → v2. Une v3 datée plutôt qu'un écrasement, pour la même
+//! raison : le remplacement doit rester visible dans l'historique.
 
 use crypto::sig::SigKeypair;
 use ledger::bloc::Bloc;
@@ -29,7 +40,7 @@ use ledger::proved_state::ProvedLedgerState;
 use std::path::PathBuf;
 
 fn racine_fixture() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/fixtures/conformite-v2")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/fixtures/conformite-v3")
 }
 
 fn lire(nom: &str) -> Vec<u8> {
@@ -163,7 +174,7 @@ fn generer_la_fixture() {
     let racine_bloc1 = hex::encode(etat.tree.root().to_bytes());
 
     let contenu = format!(
-        "# Valeurs attendues — fixture de conformité v2.\n\
+        "# Valeurs attendues — fixture de conformité v3.\n\
          # Produites par : cargo test -p node --test conformite -- --ignored generer_la_fixture\n\
          # Vérifiées par : cargo test -p node --test conformite\n\
          genese_id={genese_id}\n\

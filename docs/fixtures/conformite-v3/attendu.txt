@@ -1,0 +1,7 @@
+# Valeurs attendues — fixture de conformité v3.
+# Produites par : cargo test -p node --test conformite -- --ignored generer_la_fixture
+# Vérifiées par : cargo test -p node --test conformite
+genese_id=3fa1ea1a3e00669ab4134927416d59715aa1b8d76b9989f91a9d2ac072339dfcef0991b6792be964a669f4ca6824399b6816111fb699685e4cb06213c65431a6
+racine_apres_genese=1adf50cf9c970d4ef865885689d542d69a7780d016860f902320c4201902578e
+bloc1_id=e4a8b171bc99f34b90649657ad39c3923d3f054fd5cadc734c4faec82099f9b715435eb936879ce478478f82a357c61b83f5cb2c77d96bd3f8c29b8d5461bef8
+racine_apres_bloc1=1adf50cf9c970d4ef865885689d542d69a7780d016860f902320c4201902578e

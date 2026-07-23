@@ -1,9 +1,10 @@
-# Fixture de conformité v2
+# Fixture de conformité v3
 
-> **Pourquoi une v2.** `VERSION_BLOC 0x04` (ADR J1 : vue + certificat de quorum)
-> change l'identifiant de genèse. La fixture v1 est devenue invalide **par
+> **Pourquoi une v3.** `VERSION_BLOC 0x05` (J1-c : le changement d'ensemble
+> d'autorités entre dans l'identifiant, via le champ `changement_autorites`)
+> change l'identifiant de genèse. La fixture v2 est devenue invalide **par
 > construction**, et son échec a été la **première** chose que le changement de
-> format a produite — c'est exactement ce pour quoi elle existait. Une v2 datée
+> format a produite — c'est exactement ce pour quoi elle existait. Une v3 datée
 > plutôt qu'un écrasement : le remplacement reste visible dans l'historique.
 
 Artefact rejouable qui rend vérifiable, **sans lire le code**, que cette
@@ -22,7 +23,7 @@ pas, et l'écart est nommé dans le message d'échec.
 
 | Fichier | Quoi |
 |---|---|
-| `genese.bin` | bloc 0 en **version `0x04`**, une autorité gravée, aucune allocation |
+| `genese.bin` | bloc 0 en **version `0x05`**, une autorité gravée, aucune allocation |
 | `bloc-1.bin` | bloc de hauteur 1, **vide**, vue 0, scellé **et certifié** par cette autorité |
 | `attendu.txt` | identifiants et racines attendus, en hexadécimal **non tronqué** |
 | `autorite.cle` | clé d'autorité **jetable**, publiée pour la reproductibilité |
@@ -32,7 +33,7 @@ que pour régénérer la fixture. Ne jamais s'en servir sur une chaîne réelle.
 
 ## Ce que la fixture couvre
 
-Décodage de bloc `0x04` · identifiant de genèse (**autorités comprises** — deux
+Décodage de bloc `0x05` · identifiant de genèse (**autorités comprises** — deux
 listes donnent deux chaînes) · amorçage d'état · chaînage parent → enfant ·
 élection de producteur · vérification de scellement · **certificat de quorum** ·
 avancée de la tête.
@@ -57,6 +58,11 @@ donc la fixture n'exerce ni le masque à plusieurs bits, ni le comptage de votan
 distincts, ni le refus à `2f` votes — tout cela vit dans les tests unitaires de
 `ledger::proved_state`. Une fixture à plusieurs autorités suppose des votes qui
 circulent, donc J1-b.
+
+**Aucun changement d'ensemble d'autorités** : le bloc 1 a `changement_autorites
+= None` — la fixture exerce le décodage du champ introduit en `0x05` et
+l'identifiant qu'il fixe, pas l'activation à `h + k` elle-même, qui vit dans
+les tests unitaires de `ledger::bloc` et `ledger::proved_state`.
 
 ## Régénérer
 
