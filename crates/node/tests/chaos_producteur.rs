@@ -353,3 +353,72 @@ fn le_redemarrage_ne_fait_pas_revoter() {
 
     let _ = std::fs::remove_dir_all(&racine);
 }
+
+/// SÛRETÉ INTER-VUES (modèle A, J1-b2) : voter pour A à la hauteur 1 interdit de
+/// voter pour un AUTRE bloc à la hauteur 1, **même à une vue supérieure**. C'est le
+/// cœur du modèle A — la vue n'entre pas dans la décision de sûreté.
+///
+/// Le scénario est celui du redémarrage, mais B est à la **vue 1**, pas 0 : sans la
+/// clé « hauteur seule », le registre l'autoriserait (vue supérieure), et deux blocs
+/// à la même hauteur pourraient se finaliser — divergence définitive.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
+fn pas_de_double_vote_a_travers_les_vues() {
+    let racine = repertoire("intervues");
+    let mut payeur = Wallet::depuis_secret(secret(700), CONSENSUS_DEPTH);
+
+    let donnees = Donnees::ouvrir(&racine).expect("ouverture");
+    let (identite, _) = donnees.charger_ou_creer_identite().expect("identité");
+    let genese = genese_pour(&[&payeur], &identite);
+    let etat = donnees.charger_ou_amorcer_etat(&genese).expect("amorçage");
+    rejouer_genese(&mut payeur, &genese, &etat);
+
+    // A à (1, 0), B à (1, 1). La vue entre dans l'identifiant : ids distincts. À
+    // n=1, le producteur de (1,0) ET de (1,1) est la même autorité, donc les deux
+    // sont légitimement scellables par `identite`.
+    let mut bloc_a = Bloc::sceller(&genese.id(), 1, Vec::new()).expect("bloc A");
+    bloc_a.signer_scellement(&identite);
+    let mut bloc_b = Bloc::sceller(&genese.id(), 1, Vec::new()).expect("bloc B");
+    bloc_b.vue = 1;
+    bloc_b.signer_scellement(&identite);
+    assert_ne!(bloc_a.id(), bloc_b.id(), "vues distinctes, ids distincts");
+
+    // ---------- VOTE POUR A à (1, 0) ----------
+    let mut noeud = Noeud::new(identite, etat, [7u8; 32]);
+    noeud.adopter_votes(donnees.charger_ou_creer_votes().expect("registre"));
+    let (p, adr) = pair_de_test();
+    noeud.pairs.ajouter(p, adr);
+
+    let copie_a = Bloc::from_bytes(&bloc_a.to_bytes()).expect("copie A");
+    let actions = noeud.traiter(p, Message::Proposition(Box::new(copie_a)), 0);
+    let mut vote_emis = false;
+    for a in &actions {
+        match a {
+            Action::PersisterVotes(r) => donnees.enregistrer_votes(r).expect("écriture"),
+            Action::Envoyer(_, Message::Vote(_)) => vote_emis = true,
+            _ => {}
+        }
+    }
+    assert!(vote_emis, "le nœud vote pour A à (1, 0)");
+
+    // ---------- REDÉMARRAGE ----------
+    drop(noeud);
+    let donnees = Donnees::ouvrir(&racine).expect("réouverture");
+    let (identite2, _) = donnees.charger_ou_creer_identite().expect("identité relue");
+    let etat2 = donnees.charger_ou_amorcer_etat(&genese).expect("état relu");
+    let mut noeud = Noeud::new(identite2, etat2, [7u8; 32]);
+    noeud.adopter_votes(donnees.charger_ou_creer_votes().expect("registre relu"));
+    noeud.pairs.ajouter(p, adr);
+
+    // ---------- B À LA VUE 1 NE DOIT PAS ÊTRE VOTÉ ----------
+    let copie_b = Bloc::from_bytes(&bloc_b.to_bytes()).expect("copie B");
+    assert!(
+        noeud
+            .traiter(p, Message::Proposition(Box::new(copie_b)), 0)
+            .is_empty(),
+        "SÛRETÉ INTER-VUES : avoir voté à la hauteur 1 interdit un autre bloc à la \
+         hauteur 1, MÊME à la vue 1 — la vue n'entre pas dans la décision"
+    );
+
+    let _ = std::fs::remove_dir_all(&racine);
+}
