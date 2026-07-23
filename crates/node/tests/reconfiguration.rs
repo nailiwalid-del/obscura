@@ -258,6 +258,11 @@ fn router(
         let de = pids[src]; // `PeerId` est `Copy`
         match action {
             Action::PersisterVotes(_) => {}
+            // Une déconnexion ne produit AUCUN trafic : rien à router ici. Ce
+            // simulateur n'a pas de liens à fermer — les nœuds de ce scénario sont
+            // tous à jour, et le cas est couvert sur sockets par
+            // `negociation_version.rs`.
+            Action::Deconnecter { .. } => {}
             Action::Diffuser(msg) => {
                 // `Message` n'est pas `Clone` : on le duplique par son encodage de fil
                 // canonique (le MÊME que sur socket), une fois par destinataire.

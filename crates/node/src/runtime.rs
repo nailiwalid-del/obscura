@@ -18,7 +18,7 @@
 //! sans cela, un thread bloqué en lecture sur un pair silencieux empêcherait aussi
 //! d'écrire vers lui — un pair muet suffirait à figer le nœud.
 
-use crate::message::Message;
+use crate::message::{Message, VERSION_PROTOCOLE};
 use crate::orchestration::{Action, Noeud};
 use crypto::sig::SigKeypair;
 use net::pairs::PeerId;
@@ -67,6 +67,18 @@ pub struct Runtime {
     /// pas la faire : c'est exactement le cas où un redémarrage lui ferait promettre
     /// autre chose.
     donnees: Option<crate::persistance::Donnees>,
+    /// Un clone du flux de chaque lien, conservé pour pouvoir le FERMER.
+    ///
+    /// `Connexion` ne rend pas son flux, et les threads de lecture/écriture en
+    /// détiennent chacun une moitié : sans ce troisième clone, rien ne permettrait
+    /// d'interrompre un lien de notre propre initiative. Retirer la file d'envoi
+    /// arrêterait nos émissions, mais le thread de LECTURE continuerait de remonter
+    /// les messages du pair — une « déconnexion » qui ne déconnecte que la moitié.
+    ///
+    /// `shutdown` fait échouer la lecture en cours : le thread meurt et remonte un
+    /// [`Evenement::Deconnecte`], donc la fermeture décidée réutilise EXACTEMENT le
+    /// chemin de nettoyage d'un lien mort — aucune seconde voie à maintenir.
+    coupures: HashMap<PeerId, TcpStream>,
 }
 
 impl Runtime {
@@ -78,6 +90,7 @@ impl Runtime {
             evenements: rx,
             emetteur_evenements: tx,
             donnees: None,
+            coupures: HashMap::new(),
         }
     }
 
@@ -144,8 +157,9 @@ impl Runtime {
         // compte — c'est lui qui donne le `GroupeReseau` auquel imputer le coût du
         // service d'historique.
         let adresse = flux.peer_addr().ok();
+        let coupure = flux.try_clone().map_err(|e| NetError::Io(e.kind()))?;
         let connexion = Connexion::accepter(flux, identite)?;
-        let id = self.enregistrer(connexion)?;
+        let id = self.enregistrer(connexion, coupure)?;
         // Volontairement PAS `pairs.ajouter` : la table de pairs sert la sélection
         // SORTANTE anti-eclipse, et y verser les entrants offrirait à un attaquant un
         // moyen d'entrer dans nos emplacements sortants en nous appelant.
@@ -163,8 +177,9 @@ impl Runtime {
     ) -> Result<PeerId, NetError> {
         let flux = TcpStream::connect(adresse).map_err(|e| NetError::Io(e.kind()))?;
         Self::poser_echeances(&flux)?;
+        let coupure = flux.try_clone().map_err(|e| NetError::Io(e.kind()))?;
         let connexion = Connexion::connecter(flux, identite)?;
-        let id = self.enregistrer(connexion)?;
+        let id = self.enregistrer(connexion, coupure)?;
         // Le pair est authentifié : on le retient avec son adresse, pour que la
         // sélection anti-eclipse (groupes réseau) puisse en tenir compte.
         self.noeud.pairs.ajouter(id, adresse);
@@ -173,8 +188,23 @@ impl Runtime {
     }
 
     /// Scinde la connexion, lance ses threads de LECTURE et d'ÉCRITURE, mémorise
-    /// la file d'envoi.
-    fn enregistrer(&mut self, connexion: Connexion<TcpStream>) -> Result<PeerId, NetError> {
+    /// la file d'envoi — et annonce NOTRE version en tête.
+    ///
+    /// # Un seul point d'entrée, donc une seule annonce à ne pas oublier
+    ///
+    /// `accepter` et `connecter` passent tous deux par ici : la version part donc sur
+    /// les liens ENTRANTS comme SORTANTS, sans que la règle ait à être répétée. Elle
+    /// est déposée dans la file AVANT tout autre message, ce qui en fait le premier
+    /// message applicatif du lien (la file d'un lien préserve l'ordre des dépôts).
+    ///
+    /// ⚠️ Elle circule sur la `Session` DÉJÀ CHIFFRÉE, comme n'importe quel message
+    /// applicatif : `net` reste pur transport et n'a pas connaissance de la version
+    /// applicative. Un observateur ne la voit donc pas.
+    fn enregistrer(
+        &mut self,
+        connexion: Connexion<TcpStream>,
+        coupure: TcpStream,
+    ) -> Result<PeerId, NetError> {
         let id = PeerId::depuis_identite(connexion.pair());
         let (mut lecteur, ecrivain) = connexion.separer(|f| f.try_clone())?;
 
@@ -221,7 +251,19 @@ impl Runtime {
             }
         });
 
+        // NOTRE VERSION, en tête. Le `try_send` ne peut échouer sur une file neuve ;
+        // s'il échouait, le lien serait déjà mort et le pair nous présumerait
+        // simplement « version de base » — ce qui reste un état valide, jamais un
+        // blocage. C'est la contrepartie du caractère optionnel du message.
+        let _ = file_envoi.try_send(
+            Message::Version {
+                protocole: VERSION_PROTOCOLE,
+            }
+            .to_bytes(),
+        );
+
         self.liens.lock().unwrap().insert(id, file_envoi);
+        self.coupures.insert(id, coupure);
         Ok(id)
     }
 
@@ -249,6 +291,7 @@ impl Runtime {
                 },
                 Evenement::Deconnecte(de) => {
                     self.liens.lock().unwrap().remove(&de);
+                    self.coupures.remove(&de);
                     // L'adresse ne survit pas au lien : sans cela, la table croîtrait
                     // d'une entrée par identité de transport éphémère — et le wallet en
                     // tire une neuve à chaque commande. Le crédit, lui, RESTE : il est
@@ -298,6 +341,23 @@ impl Runtime {
                         );
                         return;
                     }
+                }
+                // FERMETURE DÉCIDÉE, pas subie. Les deux moitiés du lien tombent :
+                // la file d'envoi (nos émissions cessent, le thread d'écriture meurt
+                // quand elle est fermée) ET le flux lui-même (le thread de lecture
+                // échoue et remonte `Deconnecte`, qui purge le reste par le chemin
+                // ordinaire). Retirer la file seule aurait laissé le pair continuer à
+                // nous parler — une déconnexion qui n'en est pas une.
+                //
+                // Aucune sanction n'est appliquée ici, et c'est le point entier de
+                // cette action : la raison est nommée dans `Action`, le score reste
+                // celui d'un pair honnête.
+                Action::Deconnecter { pair, raison: _ } => {
+                    liens.remove(&pair);
+                    if let Some(flux) = self.coupures.remove(&pair) {
+                        let _ = flux.shutdown(std::net::Shutdown::Both);
+                    }
+                    self.noeud.oublier_adresse(&pair);
                 }
                 Action::Diffuser(message) => {
                     let octets = message.to_bytes();

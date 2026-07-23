@@ -411,29 +411,74 @@ enum Recue {
     Incoherent(String),
 }
 
+/// Draine UN message avant de raccrocher, après un envoi « à sens unique ».
+///
+/// # Raccrocher sans lire DÉTRUIT ce qu'on vient d'envoyer
+///
+/// Fermer une socket qui porte encore des octets NON LUS fait répondre un `RST`, et un
+/// `RST` fait jeter à la pile TCP d'en face son tampon de RÉCEPTION — donc, s'il n'a
+/// pas encore été consommé, le message qu'on venait de transmettre. Depuis J3, tout
+/// nœud dépose une [`Message::Version`] en tête de connexion : un client « j'envoie et
+/// je raccroche » laisse donc systématiquement un message non lu derrière lui, et perd
+/// sa propre transaction d'autant plus souvent que la machine est chargée. Ce n'est
+/// pas une hypothèse : c'est le défaut qu'a fait apparaître le câblage de la
+/// négociation (`cycle_wallet.rs`, sous charge).
+///
+/// UN seul message est lu, et c'est délibéré : c'est exactement ce qu'un nœud émet
+/// spontanément. En lire davantage ferait attendre une échéance complète pour rien à
+/// chaque envoi. Toute erreur est un succès — on ne cherche pas à comprendre, seulement
+/// à ne rien laisser traîner.
+pub fn drainer_avant_fermeture<S: Read + Write>(connexion: &mut Connexion<S>) {
+    let _ = connexion.recevoir();
+}
+
+/// Messages NON sollicités qu'on accepte d'ignorer avant la réponse attendue.
+///
+/// Un nœud à jour en émet exactement UN : sa `Message::Version`, déposée en tête de
+/// connexion (J3). La marge couvre une évolution du même genre ; au-delà, un nœud
+/// qui nous ferait lire sans fin des messages hors sujet obtiendrait une boucle
+/// gratuite — on rend alors le silence, qui est déjà notre issue sûre.
+const MAX_MESSAGES_IGNORES: usize = 4;
+
 fn recevoir_historique<S: Read + Write>(connexion: &mut Connexion<S>, hauteur: u64) -> Recue {
-    // Toute erreur de réception (échéance, lien coupé, cadre altéré) est traitée comme
-    // un silence : borné, sûr, et le wallet n'a rien appliqué.
-    let octets = match connexion.recevoir() {
-        Ok(o) => o,
-        Err(_) => return Recue::Silence,
-    };
-    match Message::from_bytes(&octets) {
-        Ok(Message::Historique(r)) => {
-            // On a demandé UNE hauteur ; le nœud n'a pas le droit d'en servir une autre.
-            // Sans ce contrôle, `synchroniser` refuserait plus loin (hauteur ou feuille
-            // hors séquence), mais nommer l'incohérence ici la rend lisible.
-            if r.hauteur != hauteur {
-                return Recue::Incoherent(format!(
-                    "hauteur servie {} ≠ demandée {hauteur}",
-                    r.hauteur
-                ));
+    for _ in 0..=MAX_MESSAGES_IGNORES {
+        // Toute erreur de réception (échéance, lien coupé, cadre altéré) est traitée
+        // comme un silence : borné, sûr, et le wallet n'a rien appliqué.
+        let octets = match connexion.recevoir() {
+            Ok(o) => o,
+            Err(_) => return Recue::Silence,
+        };
+        match Message::from_bytes(&octets) {
+            Ok(Message::Historique(r)) => {
+                // On a demandé UNE hauteur ; le nœud n'a pas le droit d'en servir une
+                // autre. Sans ce contrôle, `synchroniser` refuserait plus loin (hauteur
+                // ou feuille hors séquence), mais nommer l'incohérence ici la rend
+                // lisible.
+                if r.hauteur != hauteur {
+                    return Recue::Incoherent(format!(
+                        "hauteur servie {} ≠ demandée {hauteur}",
+                        r.hauteur
+                    ));
+                }
+                return Recue::Ok(r.pour_le_wallet(), r.morceaux);
             }
-            Recue::Ok(r.pour_le_wallet(), r.morceaux)
+            // LA VERSION DU NŒUD, déposée en tête de connexion : elle n'est pas une
+            // réponse à notre demande et ne doit pas la faire échouer. La traiter
+            // comme « message inattendu » aurait cassé TOUTE synchronisation de
+            // wallet le jour du déploiement de la négociation — exactement le fork
+            // que celle-ci existe pour éviter. On l'ignore et on relit.
+            //
+            // Nous n'y répondons pas : le wallet n'annonce rien (son absence vaut
+            // version de base), et lui répondre ferait de sa version une empreinte de
+            // plus sur une connexion qui n'en porte volontairement aucune.
+            Ok(Message::Version { .. }) => continue,
+            Ok(_) => {
+                return Recue::Incoherent(
+                    "message inattendu en réponse à une demande d'historique".into(),
+                )
+            }
+            Err(e) => return Recue::Incoherent(format!("réponse indécodable : {e}")),
         }
-        Ok(_) => {
-            Recue::Incoherent("message inattendu en réponse à une demande d'historique".into())
-        }
-        Err(e) => Recue::Incoherent(format!("réponse indécodable : {e}")),
     }
+    Recue::Silence
 }

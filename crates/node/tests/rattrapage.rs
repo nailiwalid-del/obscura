@@ -397,7 +397,13 @@ fn demande_de_hauteur_inconnue_reste_sans_reponse_sur_socket() {
     }
 
     let (score, liens) = serveur.join().expect("thread B");
-    assert_eq!(recus, 0, "silence : aucune réponse ne doit revenir");
+    // Depuis J3, tout nœud dépose UNE `Message::Version` en tête de connexion : c'est
+    // le seul message qu'un nœud émet spontanément. « Silence » signifie donc « rien
+    // au-delà de cette annonce » — surtout aucun `Bloc` en réponse aux demandes.
+    assert_eq!(
+        recus, 1,
+        "silence : rien ne doit revenir hormis la Version de tête"
+    );
     assert_eq!(
         score, 0,
         "demander une hauteur inconnue n'est PAS une faute"

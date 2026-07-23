@@ -51,6 +51,16 @@ const DELAI_SILENCE: Duration = Duration::from_secs(5);
 /// Échéance d'écriture : un pair qui n'absorbe plus nos octets ne doit pas nous figer.
 const DELAI_ECRITURE: Duration = Duration::from_secs(20);
 
+/// Échéance de lecture des connexions « à sens unique » (`envoyer`, `consolider`).
+///
+/// Ces commandes n'attendent aucune réponse ; elles lisent UNE fois avant de
+/// raccrocher, pour ne pas laisser d'octets non lus derrière elles — sans quoi le RST
+/// de fermeture ferait jeter au nœud son tampon de réception, transaction comprise
+/// (cf. [`node::client::drainer_avant_fermeture`]). Courte, donc : c'est un geste
+/// d'hygiène, pas une attente de réponse. Un nœud d'avant J3, qui n'annonce rien, ne
+/// coûte que ce délai.
+const DELAI_DRAIN: Duration = Duration::from_secs(2);
+
 /// Cadence minimale entre deux demandes d'historique — le SEUL levier de débit côté
 /// client (aucun champ sur le fil ne le porte).
 const CADENCE_DEMANDES: Duration = Duration::from_millis(50);
@@ -575,7 +585,7 @@ fn envoyer(fichier: &Path, o: &Options, protection: &ProtectionCli) {
         tx.n(),
     );
 
-    let mut connexion = connecter(noeud, DELAI_ECRITURE);
+    let mut connexion = connecter(noeud, DELAI_DRAIN);
 
     // On ENVOIE avant d'oublier les notes. L'ordre inverse perdrait des notes jamais
     // dépensées si l'envoi échouait ; dans ce sens-ci, le pire cas est un renvoi que
@@ -587,6 +597,9 @@ fn envoyer(fichier: &Path, o: &Options, protection: &ProtectionCli) {
         ));
     }
     println!("transaction soumise à {noeud}");
+    // Ne rien laisser d'non lu avant de raccrocher : le RST de fermeture ferait jeter
+    // au nœud son tampon de réception — donc la transaction qu'on vient d'envoyer.
+    node::client::drainer_avant_fermeture(&mut connexion);
 
     let tx = match Message::from_bytes(&octets) {
         Ok(Message::Transaction(tx)) => tx,
@@ -640,7 +653,7 @@ fn consolider(fichier: &Path, o: &Options, protection: &ProtectionCli) {
         .unwrap_or_else(|e| abandon(&format!("consolidation impossible : {e}")));
     println!("preuve générée — forme {}-in/1-out", tx.m());
 
-    let mut connexion = connecter(noeud, DELAI_ECRITURE);
+    let mut connexion = connecter(noeud, DELAI_DRAIN);
     let octets = Message::Transaction(Box::new(tx)).to_bytes();
     if let Err(e) = connexion.envoyer(&octets) {
         abandon(&format!(
@@ -648,6 +661,7 @@ fn consolider(fichier: &Path, o: &Options, protection: &ProtectionCli) {
         ));
     }
     println!("transaction soumise à {noeud}");
+    node::client::drainer_avant_fermeture(&mut connexion);
 
     let tx = match Message::from_bytes(&octets) {
         Ok(Message::Transaction(tx)) => tx,

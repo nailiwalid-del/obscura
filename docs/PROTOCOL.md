@@ -501,3 +501,48 @@ Côté wallet, la BOUCLE (`node::client`) demande `hauteur = prochaine_hauteur()
 rassemble tous les morceaux du bloc, les rejoue en UNE fois (`Wallet::synchroniser`),
 enregistre après chaque bloc, et s'arrête au premier silence. Elle ne lit jamais
 `hauteur_tete` ; `DejaApplique` n'est pas un pas ; le travail est borné par invocation.
+
+## Négociation de version du protocole applicatif (J3)
+
+`VERSION_PROTOCOLE = 1` (celle que ce nœud parle et annonce) et
+`VERSION_MIN_ACCEPTEE = 1` (la plus ancienne avec laquelle il dialogue), toutes deux
+dans `node::message`. Elles versionnent le **dialogue**, distinctement de
+`VERSION_BLOC`, `VERSION_ETAT` et `VERSION_SYNCHRO`, qui versionnent des **artefacts** :
+les confondre interdirait de faire évoluer l'un sans l'autre.
+
+- `Version { protocole: u16 }` — **3 octets**, longueur EXACTE : `tag(1 = 0x0A) ‖
+  protocole(2, LE)`. Taille FIXE délibérément : un champ de longueur variable en tête
+  de connexion serait le premier octet qu'un pair à peine authentifié nous ferait
+  allouer. Le décodeur ne filtre AUCUNE valeur (`0` comme `u16::MAX` se décodent) —
+  constater n'est pas décider ; sinon un pair trop ancien serait indistinguable d'un
+  pair MALFORMÉ, donc sanctionné.
+
+**Où il circule.** Comme message applicatif ordinaire, sur la `Session` DÉJÀ
+chiffrée : `net` reste pur transport et n'a aucune connaissance de la version
+applicative. Un observateur ne la voit donc pas. Il est émis en TÊTE, comme premier
+message applicatif, sur les liens SORTANTS **comme** ENTRANTS (point unique :
+`Runtime::enregistrer`).
+
+**Politique à la réception** (`node::orchestration`) :
+
+| annonce | réaction |
+|---|---|
+| `protocole < VERSION_MIN_ACCEPTEE` | `Action::Deconnecter { raison: VersionTropAncienne }` — fermeture NOMMÉE des deux sens, **score inchangé** |
+| `protocole ≥ VERSION_MIN_ACCEPTEE` | enregistrée (`Noeud::version_annoncee`), aucune action — y compris une version SUPÉRIEURE à la nôtre |
+| aucune annonce | pair présumé parler la version de base — **aucune sanction, aucune attente, aucun refus de servir** |
+
+**Refuser n'est pas condamner.** Le refus ne touche pas le score : c'est
+`MessageError::version_inconnue()` porté du message au dialogue entier. Pénaliser un
+nœud resté en arrière le bannirait pendant une mise à jour ; la sélection sortante y
+perdrait des groupes réseau, et c'est précisément la diversité sur laquelle repose
+l'anti-eclipse, donc l'anonymat de Dandelion++. Un pair déconnecté ici revient dès
+qu'il est à jour, avec un score intact.
+
+**Coexistence, dans les deux sens** (testée sur sockets réelles,
+`crates/node/tests/negociation_version.rs`) :
+
+- un nœud NOUVEAU n'exige jamais `Version` : son absence vaut version de base ;
+- un nœud ANCIEN qui reçoit `TAG_VERSION` (0x0A, au-delà de sa frontière `TAG_VOTE` =
+  0x09) le classe en « version future » : ignoré, jamais sanctionné. **Un tag REPRIS
+  serait mal décodé par un nœud en arrière** — c'est pourquoi la négociation prend un
+  tag neuf plutôt que d'étendre un message existant.
