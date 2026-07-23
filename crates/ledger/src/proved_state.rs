@@ -1381,6 +1381,29 @@ mod tests {
         assert_eq!(p0, etat.producteur_attendu(1, 4).map(|k| k.to_bytes()));
     }
 
+    /// SYNERGIE J1-b2 × J1-c : si le producteur de (h+K, 0) — un nouveau membre — est
+    /// absent, le changement de vue désigne (h+K, 1) = l'autorité SUIVANTE de la
+    /// NOUVELLE liste. Les deux briques composent sans cas particulier.
+    #[test]
+    fn changement_de_vue_contourne_un_nouveau_membre_absent() {
+        let (mut etat, _cles) = chaine_a(4);
+        let nouvelle: Vec<_> = (0..4)
+            .map(|_| crypto::sig::SigKeypair::generate().public)
+            .collect();
+        let effet = 1 + DELAI_CHANGEMENT_AUTORITES;
+        etat.injecter_changement_pour_test(nouvelle.clone(), effet);
+        // Producteur de (effet, 0) = nouvelle[(effet-1) mod 4] ; de (effet, 1) =
+        // nouvelle[(effet) mod 4]. Le changement de vue passe bien au SUIVANT.
+        let p0 = etat.producteur_attendu(effet, 0).unwrap().to_bytes();
+        let p1 = etat.producteur_attendu(effet, 1).unwrap().to_bytes();
+        assert_eq!(p0, nouvelle[((effet - 1) % 4) as usize].to_bytes());
+        assert_eq!(p1, nouvelle[(effet % 4) as usize].to_bytes());
+        assert_ne!(
+            p0, p1,
+            "la vue 1 contourne le producteur absent de la vue 0"
+        );
+    }
+
     /// Un certificat sur une chaîne OUVERTE : refusé, sinon deux encodages valides
     /// du même bloc coexisteraient.
     #[test]

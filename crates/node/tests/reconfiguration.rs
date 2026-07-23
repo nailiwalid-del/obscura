@@ -424,3 +424,51 @@ fn reconfiguration_bascule_a_h_plus_k() {
         "D (nœud 3, remplacée) ne vote plus à h+K — voteurs = {voteurs_hk:?}"
     );
 }
+
+// ───────────────────────── Test C — REDÉMARRAGE ─────────────────────────
+
+/// REDÉMARRAGE : un nœud qui a enregistré un changement en attente le retrouve après
+/// rechargement — sinon il raterait le basculement et divergerait.
+///
+/// `Donnees` n'expose pas de chemin d'état direct (pas de `chemin_etat()`) : on passe
+/// par l'API RÉELLE de persistance, `enregistrer_etat`/`charger_ou_amorcer_etat` (cf.
+/// `crates/node/src/persistance.rs`), celle qu'utilisent aussi `runtime` et les
+/// binaires — donc le chemin effectivement exercé en production, pas un raccourci de
+/// test qui contournerait `verifier_genese`.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
+fn le_pendant_survit_au_redemarrage() {
+    let cles: Vec<SigKeypair> = (0..1).map(|_| SigKeypair::generate()).collect();
+    let genese = Bloc::genese_avec_autorites(Vec::new(), vec![cles[0].public.clone()]).unwrap();
+    let dir = repertoire("redemarrage");
+    let neuve = SigKeypair::generate().public;
+    // Amorcer, proposer un changement (n=1, auto-appliqué : quorum 1), sauvegarder.
+    {
+        let donnees = Donnees::ouvrir(&dir).unwrap();
+        let etat = ProvedLedgerState::depuis_genese_depth(&genese, PROFONDEUR).unwrap();
+        let mut noeud = Noeud::new(
+            SigKeypair::from_bytes_secret(&cles[0].to_bytes_secret()).unwrap(),
+            etat,
+            [5u8; 32],
+        );
+        noeud
+            .proposer_changement(vec![neuve.clone()], 0)
+            .expect("reconfig n=1");
+        assert_eq!(noeud.etat.hauteur(), 1);
+        // Persister via le chemin RÉEL du nœud (identique à `runtime`/aux binaires).
+        donnees.enregistrer_etat(&noeud.etat).unwrap();
+    }
+    // REDÉMARRAGE : rouvrir le répertoire et recharger l'état depuis la genèse.
+    {
+        let donnees = Donnees::ouvrir(&dir).unwrap();
+        let etat = donnees.charger_ou_amorcer_etat(&genese).unwrap();
+        assert_eq!(etat.hauteur(), 1);
+        assert_eq!(
+            etat.producteur_attendu(1 + DELAI_CHANGEMENT_AUTORITES, 0)
+                .map(|k| k.to_bytes()),
+            Some(neuve.to_bytes()),
+            "après redémarrage, le producteur à h+K est la nouvelle autorité"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
