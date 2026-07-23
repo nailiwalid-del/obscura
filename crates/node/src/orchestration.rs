@@ -182,6 +182,11 @@ pub const CADENCE_CONSENSUS_MS_DEFAUT: u64 = 5_000;
 /// plafonné valent déjà des heures — une chaîne qui l'atteint est calée, pas lente.
 const MAX_VUE_PAR_HAUTEUR: u32 = 1_000;
 
+/// Fenêtre d'adoption d'une vue future non certifiée : un seul pas au-delà de la
+/// nôtre. Un producteur d'une vue lointaine ne peut pas tirer tout le monde en
+/// avant d'un coup, ce qui désynchroniserait le réseau.
+const FENETRE_VUE: u32 = 1;
+
 /// Plafond du backoff exponentiel, pour borner l'attente maximale d'une vue.
 const PLAFOND_DELAI_VUE_MS: u64 = 60_000;
 
@@ -335,7 +340,7 @@ impl Noeud {
             // qui les émet parle une version PLUS RÉCENTE du protocole, pas une
             // version fautive — le sanctionner partitionnerait le réseau à la
             // première mise à jour.
-            Message::Proposition(bloc) => self.sur_proposition(de, *bloc),
+            Message::Proposition(bloc) => self.sur_proposition(de, *bloc, maintenant_ms),
             Message::Vote(v) => self.sur_vote(de, *v, maintenant_ms),
             Message::DemandeBloc { hauteur } => self.sur_demande_bloc(de, hauteur, maintenant_ms),
             Message::DemandeHistorique { hauteur } => {
@@ -550,7 +555,7 @@ impl Noeud {
     /// DoS que tout le reste du nœud combat. Un producteur qui propose un bloc
     /// invalide gaspille son tour : le bloc certifié sera refusé par tous à
     /// l'application, y compris par lui.
-    fn sur_proposition(&mut self, de: PeerId, bloc: Bloc) -> Vec<Action> {
+    fn sur_proposition(&mut self, de: PeerId, bloc: Bloc, maintenant_ms: u64) -> Vec<Action> {
         self.hauteur_max_vue = self.hauteur_max_vue.max(bloc.hauteur);
 
         // Chaîne OUVERTE : aucun vote n'y a de sens.
@@ -573,6 +578,19 @@ impl Noeud {
             // une signature pour rien.
             self.pairs.ajuster_score(&de, PENALITE_BLOC_INVALIDE);
             return Vec::new();
+        }
+
+        // FENÊTRE DE VUE : ni abandonnée (< la nôtre), ni trop lointaine (au-delà de
+        // vue_courante + FENETRE_VUE). En haut, un producteur légitime d'une vue
+        // lointaine pourrait sinon tirer tout le monde en avant d'un coup.
+        if bloc.vue < self.vue_courante || bloc.vue > self.vue_courante + FENETRE_VUE {
+            return Vec::new();
+        }
+        // Adoption d'une vue future : réarmer le timer, SINON on l'expirerait au tick
+        // suivant et la vue monterait en boucle.
+        if bloc.vue > self.vue_courante {
+            self.vue_courante = bloc.vue;
+            self.debut_vue_ms = maintenant_ms;
         }
 
         // Sommes-nous une autorité, et laquelle ?
@@ -1047,8 +1065,17 @@ impl Noeud {
         }
     }
 
-    /// Déclare la hauteur courante CALÉE. Stub jusqu'à T6.
+    /// Déclare la hauteur courante CALÉE (vue plafonnée sans avancée).
+    ///
+    /// Jamais silencieux : le compteur `hauteurs_calees` s'incrémente UNE fois par
+    /// calage (garde `calage_signale`), et le nœud cesse de proposer pour cette
+    /// hauteur (plus d'incrément de vue). Le journal CRITIQUE est émis côté runtime,
+    /// qui détient le journal — ici on marque l'état, lu au statut.
     fn declarer_calage(&mut self) -> Vec<Action> {
+        if !self.calage_signale {
+            self.calage_signale = true;
+            self.hauteurs_calees += 1;
+        }
         Vec::new()
     }
 
@@ -1075,6 +1102,55 @@ mod tests {
             ProvedLedgerState::with_depth(4),
             [7u8; 32],
         )
+    }
+
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
+    fn vue_future_trop_lointaine_refusee() {
+        let (mut n, cles) = noeud_a_quatre_autorites();
+        n.identite = SigKeypair::from_bytes_secret(&cles[1].to_bytes_secret()).unwrap();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+        // vue_courante = 0. Une proposition à vue 2 (> 0 + FENETRE_VUE) est ignorée.
+        // Producteur de (1,2) = autorites[(1-1+2) mod 4] = autorites[2].
+        let mut loin = ledger::bloc::Bloc::sceller(&n.etat.tete(), 1, Vec::new()).unwrap();
+        loin.vue = 2;
+        loin.signer_scellement(&cles[2]);
+        assert!(n
+            .traiter(p, Message::Proposition(Box::new(loin)), 0)
+            .is_empty());
+        assert_eq!(n.vue_courante, 0, "pas d'adoption d'une vue trop lointaine");
+    }
+
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
+    fn adoption_vue_reset_le_timer() {
+        let (mut n, cles) = noeud_a_quatre_autorites();
+        n.identite = SigKeypair::from_bytes_secret(&cles[3].to_bytes_secret()).unwrap();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+        n.debut_vue_ms = 0;
+        // Proposition légitime à vue 1 (producteur autorites[1]). On est l'autorité
+        // 3, on n'a pas voté à h=1 : on vote et on adopte la vue 1.
+        let mut v1 = ledger::bloc::Bloc::sceller(&n.etat.tete(), 1, Vec::new()).unwrap();
+        v1.vue = 1;
+        v1.signer_scellement(&cles[1]);
+        let _ = n.traiter(p, Message::Proposition(Box::new(v1)), 500);
+        assert_eq!(n.vue_courante, 1, "vue adoptée");
+        assert_eq!(n.debut_vue_ms, 500, "TIMER RÉARMÉ — sinon montée en boucle");
+    }
+
+    #[test]
+    fn overflow_vue_plafonne_et_signale() {
+        let (mut n, _) = noeud_autorite(1);
+        n.vue_courante = MAX_VUE_PAR_HAUTEUR;
+        n.debut_vue_ms = 0;
+        let _ = n.tick(delai_vue(MAX_VUE_PAR_HAUTEUR).saturating_add(1_000_000));
+        assert_eq!(n.vue_courante, MAX_VUE_PAR_HAUTEUR, "pas de wraparound");
+        assert_eq!(n.hauteurs_calees, 1, "le calage est COMPTÉ");
+        // Un second tick ne re-compte pas : calage signalé une seule fois.
+        let _ = n.tick(delai_vue(MAX_VUE_PAR_HAUTEUR).saturating_add(2_000_000));
+        assert_eq!(n.hauteurs_calees, 1, "compté UNE fois par calage");
     }
 
     #[test]
