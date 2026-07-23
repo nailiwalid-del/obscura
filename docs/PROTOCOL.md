@@ -519,17 +519,40 @@ les confondre interdirait de faire évoluer l'un sans l'autre.
 
 **Où il circule.** Comme message applicatif ordinaire, sur la `Session` DÉJÀ
 chiffrée : `net` reste pur transport et n'a aucune connaissance de la version
-applicative. Un observateur ne la voit donc pas. Il est émis en TÊTE, comme premier
-message applicatif, sur les liens SORTANTS **comme** ENTRANTS (point unique :
-`Runtime::enregistrer`).
+applicative. Un observateur ne la voit donc pas.
+
+**Qui annonce — la règle est ASYMÉTRIQUE.** Le **connecteur** (côté sortant) émet sa
+`Version` en TÊTE, comme premier message applicatif. L'**accepteur** (côté entrant)
+**n'émet rien spontanément** : il ne répond une `Version` que s'il en a reçu une, et
+**une seule fois par lien**. Un connecteur qui reçoit cette réponse n'y répond pas —
+sans quoi les deux nœuds se renverraient la politesse indéfiniment. La négociation
+nœud↔nœud reste donc complète dans les deux sens, puisque **tout nœud se connecte en
+sortant**.
+
+Ce n'est pas une économie de messages, c'est une règle de **sûreté pour les clients à
+un coup**. Un client qui envoie puis raccroche sans lire (`obscura-wallet envoyer`)
+laisserait, si le nœud écrivait spontanément, des octets NON LUS dans son tampon : la
+fermeture produit alors un `RST`, et un `RST` fait jeter à la pile d'en face son
+tampon de RÉCEPTION — donc la transaction elle-même, d'autant plus souvent que la
+machine est chargée. Ne rien émettre de non sollicité **élimine** ce hasard ; un drain
+côté client ne faisait que l'atténuer.
+
+**Ce que doit faire un client tiers.** Rien. Un client qui n'annonce pas est servi
+normalement, sans sanction ni attente, et ne recevra jamais de message non sollicité.
+S'il annonce, il doit accepter de lire **une** `Version` en réponse avant sa propre
+réponse attendue — `node::client` la tolère de toute façon, en défense en profondeur.
 
 **Politique à la réception** (`node::orchestration`) :
 
 | annonce | réaction |
 |---|---|
-| `protocole < VERSION_MIN_ACCEPTEE` | `Action::Deconnecter { raison: VersionTropAncienne }` — fermeture NOMMÉE des deux sens, **score inchangé** |
-| `protocole ≥ VERSION_MIN_ACCEPTEE` | enregistrée (`Noeud::version_annoncee`), aucune action — y compris une version SUPÉRIEURE à la nôtre |
-| aucune annonce | pair présumé parler la version de base — **aucune sanction, aucune attente, aucun refus de servir** |
+| `protocole < VERSION_MIN_ACCEPTEE` | `Action::Deconnecter { raison: VersionTropAncienne }` — fermeture NOMMÉE des deux sens, JOURNALISÉE, **score inchangé**. Aucune réponse. |
+| `protocole ≥ VERSION_MIN_ACCEPTEE` | enregistrée (`Noeud::version_annoncee`) — y compris une version SUPÉRIEURE à la nôtre ; **une** `Version` en réponse si la nôtre n'est pas déjà partie sur ce lien |
+| aucune annonce | pair présumé parler la version de base — **aucune sanction, aucune attente, aucun refus de servir, et rien ne lui est envoyé** |
+
+⚠️ **Aucun refus n'est mémorisé au-delà du lien** : un pair déconnecté pour version
+trop ancienne qui se reconnecte est réexaminé de zéro. Inoffensif tant qu'aucune
+boucle de reconnexion automatique n'existe — c'est le pair qui paie l'effort.
 
 **Refuser n'est pas condamner.** Le refus ne touche pas le score : c'est
 `MessageError::version_inconnue()` porté du message au dialogue entier. Pénaliser un

@@ -160,6 +160,16 @@ pub struct Noeud {
     /// Bornée et purgée à la déconnexion, exactement comme `adresses` et pour la même
     /// raison : le `PeerId` est gratuit.
     versions: HashMap<PeerId, u16>,
+    /// Pairs à qui NOTRE `Version` est déjà partie (J3).
+    ///
+    /// C'est ce qui rend la règle ASYMÉTRIQUE terminante : seul le CONNECTEUR annonce
+    /// spontanément, l'ACCEPTEUR ne répond que s'il a reçu une annonce — et il ne
+    /// répond qu'UNE fois. Sans cette trace, deux nœuds qui se répondent mutuellement
+    /// rebondiraient sans fin, et un pair qui réannonce en boucle obtiendrait une
+    /// réponse gratuite à chaque fois (amplification).
+    ///
+    /// Bornée et purgée par le même point que `adresses` et `versions`.
+    version_envoyee: std::collections::HashSet<PeerId>,
     /// Seaux à jetons du service d'historique, indexés sur le GROUPE RÉSEAU.
     etrangleur: Etrangleur,
     /// Dernier vote émis — la règle de sûreté du consensus (cf. [`crate::votes`]).
@@ -258,6 +268,7 @@ impl Noeud {
             hauteur_max_vue,
             adresses: HashMap::new(),
             versions: HashMap::new(),
+            version_envoyee: std::collections::HashSet::new(),
             etrangleur: Etrangleur::new(),
             votes: RegistreVotes::neuf(),
             votes_recus: HashMap::new(),
@@ -319,7 +330,8 @@ impl Noeud {
         self.adresses.insert(id, adresse);
     }
 
-    /// Oublie TOUT ce que le lien portait : adresse observée et version annoncée.
+    /// Oublie TOUT ce que le lien portait : adresse observée, version annoncée, et
+    /// la trace de NOTRE propre annonce.
     ///
     /// Un seul point de purge, appelé par le runtime à la mort d'un lien — deux
     /// méthodes en laisseraient une oubliée dans un chemin, et le `PeerId` étant
@@ -328,6 +340,20 @@ impl Noeud {
     pub fn oublier_adresse(&mut self, id: &PeerId) {
         self.adresses.remove(id);
         self.versions.remove(id);
+        self.version_envoyee.remove(id);
+    }
+
+    /// Le runtime signale qu'il a déposé NOTRE `Version` sur un lien SORTANT.
+    ///
+    /// C'est la moitié « connecteur » de la règle asymétrique : sans cette trace, la
+    /// réponse du pair (lui-même une `Version`) nous ferait répondre à notre tour, et
+    /// les deux nœuds se renverraient la politesse indéfiniment.
+    pub fn noter_version_envoyee(&mut self, id: PeerId) {
+        if !self.version_envoyee.contains(&id) && self.version_envoyee.len() >= MAX_ADRESSES_SUIVIES
+        {
+            return;
+        }
+        self.version_envoyee.insert(id);
     }
 
     /// Version de protocole annoncée par un pair, si elle l'a été.
@@ -435,16 +461,31 @@ impl Noeud {
     /// (`version_inconnue()`) continue de faire son travail. Un plafond ici
     /// partitionnerait le réseau à chaque déploiement, dans l'autre sens.
     ///
-    /// # Ce qu'on ne fait pas non plus
+    /// # La réponse : UNE, et seulement si nous n'avons pas déjà annoncé
     ///
-    /// Aucune réponse : notre propre `Version` est déjà partie en tête de connexion,
-    /// dans les deux sens. Répondre à une annonce par une annonce ferait rebondir les
-    /// deux nœuds indéfiniment.
+    /// Règle **ASYMÉTRIQUE** : seul le CONNECTEUR annonce spontanément (le runtime le
+    /// déclare par [`Noeud::noter_version_envoyee`]) ; l'ACCEPTEUR ne répond que
+    /// parce qu'il a reçu une annonce. Un client qui n'annonce rien ne reçoit donc
+    /// RIEN de non sollicité — ce qui supprime par CONSTRUCTION la perte silencieuse
+    /// d'un « j'envoie et je raccroche » (fermer une socket portant des octets non lus
+    /// provoque un `RST`, qui fait jeter au nœud d'en face son tampon de réception,
+    /// transaction comprise).
+    ///
+    /// La trace `version_envoyee` est ce qui rend l'échange TERMINANT : sans elle le
+    /// connecteur répondrait à la réponse, et un pair qui réannonce en boucle
+    /// obtiendrait une réponse gratuite à chaque fois.
+    ///
+    /// ⚠️ Rien ne MÉMORISE un refus de version au-delà du lien : un pair déconnecté
+    /// pour version trop ancienne qui se reconnecte est réexaminé de zéro. Inoffensif
+    /// aujourd'hui — le nœud n'a aucune boucle de reconnexion automatique, donc c'est
+    /// le pair qui paie l'effort. À revoir le jour où une telle boucle existera.
     fn sur_version(&mut self, de: PeerId, protocole: u16) -> Vec<Action> {
         if protocole < crate::message::VERSION_MIN_ACCEPTEE {
             // Rien n'est retenu d'un pair avec qui on ne dialogue pas : ce serait une
-            // entrée de table offerte à qui se reconnecte en boucle.
+            // entrée de table offerte à qui se reconnecte en boucle. Et surtout, pas
+            // de réponse : on ferme, on ne bavarde pas.
             self.versions.remove(&de);
+            self.version_envoyee.remove(&de);
             return vec![Action::Deconnecter {
                 pair: de,
                 raison: RaisonDeconnexion::VersionTropAncienne {
@@ -456,11 +497,27 @@ impl Noeud {
         // Bornée AVANT insertion, comme `adresses` : à saturation, un pair de plus
         // n'est simplement pas retenu — il reste présumé « version de base », ce qui
         // est le repli sûr (aucun service ne se conditionne à cette table).
-        if !self.versions.contains_key(&de) && self.versions.len() >= MAX_ADRESSES_SUIVIES {
+        if self.versions.contains_key(&de) || self.versions.len() < MAX_ADRESSES_SUIVIES {
+            self.versions.insert(de, protocole);
+        }
+        self.repondre_version(de)
+    }
+
+    /// Notre `Version` en réponse, si et seulement si elle n'est pas déjà partie sur
+    /// ce lien. Bornée comme les autres tables : à saturation on ne retient pas, donc
+    /// on ne répond pas — sinon la borne deviendrait un levier d'amplification.
+    fn repondre_version(&mut self, de: PeerId) -> Vec<Action> {
+        if self.version_envoyee.contains(&de) || self.version_envoyee.len() >= MAX_ADRESSES_SUIVIES
+        {
             return Vec::new();
         }
-        self.versions.insert(de, protocole);
-        Vec::new()
+        self.version_envoyee.insert(de);
+        vec![Action::Envoyer(
+            de,
+            Message::Version {
+                protocole: crate::message::VERSION_PROTOCOLE,
+            },
+        )]
     }
 
     /// Scelle un bloc avec les transactions du mempool, l'applique, et le diffuse.
@@ -2564,7 +2621,10 @@ mod tests {
         );
     }
 
-    /// Un pair à version acceptée est ENREGISTRÉ, et rien d'autre ne se produit.
+    /// Un pair à version acceptée est ENREGISTRÉ, et reçoit la NÔTRE en réponse.
+    ///
+    /// C'est la moitié « accepteur » de la règle asymétrique : nous n'annonçons pas
+    /// spontanément, mais nous répondons à qui nous annonce.
     #[test]
     fn version_acceptee_enregistree() {
         let mut n = noeud_de_test();
@@ -2577,12 +2637,87 @@ mod tests {
             },
             0,
         );
-        assert!(actions.is_empty(), "aucune action : on note, c'est tout");
+        assert!(
+            matches!(
+                actions.as_slice(),
+                [Action::Envoyer(vers, Message::Version { protocole })]
+                    if *vers == p && *protocole == crate::message::VERSION_PROTOCOLE
+            ),
+            "l'accepteur répond sa version — une fois"
+        );
         assert_eq!(
             n.version_annoncee(&p),
             Some(crate::message::VERSION_PROTOCOLE)
         );
         assert_eq!(n.pairs.get(&p).unwrap().score, 0);
+    }
+
+    /// La réponse est UNIQUE : réannoncer n'obtient plus rien.
+    ///
+    /// Sans cette borne, un pair obtiendrait une réponse gratuite par annonce
+    /// (amplification), et deux nœuds qui se répondraient mutuellement rebondiraient
+    /// indéfiniment.
+    #[test]
+    fn version_repondue_une_seule_fois() {
+        let mut n = noeud_de_test();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+        let v = || Message::Version {
+            protocole: crate::message::VERSION_PROTOCOLE,
+        };
+        assert_eq!(n.traiter(p, v(), 0).len(), 1, "la première annonce répond");
+        assert!(n.traiter(p, v(), 0).is_empty(), "la seconde n'obtient rien");
+        assert!(n.traiter(p, v(), 0).is_empty());
+    }
+
+    /// Le CONNECTEUR ne répond pas à la réponse : le runtime a déclaré son annonce,
+    /// et c'est ce qui rend l'échange terminant.
+    #[test]
+    fn connecteur_ne_repond_pas_a_la_reponse() {
+        let mut n = noeud_de_test();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+        // Ce que fait `Runtime::enregistrer` sur un lien SORTANT.
+        n.noter_version_envoyee(p);
+        let actions = n.traiter(
+            p,
+            Message::Version {
+                protocole: crate::message::VERSION_PROTOCOLE,
+            },
+            0,
+        );
+        assert!(
+            actions.is_empty(),
+            "notre version est déjà partie : y répondre ferait rebondir les deux nœuds"
+        );
+        assert_eq!(
+            n.version_annoncee(&p),
+            Some(crate::message::VERSION_PROTOCOLE),
+            "elle est tout de même ENREGISTRÉE"
+        );
+    }
+
+    /// La trace de notre propre annonce part avec le lien : sans purge, un pair
+    /// reconnecté ne recevrait jamais notre version.
+    #[test]
+    fn trace_dannonce_oubliee_a_la_deconnexion() {
+        let mut n = noeud_de_test();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+        n.noter_version_envoyee(p);
+        n.oublier_adresse(&p);
+        let actions = n.traiter(
+            p,
+            Message::Version {
+                protocole: crate::message::VERSION_PROTOCOLE,
+            },
+            0,
+        );
+        assert_eq!(
+            actions.len(),
+            1,
+            "lien neuf, annonce neuve : la réponse repart"
+        );
     }
 
     /// Un pair annonçant une version PLUS RÉCENTE que la nôtre n'est ni refusé ni
@@ -2600,7 +2735,13 @@ mod tests {
             },
             0,
         );
-        assert!(actions.is_empty(), "une version future n'est pas une faute");
+        assert!(
+            matches!(
+                actions.as_slice(),
+                [Action::Envoyer(_, Message::Version { .. })]
+            ),
+            "une version future n'est pas une faute : on répond comme à toute annonce"
+        );
         assert_eq!(n.version_annoncee(&p), Some(u16::MAX));
         assert_eq!(n.pairs.get(&p).unwrap().score, 0);
     }

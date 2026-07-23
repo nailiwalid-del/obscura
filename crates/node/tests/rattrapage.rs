@@ -397,12 +397,13 @@ fn demande_de_hauteur_inconnue_reste_sans_reponse_sur_socket() {
     }
 
     let (score, liens) = serveur.join().expect("thread B");
-    // Depuis J3, tout nœud dépose UNE `Message::Version` en tête de connexion : c'est
-    // le seul message qu'un nœud émet spontanément. « Silence » signifie donc « rien
-    // au-delà de cette annonce » — surtout aucun `Bloc` en réponse aux demandes.
+    // A est le CONNECTEUR : il annonce sa version, et B lui RÉPOND la sienne — une
+    // fois, et seulement parce qu'il a été annoncé (règle asymétrique J3). C'est le
+    // seul message que B nous doit ici. « Silence » signifie donc « rien au-delà de
+    // cette réponse » — surtout aucun `Bloc` en réponse aux quatre demandes.
     assert_eq!(
         recus, 1,
-        "silence : rien ne doit revenir hormis la Version de tête"
+        "silence : rien ne doit revenir hormis la Version en réponse à la nôtre"
     );
     assert_eq!(
         score, 0,

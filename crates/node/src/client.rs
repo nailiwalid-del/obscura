@@ -411,33 +411,22 @@ enum Recue {
     Incoherent(String),
 }
 
-/// Draine UN message avant de raccrocher, après un envoi « à sens unique ».
-///
-/// # Raccrocher sans lire DÉTRUIT ce qu'on vient d'envoyer
-///
-/// Fermer une socket qui porte encore des octets NON LUS fait répondre un `RST`, et un
-/// `RST` fait jeter à la pile TCP d'en face son tampon de RÉCEPTION — donc, s'il n'a
-/// pas encore été consommé, le message qu'on venait de transmettre. Depuis J3, tout
-/// nœud dépose une [`Message::Version`] en tête de connexion : un client « j'envoie et
-/// je raccroche » laisse donc systématiquement un message non lu derrière lui, et perd
-/// sa propre transaction d'autant plus souvent que la machine est chargée. Ce n'est
-/// pas une hypothèse : c'est le défaut qu'a fait apparaître le câblage de la
-/// négociation (`cycle_wallet.rs`, sous charge).
-///
-/// UN seul message est lu, et c'est délibéré : c'est exactement ce qu'un nœud émet
-/// spontanément. En lire davantage ferait attendre une échéance complète pour rien à
-/// chaque envoi. Toute erreur est un succès — on ne cherche pas à comprendre, seulement
-/// à ne rien laisser traîner.
-pub fn drainer_avant_fermeture<S: Read + Write>(connexion: &mut Connexion<S>) {
-    let _ = connexion.recevoir();
-}
-
 /// Messages NON sollicités qu'on accepte d'ignorer avant la réponse attendue.
 ///
-/// Un nœud à jour en émet exactement UN : sa `Message::Version`, déposée en tête de
-/// connexion (J3). La marge couvre une évolution du même genre ; au-delà, un nœud
-/// qui nous ferait lire sans fin des messages hors sujet obtiendrait une boucle
-/// gratuite — on rend alors le silence, qui est déjà notre issue sûre.
+/// # Un wallet n'en reçoit AUCUN, et c'est voulu
+///
+/// La règle de négociation J3 est ASYMÉTRIQUE : seul le CONNECTEUR annonce sa
+/// `Message::Version`, et l'ACCEPTEUR ne répond que s'il en a reçu une. Le wallet
+/// n'annonce rien — il n'est pas un pair, il est un client à un coup — donc le nœud
+/// ne lui envoie rien de non sollicité. C'est ce qui supprime PAR CONSTRUCTION la
+/// perte silencieuse d'un « j'envoie et je raccroche » : plus d'octets non lus au
+/// moment de fermer, donc plus de `RST`, donc plus de tampon de réception jeté chez
+/// le nœud (transaction comprise).
+///
+/// Cette tolérance reste néanmoins câblée, en DÉFENSE EN PROFONDEUR : elle ne coûte
+/// rien et elle couvre un nœud d'une version ultérieure qui déciderait d'annoncer
+/// quand même. Au-delà du budget, un nœud qui nous ferait lire sans fin des messages
+/// hors sujet obtiendrait une boucle gratuite — on rend alors l'incohérence.
 const MAX_MESSAGES_IGNORES: usize = 4;
 
 fn recevoir_historique<S: Read + Write>(connexion: &mut Connexion<S>, hauteur: u64) -> Recue {
@@ -462,15 +451,19 @@ fn recevoir_historique<S: Read + Write>(connexion: &mut Connexion<S>, hauteur: u
                 }
                 return Recue::Ok(r.pour_le_wallet(), r.morceaux);
             }
-            // LA VERSION DU NŒUD, déposée en tête de connexion : elle n'est pas une
-            // réponse à notre demande et ne doit pas la faire échouer. La traiter
-            // comme « message inattendu » aurait cassé TOUTE synchronisation de
-            // wallet le jour du déploiement de la négociation — exactement le fork
-            // que celle-ci existe pour éviter. On l'ignore et on relit.
+            // LA VERSION D'UN NŒUD : elle n'est pas une réponse à notre demande et ne
+            // doit pas la faire échouer. La traiter comme « message inattendu »
+            // casserait la synchronisation de wallet le jour où un nœud d'une version
+            // ultérieure annoncerait quand même — exactement le fork que la
+            // négociation existe pour éviter. On l'ignore et on relit.
             //
-            // Nous n'y répondons pas : le wallet n'annonce rien (son absence vaut
-            // version de base), et lui répondre ferait de sa version une empreinte de
-            // plus sur une connexion qui n'en porte volontairement aucune.
+            // Sous la règle asymétrique en vigueur, ce cas ne se produit PAS : le
+            // wallet n'annonce rien, donc le nœud ne lui répond rien. C'est une
+            // défense en profondeur, pas un chemin nominal.
+            //
+            // Nous n'y répondons pas non plus : le wallet n'est pas un pair, et lui
+            // faire annoncer une version ferait de celle-ci une empreinte de plus sur
+            // une connexion qui n'en porte volontairement aucune.
             Ok(Message::Version { .. }) => continue,
             Ok(_) => {
                 return Recue::Incoherent(
@@ -480,5 +473,11 @@ fn recevoir_historique<S: Read + Write>(connexion: &mut Connexion<S>, hauteur: u
             Err(e) => return Recue::Incoherent(format!("réponse indécodable : {e}")),
         }
     }
-    Recue::Silence
+    // Budget épuisé : le nœud a PARLÉ, plusieurs fois, sans jamais répondre. Ce n'est
+    // pas un silence — le confondre avec « la chaîne est épuisée » ferait conclure « à
+    // jour » à un wallet à qui on tient un discours hors sujet. On le nomme.
+    Recue::Incoherent(format!(
+        "{} messages non sollicités d'affilée sans réponse à la demande d'historique",
+        MAX_MESSAGES_IGNORES + 1
+    ))
 }

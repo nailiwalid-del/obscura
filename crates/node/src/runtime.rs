@@ -19,7 +19,7 @@
 //! d'écrire vers lui — un pair muet suffirait à figer le nœud.
 
 use crate::message::{Message, VERSION_PROTOCOLE};
-use crate::orchestration::{Action, Noeud};
+use crate::orchestration::{Action, Noeud, RaisonDeconnexion};
 use crypto::sig::SigKeypair;
 use net::pairs::PeerId;
 use net::{Connexion, NetError};
@@ -159,7 +159,9 @@ impl Runtime {
         let adresse = flux.peer_addr().ok();
         let coupure = flux.try_clone().map_err(|e| NetError::Io(e.kind()))?;
         let connexion = Connexion::accepter(flux, identite)?;
-        let id = self.enregistrer(connexion, coupure)?;
+        // ENTRANT : on n'annonce RIEN spontanément (règle asymétrique, cf.
+        // `enregistrer`). Un client à un coup ne reçoit donc rien de non sollicité.
+        let id = self.enregistrer(connexion, coupure, false)?;
         // Volontairement PAS `pairs.ajouter` : la table de pairs sert la sélection
         // SORTANTE anti-eclipse, et y verser les entrants offrirait à un attaquant un
         // moyen d'entrer dans nos emplacements sortants en nous appelant.
@@ -179,7 +181,10 @@ impl Runtime {
         Self::poser_echeances(&flux)?;
         let coupure = flux.try_clone().map_err(|e| NetError::Io(e.kind()))?;
         let connexion = Connexion::connecter(flux, identite)?;
-        let id = self.enregistrer(connexion, coupure)?;
+        // SORTANT : c'est NOUS qui avons ouvert le dialogue, c'est donc nous qui
+        // annonçons. Tout nœud se connecte en sortant, la négociation nœud↔nœud est
+        // donc complète.
+        let id = self.enregistrer(connexion, coupure, true)?;
         // Le pair est authentifié : on le retient avec son adresse, pour que la
         // sélection anti-eclipse (groupes réseau) puisse en tenir compte.
         self.noeud.pairs.ajouter(id, adresse);
@@ -188,14 +193,25 @@ impl Runtime {
     }
 
     /// Scinde la connexion, lance ses threads de LECTURE et d'ÉCRITURE, mémorise
-    /// la file d'envoi — et annonce NOTRE version en tête.
+    /// la file d'envoi — et annonce NOTRE version en tête **si nous sommes le
+    /// connecteur**.
     ///
-    /// # Un seul point d'entrée, donc une seule annonce à ne pas oublier
+    /// # La règle est ASYMÉTRIQUE, et ce n'est pas un détail
     ///
-    /// `accepter` et `connecter` passent tous deux par ici : la version part donc sur
-    /// les liens ENTRANTS comme SORTANTS, sans que la règle ait à être répétée. Elle
-    /// est déposée dans la file AVANT tout autre message, ce qui en fait le premier
-    /// message applicatif du lien (la file d'un lien préserve l'ordre des dépôts).
+    /// Seul le côté SORTANT (`annoncer = true`) dépose spontanément sa `Version` ;
+    /// le côté ENTRANT ne répond qu'à une annonce reçue (`Noeud::sur_version`).
+    ///
+    /// Écrire spontanément vers un ENTRANT casserait les clients « j'envoie et je
+    /// raccroche » : fermer une socket qui porte des octets NON LUS provoque un `RST`,
+    /// et un `RST` fait jeter à la pile d'en face son tampon de RÉCEPTION — donc la
+    /// transaction qu'on venait de recevoir, si le thread de lecture ne l'avait pas
+    /// encore consommée. Un drain côté client n'ATTÉNUAIT que ce hasard ; ne rien
+    /// émettre de non sollicité l'ÉLIMINE. La négociation nœud↔nœud, elle, ne perd
+    /// rien : tout nœud se connecte en sortant.
+    ///
+    /// Quand elle part, la version est déposée dans la file AVANT tout autre message,
+    /// ce qui en fait le premier message applicatif du lien (la file d'un lien
+    /// préserve l'ordre des dépôts).
     ///
     /// ⚠️ Elle circule sur la `Session` DÉJÀ CHIFFRÉE, comme n'importe quel message
     /// applicatif : `net` reste pur transport et n'a pas connaissance de la version
@@ -204,6 +220,7 @@ impl Runtime {
         &mut self,
         connexion: Connexion<TcpStream>,
         coupure: TcpStream,
+        annoncer: bool,
     ) -> Result<PeerId, NetError> {
         let id = PeerId::depuis_identite(connexion.pair());
         let (mut lecteur, ecrivain) = connexion.separer(|f| f.try_clone())?;
@@ -251,16 +268,23 @@ impl Runtime {
             }
         });
 
-        // NOTRE VERSION, en tête. Le `try_send` ne peut échouer sur une file neuve ;
-        // s'il échouait, le lien serait déjà mort et le pair nous présumerait
-        // simplement « version de base » — ce qui reste un état valide, jamais un
-        // blocage. C'est la contrepartie du caractère optionnel du message.
-        let _ = file_envoi.try_send(
-            Message::Version {
-                protocole: VERSION_PROTOCOLE,
-            }
-            .to_bytes(),
-        );
+        // NOTRE VERSION, en tête — SORTANTS seulement. Le `try_send` ne peut échouer
+        // sur une file neuve ; s'il échouait, le lien serait déjà mort et le pair nous
+        // présumerait simplement « version de base » — ce qui reste un état valide,
+        // jamais un blocage. C'est la contrepartie du caractère optionnel du message.
+        //
+        // La trace est posée dans le nœud pour que la RÉPONSE du pair (elle-même une
+        // `Version`) ne nous fasse pas répondre à notre tour : l'échange doit se
+        // terminer, pas rebondir.
+        if annoncer {
+            let _ = file_envoi.try_send(
+                Message::Version {
+                    protocole: VERSION_PROTOCOLE,
+                }
+                .to_bytes(),
+            );
+            self.noeud.noter_version_envoyee(id);
+        }
 
         self.liens.lock().unwrap().insert(id, file_envoi);
         self.coupures.insert(id, coupure);
@@ -352,7 +376,22 @@ impl Runtime {
                 // Aucune sanction n'est appliquée ici, et c'est le point entier de
                 // cette action : la raison est nommée dans `Action`, le score reste
                 // celui d'un pair honnête.
-                Action::Deconnecter { pair, raison: _ } => {
+                //
+                // Et la raison est ÉCRITE, jamais jetée : `RaisonDeconnexion` existe
+                // pour qu'un opérateur sache pourquoi ses liens tombent — une
+                // déconnexion muette est indiscernable d'un lien mort. Même style que
+                // l'échec de persistance ci-dessus (`eprintln!`) : le `Runtime` n'a
+                // pas d'horloge de journal, celle-ci vit dans le binaire, et en
+                // fabriquer une ici afficherait un uptime faux.
+                Action::Deconnecter { pair, raison } => {
+                    match &raison {
+                        RaisonDeconnexion::VersionTropAncienne { annoncee, minimale } => eprintln!(
+                            "avert : lien fermé avec {} — version de protocole annoncée {annoncee}, \
+                             minimale acceptée {minimale}. Ce n'est PAS une faute : score intact, \
+                             le pair revient dès qu'il est à jour.",
+                            hex::encode(&pair.octets()[..8])
+                        ),
+                    }
                     liens.remove(&pair);
                     if let Some(flux) = self.coupures.remove(&pair) {
                         let _ = flux.shutdown(std::net::Shutdown::Both);

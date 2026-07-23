@@ -241,11 +241,21 @@ désynchronisation (cf. « `désaccords` augmente » ci-dessous).
 
 La tolérance de version ci-dessus est **réactive** : elle empêche qu'un pair à
 jour sanctionne un pair en retard, mais ne dit à personne QUI parle QUELLE
-version. Une négociation de version explicite à l'établissement de la
-connexion (message dédié, prévue au périmètre B) fermera ce manque : elle
-permettra de **constater** la composition réelle du réseau — combien de pairs
-ont déjà migré — avant de décider qu'un déploiement nœud par nœud est terminé,
-ou qu'une rupture peut être annoncée sans risque de fork partiel.
+version. La négociation explicite (J3, `Message::Version`, cf.
+`docs/PROTOCOL.md`) comble ce manque : chaque nœud **constate** la version de
+ses pairs, ce qui permet de juger si un déploiement nœud par nœud est terminé
+avant d'annoncer une rupture.
+
+Deux choses à savoir en exploitation :
+
+- **Seul le côté sortant annonce**, l'entrant répond. Un pair qui n'annonce
+  rien est présumé parler la version de base : servi normalement, jamais
+  sanctionné, jamais mis en attente. Un `obscura-wallet` n'annonce rien du tout
+  — c'est un client, pas un pair.
+- **Un refus de version se lit dans le journal** (`avert : lien fermé avec … —
+  version de protocole annoncée …`). Il ne touche PAS le score : le pair revient
+  dès qu'il est à jour. Si vos `liens` tombent après une mise à jour, cette ligne
+  est ce qui le dit.
 
 ## Dépanner
 

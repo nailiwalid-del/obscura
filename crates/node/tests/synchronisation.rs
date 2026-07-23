@@ -92,22 +92,6 @@ fn client(adresse: SocketAddr) -> Connexion<TcpStream> {
     Connexion::connecter(flux, &SigKeypair::generate()).expect("handshake")
 }
 
-/// Consomme la `Message::Version` que tout nœud dépose en TÊTE de connexion (J3).
-///
-/// Un wallet réel l'ignore et relit (`node::client`) ; ici on la retire
-/// explicitement, pour que les assertions qui suivent portent bien sur la réponse à
-/// NOTRE demande et pas sur ce message spontané.
-fn consommer_version(c: &mut Connexion<TcpStream>) {
-    let octets = c.recevoir().expect("Version en tête de connexion");
-    assert!(
-        matches!(
-            Message::from_bytes(&octets),
-            Ok(Message::Version { protocole }) if protocole == node::message::VERSION_PROTOCOLE
-        ),
-        "le premier message applicatif d'un nœud est sa version"
-    );
-}
-
 /// UN WALLET OBTIENT LES SORTIES D'UN BLOC, DANS L'ORDRE, AVEC SON ANCRE.
 ///
 /// Le chemin complet est exercé : `Message::to_bytes` → cadrage → cascade AEAD →
@@ -135,8 +119,10 @@ fn un_wallet_obtient_les_sorties_dun_bloc_dans_lordre() {
     let fini = Arc::new(AtomicBool::new(false));
     let serveur = serveur_archiviste(g, ecoute, Arc::clone(&fini));
 
+    // AUCUN message spontané n'est attendu du nœud : la règle de négociation J3 est
+    // asymétrique (seul le connecteur annonce, et un wallet n'annonce pas). La
+    // première trame reçue est donc bien la réponse à NOTRE demande.
     let mut c = client(adresse);
-    consommer_version(&mut c);
     c.envoyer(&Message::DemandeHistorique { hauteur: 0 }.to_bytes())
         .expect("envoi");
     let octets = c.recevoir().expect("réponse");
@@ -223,7 +209,6 @@ fn hauteurs_hostiles_ne_font_ni_paniquer_ni_repondre() {
     });
 
     let mut c = client(adresse);
-    consommer_version(&mut c);
     // La tête servie est 0 : tout le reste doit rendre le silence, y compris les
     // valeurs qui feraient déborder une soustraction naïve.
     for hauteur in [1u64, 2, SORTIES, SORTIES + 1, u64::MAX, u64::MAX - 1] {
@@ -236,7 +221,8 @@ fn hauteurs_hostiles_ne_font_ni_paniquer_ni_repondre() {
 
     assert!(
         matches!(recu, Err(net::NetError::Io(_))),
-        "silence attendu : aucune réponse ne doit revenir pour une hauteur inconnue"
+        "silence attendu : RIEN ne doit revenir — ni réponse à une hauteur inconnue, \
+         ni message spontané (le nœud n'annonce sa version qu'à qui l'annonce)"
     );
     assert_eq!(
         score, 0,

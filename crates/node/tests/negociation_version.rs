@@ -1,12 +1,14 @@
 //! Négociation de version (J3) sur de VRAIES sockets.
 //!
-//! Trois scénarios, et le troisième est le seul qui coupe :
+//! Quatre scénarios, et un seul coupe :
 //!
 //! - deux nœuds À JOUR échangent `Version` en tête et dialoguent normalement ;
 //! - un pair qui n'envoie JAMAIS `Version` (un nœud d'avant J3) est servi comme les
 //!   autres : ni banni, ni pénalisé, ni mis en attente ;
 //! - un pair annonçant `protocole = 0` (sous le minimum) est déconnecté POUR DE BON,
-//!   et **sans la moindre sanction de score**.
+//!   et **sans la moindre sanction de score** ;
+//! - un CLIENT qui n'annonce pas ne reçoit RIEN de non sollicité ; s'il annonce, il
+//!   reçoit UNE réponse et pas deux.
 //!
 //! # L'invariant tenu ici : la coexistence, dans les DEUX sens
 //!
@@ -17,12 +19,21 @@
 //! pénalité — cf. `message::tests::tag_version_est_une_version_future_pour_un_noeud_davant_j3`
 //! et l'assertion sur le premier octet ci-dessous).
 //!
+//! # La règle est ASYMÉTRIQUE
+//!
+//! Seul le CONNECTEUR annonce spontanément ; l'ACCEPTEUR ne répond que s'il a reçu
+//! une annonce, et une seule fois. Un client qui n'annonce pas ne reçoit donc RIEN de
+//! non sollicité — ce qui supprime par construction la perte silencieuse d'un
+//! « j'envoie et je raccroche » (un `RST` de fermeture fait jeter au nœud son tampon
+//! de réception, transaction comprise). La négociation nœud↔nœud ne perd rien : tout
+//! nœud se connecte en sortant.
+//!
 //! # Pourquoi un pair BRUT plutôt qu'un second `Runtime`
 //!
-//! Un `Runtime` annonce toujours sa version : il ne peut donc pas jouer l'ancien
-//! nœud. Le pair est monté directement sur `net::Connexion` — le même transport
-//! chiffré, sans la politique applicative. C'est aussi ce qui permet d'inspecter les
-//! octets RÉELLEMENT reçus, plutôt que de croire une structure Rust.
+//! Un `Runtime` qui se connecte annonce toujours sa version : il ne peut donc pas
+//! jouer l'ancien nœud. Le pair est monté directement sur `net::Connexion` — le même
+//! transport chiffré, sans la politique applicative. C'est aussi ce qui permet
+//! d'inspecter les octets RÉELLEMENT reçus, plutôt que de croire une structure Rust.
 
 use crypto::sig::SigKeypair;
 use ledger::proved_state::ProvedLedgerState;
@@ -112,15 +123,21 @@ fn deux_noeuds_a_jour_echangent_leur_version() {
         rt.executer(vec![node::orchestration::Action::Diffuser(
             Message::Annonce(vec![[9u8; 64]]),
         )]);
-        // Le serveur répond par une Demande (mempool vide) : on la consomme.
-        let repondu = attendre(
-            || {
-                rt.pomper(0);
-                rt.liens_ouverts() == 1
-            },
-            Duration::from_secs(5),
+        // Le serveur répond par une Demande (mempool vide). Le seul effet observable
+        // d'ici est NÉGATIF : aucune fermeture ne doit en découler. On pompe donc un
+        // nombre BORNÉ de fois puis on constate — `attendre(|| liens == 1)` serait
+        // vrai dès le premier appel, avant tout traitement, et n'affirmerait rien.
+        // (Que la `Demande` soit bien produite est vérifié sur le fil par le
+        // scénario 2 et par `deux_noeuds::annonce_declenche_une_demande_sur_le_fil`.)
+        for _ in 0..100 {
+            rt.pomper(0);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            rt.liens_ouverts(),
+            1,
+            "le lien survit à l'échange ordinaire"
         );
-        assert!(repondu, "le lien survit à l'échange");
         pret_tx.send(()).expect("signal");
         // Tenir le lien ouvert pendant les vérifications d'en face.
         let _ = fin_rx.recv_timeout(Duration::from_secs(30));
@@ -223,6 +240,118 @@ fn un_pair_sans_version_nest_ni_banni_ni_penalise() {
     assert_eq!(rt.liens_ouverts(), 1, "aucune déconnexion");
     fin_tx.send(()).expect("signal");
     ancien.join().expect("thread pair ancien");
+}
+
+/// Échéance de lecture du scénario 4.
+///
+/// Elle sert DEUX usages opposés : attendre une réponse (qui arrive en
+/// millisecondes sur boucle locale) et constater une ABSENCE (qui coûte l'échéance
+/// entière, deux fois). D'où une valeur unique et courte — la régler en cours de
+/// route par un clone du flux ne fonctionne pas partout, `SO_RCVTIMEO` n'étant pas
+/// garanti partagé entre descripteurs dupliqués.
+const COURT: Duration = Duration::from_secs(3);
+
+/// SCÉNARIO 4 — LA RÈGLE ASYMÉTRIQUE, vérifiée sur le fil dans ses trois moments.
+///
+/// 1. Un client qui n'annonce rien ne reçoit **rien** de non sollicité. C'est ce qui
+///    supprime PAR CONSTRUCTION la perte silencieuse d'un « j'envoie et je
+///    raccroche » : fermer une socket portant des octets non lus provoque un `RST`,
+///    et un `RST` fait jeter au nœud son tampon de réception — donc la transaction
+///    qu'on venait de lui envoyer. Aucun octet en attente, aucun `RST`, aucune perte.
+/// 2. S'il annonce, il reçoit la version du nœud en réponse : la négociation reste
+///    complète pour qui la demande.
+/// 3. S'il réannonce, il ne reçoit **plus rien** : la réponse est unique. Sans cela,
+///    un pair obtiendrait une réponse gratuite par annonce (amplification), et deux
+///    nœuds se répondraient indéfiniment.
+#[test]
+fn un_client_qui_nannonce_pas_ne_recoit_rien_de_non_sollicite() {
+    let (l, adresse) = ecoute();
+    let (fini_tx, fini_rx) = std::sync::mpsc::channel::<()>();
+
+    let serveur = std::thread::spawn(move || {
+        let mut rt = Runtime::new(noeud(1));
+        let (flux, _) = l.accept().unwrap();
+        let pair = rt
+            .accepter(flux, &SigKeypair::generate())
+            .expect("handshake");
+        // `accepter` n'inscrit pas le pair dans la table (c'est le rôle de
+        // `connecter`, pour l'anti-eclipse) : sans entrée, le score serait
+        // inobservable et « aucune sanction » ne voudrait rien dire.
+        rt.noeud_mut()
+            .pairs
+            .ajouter(pair, SocketAddr::from((Ipv4Addr::LOCALHOST, 1)));
+        while fini_rx.try_recv().is_err() {
+            rt.pomper(0);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        (
+            rt.noeud().pairs.get(&pair).map(|p| p.score).unwrap_or(0),
+            rt.liens_ouverts(),
+            rt.noeud().version_annoncee(&pair),
+        )
+    });
+
+    let flux = TcpStream::connect(adresse).expect("connexion");
+    flux.set_read_timeout(Some(COURT)).unwrap();
+    flux.set_write_timeout(Some(Duration::from_secs(20)))
+        .unwrap();
+    let mut c = net::Connexion::connecter(flux, &SigKeypair::generate()).expect("handshake");
+
+    // 1. RIEN de non sollicité.
+    assert!(
+        matches!(
+            c.recevoir(),
+            Err(net::NetError::Io(
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            ))
+        ),
+        "un client qui n'annonce pas ne doit RIEN recevoir spontanément"
+    );
+
+    // 2. Qui annonce obtient une réponse.
+    c.envoyer(
+        &Message::Version {
+            protocole: VERSION_PROTOCOLE,
+        }
+        .to_bytes(),
+    )
+    .expect("envoi de notre version");
+    let octets = c.recevoir().expect("réponse à notre annonce");
+    assert!(
+        matches!(
+            Message::from_bytes(&octets),
+            Ok(Message::Version { protocole }) if protocole == VERSION_PROTOCOLE
+        ),
+        "l'accepteur répond sa version à qui lui annonce la sienne"
+    );
+
+    // 3. Une seule réponse, jamais deux.
+    c.envoyer(
+        &Message::Version {
+            protocole: VERSION_PROTOCOLE,
+        }
+        .to_bytes(),
+    )
+    .expect("seconde annonce");
+    assert!(
+        matches!(
+            c.recevoir(),
+            Err(net::NetError::Io(
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            ))
+        ),
+        "la réponse est UNIQUE : réannoncer n'obtient rien (ni rebond, ni amplification)"
+    );
+
+    fini_tx.send(()).expect("signal");
+    let (score, liens, vue) = serveur.join().expect("thread serveur");
+    assert_eq!(score, 0, "annoncer — ou se taire — n'est jamais une faute");
+    assert_eq!(liens, 1, "aucune coupure");
+    assert_eq!(
+        vue,
+        Some(VERSION_PROTOCOLE),
+        "le nœud a bien retenu la version annoncée"
+    );
 }
 
 /// SCÉNARIO 3 — un pair annonçant une version SOUS le minimum est déconnecté, et le

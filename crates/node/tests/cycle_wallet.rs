@@ -143,11 +143,9 @@ fn soumettre(adresse: SocketAddr, tx: circuit::ProvedTx) {
     let mut c = client(adresse);
     c.envoyer(&Message::Transaction(Box::new(tx)).to_bytes())
         .expect("envoi de la transaction");
-    // Raccrocher en laissant des octets non lus (depuis J3, la `Version` que le nœud
-    // dépose en tête) provoque un RST, qui fait jeter au nœud son tampon de réception
-    // — donc la transaction elle-même, si son thread de lecture ne l'a pas encore
-    // consommée. On draine avant de fermer, comme le fait `obscura-wallet envoyer`.
-    node::client::drainer_avant_fermeture(&mut c);
+    // Rien à drainer : sous la règle asymétrique J3, un client qui n'annonce pas sa
+    // version ne reçoit rien de non sollicité. La socket se ferme sans octets non lus,
+    // donc sans `RST`, donc sans faire jeter au nœud son tampon de réception.
 }
 
 /// LE CYCLE : payer → sceller → recevoir → retrouver sa monnaie → redépenser.
