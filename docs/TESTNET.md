@@ -88,6 +88,19 @@ de décisions écrites, et chacune renvoie à son document de référence.
   producteur partiellement joignable pile au basculement), c'est le prix assumé
   de « arrêt plutôt que divergence », et ce n'est **jamais silencieux** : le
   statut passe en préoccupant et le journal émet une `ERREUR` dédiée.
+- **Une partition sans côté majoritaire fige la production jusqu'à la
+  guérison — et c'est le comportement attendu.** Aucun groupe qui ne réunit pas
+  `⌊2n/3⌋ + 1` autorités joignables ne produit de bloc : il scelle peut-être,
+  mais il n'applique rien, donc il ne crée aucune branche. Concrètement, sur ce
+  réseau : la chaîne s'arrête, les nœuds restent debout et continuent de servir
+  ce qu'ils ont, et **la chaîne reprend d'elle-même quand la connectivité
+  revient** — les nœuds en retard rattrapent par `DemandeBloc`, sans
+  intervention. Politique complète :
+  [`PROTOCOL.md`](PROTOCOL.md), « Partition : la politique de minorité ».
+  ⚠️ Un nœud minoritaire est **en retard sans le savoir** : il sert un
+  historique plus court mais parfaitement cohérent. Raison de plus d'utiliser
+  `--temoin` (§1.3). ⚠️ Le cas d'une hauteur **CALÉE** (split de votes) est le
+  seul que la guérison ne répare pas.
 - **Aucune réorganisation n'est possible.** L'état est append-only de bout en
   bout. Toute divergence est **définitive** : un nœud qui diverge ne se répare
   pas, il se réamorce. Avec la finalité instantanée, cette limite devient une
@@ -142,6 +155,15 @@ de décisions écrites, et chacune renvoie à son document de référence.
   imprimé au démarrage de votre nœud. 32 octets, pas 8 — la forme courte est un
   diagnostic, pas une ancre.
 - **Le mempool n'est pas persisté** (sans gravité : les pairs réannoncent).
+- **Une synchronisation de wallet peut être interrompue par un nœud très actif.**
+  `obscura-wallet synchroniser` tolère les messages diffusés (annonces, blocs,
+  propositions) qui arrivent pendant qu'il attend l'historique, mais dans un budget
+  BORNÉ — sans borne, un nœud qui parle sans jamais répondre obtiendrait une boucle
+  gratuite. Au-delà, la synchronisation s'arrête en le NOMMANT plutôt que de conclure
+  « à jour » à tort. ⚠️ **Ce budget n'est dimensionné par aucune mesure** : sous une
+  chaîne qui scelle très fréquemment, une synchronisation honnête peut donc s'arrêter
+  ainsi. L'échec est sûr — rien n'est appliqué, rien n'est perdu — et **il suffit de
+  relancer la commande**.
 - **La clé d'identité d'un nœud n'est pas chiffrée au repos.**
 - **L'arbre du wallet est en O(n)** : pas de client léger, la mémoire croît avec
   la chaîne.

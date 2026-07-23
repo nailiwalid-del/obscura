@@ -119,6 +119,12 @@ fn un_wallet_obtient_les_sorties_dun_bloc_dans_lordre() {
     let fini = Arc::new(AtomicBool::new(false));
     let serveur = serveur_archiviste(g, ecoute, Arc::clone(&fini));
 
+    // AUCUN message spontané n'est attendu ICI : la règle de négociation J3 est
+    // asymétrique (seul le connecteur annonce, et un wallet n'annonce pas), ET rien
+    // dans ce test ne déclenche de diffusion. La première trame reçue est donc bien
+    // la réponse à NOTRE demande. ⚠️ Ce n'est pas une garantie générale : une
+    // `Action::Diffuser` atteint tous les liens ouverts, entrants compris — cf.
+    // `une_diffusion_pendant_la_synchronisation_ne_lavorte_pas`.
     let mut c = client(adresse);
     c.envoyer(&Message::DemandeHistorique { hauteur: 0 }.to_bytes())
         .expect("envoi");
@@ -218,7 +224,8 @@ fn hauteurs_hostiles_ne_font_ni_paniquer_ni_repondre() {
 
     assert!(
         matches!(recu, Err(net::NetError::Io(_))),
-        "silence attendu : aucune réponse ne doit revenir pour une hauteur inconnue"
+        "silence attendu : RIEN ne doit revenir — ni réponse à une hauteur inconnue, \
+         ni message spontané (le nœud n'annonce sa version qu'à qui l'annonce)"
     );
     assert_eq!(
         score, 0,
@@ -227,5 +234,92 @@ fn hauteurs_hostiles_ne_font_ni_paniquer_ni_repondre() {
     assert_eq!(
         liens, 1,
         "et le lien reste ouvert — le nœud n'a ni coupé ni paniqué"
+    );
+}
+
+/// Se connecte comme un wallet, avec une échéance de lecture COURTE : c'est elle qui
+/// définit le SILENCE terminant la boucle de synchronisation.
+fn client_bref(adresse: SocketAddr) -> Connexion<TcpStream> {
+    let flux = TcpStream::connect(adresse).expect("connexion");
+    flux.set_read_timeout(Some(Duration::from_millis(800)))
+        .unwrap();
+    flux.set_write_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    Connexion::connecter(flux, &SigKeypair::generate()).expect("handshake")
+}
+
+/// UNE DIFFUSION PENDANT UNE SYNCHRONISATION NE L'AVORTE PAS.
+///
+/// # L'argument FAUX que ce test enterre
+///
+/// On a un temps écrit que « le seul écrit spontané du nœud vers un client est un
+/// relais Dandelion++, donc après lecture complète de la trame ; un client muet ne
+/// reçoit jamais rien de non sollicité ». C'est faux, et c'est ce test qui le montre
+/// sur de vraies sockets : `Action::Diffuser` itère sur **tous les liens ouverts,
+/// entrants compris**, et elle naît de causes sans rapport avec le client — embargo
+/// Dandelion++ expiré, `--sceller`, relais d'un bloc reçu d'un autre pair,
+/// proposition de changement d'autorités. Le nœud diffuse ici une `Annonce` que le
+/// wallet n'a jamais demandée, avant même d'avoir répondu à sa demande.
+///
+/// La conséquence était réelle : `recevoir_historique` rendait
+/// `Recue::Incoherent("message inattendu…")` sur tout ce qui n'était ni `Historique`
+/// ni `Version`, donc **la synchronisation avortait** dès qu'une diffusion tombait
+/// pendant qu'elle tournait. Un échec intermittent, imputé au wallet, causé par une
+/// activité parfaitement normale du nœud.
+///
+/// L'ordre est DÉTERMINISTE, et c'est ce qui fait de ce test une preuve : la
+/// diffusion est déposée dans la file d'envoi du lien AVANT que le nœud n'ait pompé
+/// le moindre événement, et une file de lien préserve l'ordre des dépôts. L'`Annonce`
+/// précède donc nécessairement la réponse d'historique.
+#[test]
+fn une_diffusion_pendant_la_synchronisation_ne_lavorte_pas() {
+    let g = genese();
+    let ecoute = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();
+    let adresse = ecoute.local_addr().unwrap();
+    let fini = Arc::new(AtomicBool::new(false));
+    let fini_serveur = Arc::clone(&fini);
+    let identite = SigKeypair::generate();
+
+    let serveur = std::thread::spawn(move || {
+        let mut rt = Runtime::new(noeud_archiviste(&g));
+        let (flux, _) = ecoute.accept().unwrap();
+        rt.accepter(flux, &identite).expect("handshake");
+        // LA DIFFUSION. Déposée avant tout pompage : elle sera le premier message
+        // applicatif que le wallet lira, et il ne l'a jamais demandée.
+        rt.executer(vec![node::orchestration::Action::Diffuser(
+            Message::Annonce(vec![[9u8; 64]]),
+        )]);
+        while !fini_serveur.load(Ordering::SeqCst) {
+            rt.pomper(0);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    });
+
+    let mut w = wallet::Wallet::nouveau(PROFONDEUR);
+    let mut c = client_bref(adresse);
+    let resume =
+        node::client::synchroniser_par_connexion(&mut c, &mut w, Duration::ZERO, |_, _| Ok(()));
+
+    fini.store(true, Ordering::SeqCst);
+    serveur.join().expect("thread serveur");
+
+    assert!(
+        matches!(resume.arret, node::client::Arret::AJour),
+        "une diffusion non sollicitée ne doit pas faire avorter la synchronisation, \
+         obtenu {:?}",
+        resume.arret
+    );
+    assert_eq!(
+        resume.blocs_rejoues, 1,
+        "le bloc de genèse doit être rejoué MALGRÉ la diffusion qui l'a précédé"
+    );
+    assert_eq!(
+        resume.entrees, SORTIES,
+        "toutes les sorties du bloc sont insérées, dans l'ordre"
+    );
+    assert_eq!(
+        w.prochaine_hauteur(),
+        1,
+        "la position du wallet a bien avancé"
     );
 }

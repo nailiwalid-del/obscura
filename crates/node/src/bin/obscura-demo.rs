@@ -172,7 +172,18 @@ fn main() {
         pair_b,
         Message::Annonce(vec![digest]),
     )]);
-    attendre(|| a.pomper(0) > 0, Duration::from_secs(30));
+    // ⚠️ « pomper au moins un événement » ne prouve RIEN : A est le connecteur, il
+    // annonce sa version, et B lui répond la sienne — c'est ce premier événement qui
+    // satisferait la condition, avant même que A n'ait servi la DEMANDE de B. On
+    // pompe donc jusqu'à ce que B ait CONCLU (même idiome que
+    // `crates/node/tests/testnet.rs`).
+    attendre(
+        || {
+            a.pomper(0);
+            b.is_finished()
+        },
+        Duration::from_secs(30),
+    );
 
     let recu = b.join().expect("nœud B");
     println!();

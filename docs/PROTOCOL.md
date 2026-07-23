@@ -327,6 +327,69 @@ vote = HybridSig("obscura/bloc/vote/v1", id)
   13,8 % à `n = 64`. **La taille du comité est donc bornée par le budget du
   bloc**, définitivement.
 
+### Partition : la politique de minorité
+
+Rien n'est ajouté ici : ce qui suit est la **conséquence** du quorum sur un état
+append-only. C'est écrit parce qu'une propriété implicite n'est pas une
+propriété : un opérateur doit savoir ce que son nœud fait quand le réseau se
+coupe.
+
+Soit un comité de `n` autorités séparé en deux (ou plus) groupes qui ne se
+joignent plus. Un groupe est **majoritaire** s'il réunit `⌊2n/3⌋ + 1` autorités
+joignables entre elles ; il en existe **au plus un**, par construction.
+
+- **Le côté sous quorum s'ARRÊTE de produire.** Non par une règle dédiée, mais
+  parce qu'il ne peut pas faire autrement : le producteur du tour scelle, signe
+  son propre vote, diffuse sa proposition — et n'obtient jamais les `⌊2n/3⌋ + 1`
+  votes distincts qu'exige `appliquer_bloc`. Aucun bloc n'est appliqué, donc
+  aucun n'est archivé, donc **aucune branche concurrente n'existe** : il n'y a
+  rien à réconcilier à la guérison. Le gel est **suspensif**, comme celui d'une
+  autorité absente.
+- **Il CONTINUE de servir.** Servir n'exige aucun quorum : `DemandeBloc`,
+  `DemandeHistorique`, annonces et relais de transactions restent assurés dans
+  la mesure où le rôle concerné est actif — `DemandeHistorique` suppose
+  `--archiver` (rôle optionnel, OFF par défaut) et reste soumis à
+  l'étranglement par groupe réseau (`node::etranglement`) : à crédit épuisé, le
+  nœud répond par le SILENCE, jamais par une réponse courte ni une erreur. Un
+  nœud minoritaire reste donc utile dans ces limites — et il reste
+  **honnête** : ce qu'il sert est un préfixe correct de la chaîne, jamais une
+  branche à lui. ⚠️ Il est en revanche **en retard sans le savoir**, et un
+  wallet qui s'y synchronise se croira à jour : c'est exactement le mode
+  d'échec que `--temoin` ferme (cf. `docs/THREAT_MODEL.md`).
+- **Il ne FORKE jamais.** L'état est append-only et la finalité est instantanée :
+  **sur une chaîne à autorités**, il n'existe aucun chemin par lequel un nœud
+  applique un bloc non certifié. La sûreté ne repose donc pas sur une détection
+  de partition — le nœud n'a même pas besoin de savoir qu'il est en minorité.
+  ⚠️ Sur une **chaîne OUVERTE** (genèse sans autorités, défaut du testnet local),
+  ce paragraphe entier ne s'applique pas : ni scellement ni certificat n'y sont
+  exigés (`autorites_actives.is_empty()` ⇒ `certificat` doit être `None`, jamais
+  vérifié pour un quorum), c'est le comportement historique, ordre CONVENU pas
+  DÉFENDU, et son absence de fork tient à une autre raison — le mempool ne
+  bifurque pas.
+- **Le côté majoritaire avance normalement**, y compris quand la partition lui a
+  pris le producteur du tour : le changement de vue le contourne (J1-b2).
+- **Partition sans côté majoritaire** (deux moitiés, trois tiers…) : **personne**
+  ne produit. La **sûreté prime la liveness** — c'est le choix du modèle, et il
+  n'est pas négociable : préférer produire reviendrait à accepter deux chaînes
+  définitives, puisque rien ne peut les réorganiser ensuite.
+- **Reprise à la guérison, par le chemin NORMAL.** Le nœud en retard reçoit un
+  bloc en avance, échoue à le chaîner (`ParentInattendu`), et demande la première
+  hauteur qui lui manque (`DemandeBloc`) ; il rattrape un bloc par échange
+  jusqu'à la tête. Aucun mécanisme de réconciliation n'est nécessaire, puisque
+  rien de concurrent n'a été produit. Dès la première hauteur appliquée, sa vue
+  revient à 0 et il redevient participant à part entière.
+
+⚠️ **Ce que la guérison ne répare PAS** : une hauteur **CALÉE**
+(`MAX_VUE_PAR_HAUTEUR` atteint sur un split de votes) reste calée après la
+guérison, parce qu'un vote est définitif à sa hauteur. C'est le seul cas où
+« arrêt plutôt que divergence » se paie d'une chaîne à refaire (§2 de
+`docs/TESTNET.md`).
+
+Testé sur sockets réelles : `crates/node/tests/partition.rs` — `n = 4` coupé en
+`{3}` / `{1}`, la minorité étant le producteur du tour ; la majorité le contourne
+et avance, la minorité scelle sans rien appliquer, et converge à la guérison vers
+la **même tête** et le **même arbre**.
+
 ### Ordre de vérification — non négociable
 
 `appliquer_bloc` va du moins cher au plus cher, et l'ordre est une défense
@@ -438,3 +501,99 @@ Côté wallet, la BOUCLE (`node::client`) demande `hauteur = prochaine_hauteur()
 rassemble tous les morceaux du bloc, les rejoue en UNE fois (`Wallet::synchroniser`),
 enregistre après chaque bloc, et s'arrête au premier silence. Elle ne lit jamais
 `hauteur_tete` ; `DejaApplique` n'est pas un pas ; le travail est borné par invocation.
+
+## Négociation de version du protocole applicatif (J3)
+
+`VERSION_PROTOCOLE = 1` (celle que ce nœud parle et annonce) et
+`VERSION_MIN_ACCEPTEE = 1` (la plus ancienne avec laquelle il dialogue), toutes deux
+dans `node::message`. Elles versionnent le **dialogue**, distinctement de
+`VERSION_BLOC`, `VERSION_ETAT` et `VERSION_SYNCHRO`, qui versionnent des **artefacts** :
+les confondre interdirait de faire évoluer l'un sans l'autre.
+
+- `Version { protocole: u16 }` — **3 octets**, longueur EXACTE : `tag(1 = 0x0A) ‖
+  protocole(2, LE)`. Taille FIXE délibérément : un champ de longueur variable en tête
+  de connexion serait le premier octet qu'un pair à peine authentifié nous ferait
+  allouer. Le décodeur ne filtre AUCUNE valeur (`0` comme `u16::MAX` se décodent) —
+  constater n'est pas décider ; sinon un pair trop ancien serait indistinguable d'un
+  pair MALFORMÉ, donc sanctionné.
+
+**Où il circule.** Comme message applicatif ordinaire, sur la `Session` DÉJÀ
+chiffrée : `net` reste pur transport et n'a aucune connaissance de la version
+applicative. Un observateur ne la voit donc pas.
+
+**Qui annonce — la règle est ASYMÉTRIQUE.** Le **connecteur** (côté sortant) émet sa
+`Version` en TÊTE, comme premier message applicatif. L'**accepteur** (côté entrant)
+**n'émet rien spontanément** : il ne répond une `Version` que s'il en a reçu une, et
+**une seule fois par lien**. Un connecteur qui reçoit cette réponse n'y répond pas —
+sans quoi les deux nœuds se renverraient la politesse indéfiniment. La négociation
+nœud↔nœud reste donc complète dans les deux sens, puisque **tout nœud se connecte en
+sortant**.
+
+Ce n'est pas une économie de messages, c'est une règle de **sûreté pour les clients à
+un coup**. Un client qui envoie puis raccroche sans lire (`obscura-wallet envoyer`)
+laisserait, si le nœud écrivait spontanément **en tête de lien**, des octets NON LUS
+dans son tampon : la fermeture produit alors un `RST`, et un `RST` fait jeter à la
+pile d'en face son tampon de RÉCEPTION — donc la transaction elle-même, d'autant plus
+souvent que la machine est chargée. Comme le nœud écrivait alors **à chaque lien
+entrant**, la perte était structurelle : le cas « toujours ». La règle asymétrique le
+supprime.
+
+⚠️ **Ce que la règle ne fait PAS : supprimer tout envoi non sollicité.** Une
+**diffusion** (`Action::Diffuser`, cf. `crate::runtime`) est écrite vers **tous les
+liens ouverts, entrants compris** — et elle naît de causes **indépendantes du
+client** : un embargo Dandelion++ expiré (`tick`), un scellement périodique
+(`--sceller`), le relais d'un bloc reçu d'un autre pair (`sur_bloc`), une proposition
+de changement d'autorités (`proposer_changement`). Un client qui n'a rien annoncé
+reçoit donc bel et bien une `Annonce`, un `Bloc` ou une `Proposition` s'il se trouve
+connecté au moment où l'une part. **Le hasard du `RST` est RÉDUIT** — sa fenêtre
+devient « si une diffusion tombe pendant que le lien est ouvert », au lieu de
+« toujours » — **il n'est pas supprimé.** Toute formulation en « jamais » à cet
+endroit serait fausse.
+
+**Ce que doit faire un client tiers.** Un client qui n'annonce pas est servi
+normalement, sans sanction ni attente, et le nœud ne lui écrit rien **en réponse à
+l'établissement du lien** ni en réponse à son silence. Mais il **doit tolérer de
+recevoir des messages qu'il n'a pas demandés** — au minimum : lire jusqu'à obtenir ce
+qu'il attend, en ignorant le reste, plutôt que de traiter la première trame venue
+comme sa réponse. S'il annonce, il doit en outre accepter **une** `Version` en
+réponse. C'est exactement ce que fait `node::client` : il ignore et relit les
+messages diffusables (`Annonce`, `Bloc`, `Proposition`) et la `Version`, dans la
+limite d'un budget borné au-delà duquel il nomme l'incohérence.
+
+**Politique à la réception** (`node::orchestration`) :
+
+| annonce | réaction |
+|---|---|
+| `protocole < VERSION_MIN_ACCEPTEE` | `Action::Deconnecter { raison: VersionTropAncienne }` — fermeture NOMMÉE des deux sens, JOURNALISÉE, **score inchangé**. Aucune réponse. |
+| `protocole ≥ VERSION_MIN_ACCEPTEE` | enregistrée (`Noeud::version_annoncee`) — y compris une version SUPÉRIEURE à la nôtre ; **une** `Version` en réponse si la nôtre n'est pas déjà partie sur ce lien |
+| aucune annonce | pair présumé parler la version de base — **aucune sanction, aucune attente, aucun refus de servir, et aucune `Version` ne lui est envoyée**. ⚠️ « Aucune `Version` » ne veut pas dire « rien » : une DIFFUSION peut l'atteindre, cf. l'avertissement ci-dessus |
+
+⚠️ **Aucun refus n'est mémorisé au-delà du lien** : un pair déconnecté pour version
+trop ancienne qui se reconnecte est réexaminé de zéro. Inoffensif tant qu'aucune
+boucle de reconnexion automatique n'existe — c'est le pair qui paie l'effort.
+
+⚠️ **Le plancher n'est opposable qu'à QUI ANNONCE, et c'est structurel.** Le contrôle
+`protocole < VERSION_MIN_ACCEPTEE` ne s'exerce que sur une `Version` REÇUE : un pair
+qui se tait ne traverse jamais ce chemin et reste servi, quelle que soit son
+ancienneté réelle. Conséquence à connaître **avant de relever le plancher** : on
+refuse les anciens nœuds HONNÊTES — ceux qui annoncent — sans exclure un logiciel
+ancien qui s'abstient d'annoncer. `VERSION_MIN_ACCEPTEE` est donc un outil de
+COORDINATION entre participants coopératifs, **jamais un contrôle d'accès**. En
+attendre une exclusion effective serait une erreur de modèle ; et c'est aussi ce qui
+garantit qu'un client à un coup ne peut pas être exclu par un incrément du plancher.
+
+**Refuser n'est pas condamner.** Le refus ne touche pas le score : c'est
+`MessageError::version_inconnue()` porté du message au dialogue entier. Pénaliser un
+nœud resté en arrière le bannirait pendant une mise à jour ; la sélection sortante y
+perdrait des groupes réseau, et c'est précisément la diversité sur laquelle repose
+l'anti-eclipse, donc l'anonymat de Dandelion++. Un pair déconnecté ici revient dès
+qu'il est à jour, avec un score intact.
+
+**Coexistence, dans les deux sens** (testée sur sockets réelles,
+`crates/node/tests/negociation_version.rs`) :
+
+- un nœud NOUVEAU n'exige jamais `Version` : son absence vaut version de base ;
+- un nœud ANCIEN qui reçoit `TAG_VERSION` (0x0A, au-delà de sa frontière `TAG_VOTE` =
+  0x09) le classe en « version future » : ignoré, jamais sanctionné. **Un tag REPRIS
+  serait mal décodé par un nœud en arrière** — c'est pourquoi la négociation prend un
+  tag neuf plutôt que d'étendre un message existant.

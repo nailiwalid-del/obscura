@@ -411,29 +411,95 @@ enum Recue {
     Incoherent(String),
 }
 
+/// Messages NON sollicités qu'on accepte d'ignorer avant la réponse attendue.
+///
+/// # Un wallet EN REÇOIT, et il faut le dire
+///
+/// La règle de négociation J3 est ASYMÉTRIQUE : seul le CONNECTEUR annonce sa
+/// `Message::Version`, et l'ACCEPTEUR ne répond que s'il en a reçu une. Le wallet
+/// n'annonce rien — il n'est pas un pair, il est un client à un coup — donc le nœud
+/// ne lui écrit rien EN RÉPONSE À L'ÉTABLISSEMENT DU LIEN. C'est ce qui supprime le
+/// cas « TOUJOURS » de la perte silencieuse d'un « j'envoie et je raccroche » : plus
+/// d'octets systématiquement non lus au moment de fermer, donc plus de `RST`
+/// systématique, donc plus de tampon de réception jeté chez le nœud.
+///
+/// ⚠️ Mais ce n'est PAS « rien, jamais ». Une DIFFUSION
+/// (`crate::orchestration::Action::Diffuser`) part vers **tous les liens ouverts,
+/// entrants compris**, et elle naît de causes qui n'ont AUCUN rapport avec nous :
+/// un embargo Dandelion++ expiré, un scellement périodique (`--sceller`), le relais
+/// d'un bloc reçu d'un autre pair, une proposition de changement d'autorités. Un
+/// client qui n'a rien annoncé reçoit donc bel et bien des `Annonce`, des `Bloc` ou
+/// des `Proposition` s'il se trouve connecté au bon moment. Le hasard du `RST` est
+/// RÉDUIT — il n'est pas supprimé.
+///
+/// Conséquence directe ici : ces messages doivent être IGNORÉS ET RELUS, jamais
+/// traités comme « message inattendu ». Les refuser ferait AVORTER une
+/// synchronisation de wallet à chaque fois qu'une diffusion tombe pendant qu'elle
+/// tourne — un échec intermittent, imputé au wallet, causé par une activité normale
+/// du nœud.
+///
+/// L'ensemble toléré est CLOS et dérivé du code : c'est exactement ce que
+/// `Action::Diffuser` peut porter (`Annonce`, `Bloc`, `Proposition`), plus la
+/// `Version` d'un nœud d'une version ultérieure qui annoncerait quand même. Tout le
+/// reste demeure une incohérence NOMMÉE. Au-delà du budget, un nœud qui nous ferait
+/// lire sans fin des messages hors sujet obtiendrait une boucle gratuite — on rend
+/// alors l'incohérence, en nommant le fautif.
+const MAX_MESSAGES_IGNORES: usize = 4;
+
 fn recevoir_historique<S: Read + Write>(connexion: &mut Connexion<S>, hauteur: u64) -> Recue {
-    // Toute erreur de réception (échéance, lien coupé, cadre altéré) est traitée comme
-    // un silence : borné, sûr, et le wallet n'a rien appliqué.
-    let octets = match connexion.recevoir() {
-        Ok(o) => o,
-        Err(_) => return Recue::Silence,
-    };
-    match Message::from_bytes(&octets) {
-        Ok(Message::Historique(r)) => {
-            // On a demandé UNE hauteur ; le nœud n'a pas le droit d'en servir une autre.
-            // Sans ce contrôle, `synchroniser` refuserait plus loin (hauteur ou feuille
-            // hors séquence), mais nommer l'incohérence ici la rend lisible.
-            if r.hauteur != hauteur {
-                return Recue::Incoherent(format!(
-                    "hauteur servie {} ≠ demandée {hauteur}",
-                    r.hauteur
-                ));
+    for _ in 0..=MAX_MESSAGES_IGNORES {
+        // Toute erreur de réception (échéance, lien coupé, cadre altéré) est traitée
+        // comme un silence : borné, sûr, et le wallet n'a rien appliqué.
+        let octets = match connexion.recevoir() {
+            Ok(o) => o,
+            Err(_) => return Recue::Silence,
+        };
+        match Message::from_bytes(&octets) {
+            Ok(Message::Historique(r)) => {
+                // On a demandé UNE hauteur ; le nœud n'a pas le droit d'en servir une
+                // autre. Sans ce contrôle, `synchroniser` refuserait plus loin (hauteur
+                // ou feuille hors séquence), mais nommer l'incohérence ici la rend
+                // lisible.
+                if r.hauteur != hauteur {
+                    return Recue::Incoherent(format!(
+                        "hauteur servie {} ≠ demandée {hauteur}",
+                        r.hauteur
+                    ));
+                }
+                return Recue::Ok(r.pour_le_wallet(), r.morceaux);
             }
-            Recue::Ok(r.pour_le_wallet(), r.morceaux)
+            // CE QU'UNE DIFFUSION PEUT DÉPOSER SUR NOTRE LIEN — chemin NOMINAL, pas
+            // défense en profondeur. `Action::Diffuser` écrit vers TOUS les liens
+            // ouverts, entrants compris, pour des raisons qui ne nous concernent
+            // pas : embargo Dandelion++ expiré, scellement, relais d'un bloc,
+            // proposition de changement d'autorités. Rien de tout cela ne répond à
+            // notre demande, et rien de tout cela ne doit la faire échouer — sans quoi
+            // une synchronisation avorte au hasard des diffusions du nœud.
+            //
+            // La `Version` s'y ajoute pour un nœud d'une version ultérieure qui
+            // annoncerait quand même — exactement le fork que la négociation existe
+            // pour éviter.
+            //
+            // On ne répond à aucun d'eux : le wallet n'est pas un pair, et lui faire
+            // annoncer quoi que ce soit ferait une empreinte de plus sur une connexion
+            // qui n'en porte volontairement aucune.
+            Ok(Message::Version { .. })
+            | Ok(Message::Annonce(_))
+            | Ok(Message::Bloc(_))
+            | Ok(Message::Proposition(_)) => continue,
+            Ok(_) => {
+                return Recue::Incoherent(
+                    "message inattendu en réponse à une demande d'historique".into(),
+                )
+            }
+            Err(e) => return Recue::Incoherent(format!("réponse indécodable : {e}")),
         }
-        Ok(_) => {
-            Recue::Incoherent("message inattendu en réponse à une demande d'historique".into())
-        }
-        Err(e) => Recue::Incoherent(format!("réponse indécodable : {e}")),
     }
+    // Budget épuisé : le nœud a PARLÉ, plusieurs fois, sans jamais répondre. Ce n'est
+    // pas un silence — le confondre avec « la chaîne est épuisée » ferait conclure « à
+    // jour » à un wallet à qui on tient un discours hors sujet. On le nomme.
+    Recue::Incoherent(format!(
+        "{} messages non sollicités d'affilée sans réponse à la demande d'historique",
+        MAX_MESSAGES_IGNORES + 1
+    ))
 }

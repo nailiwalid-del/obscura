@@ -46,6 +46,27 @@ const TAG_DEMANDE_HISTORIQUE: u8 = 6;
 const TAG_HISTORIQUE: u8 = 7;
 const TAG_PROPOSITION: u8 = 8;
 const TAG_VOTE: u8 = 9;
+const TAG_VERSION: u8 = 10;
+
+/// Version du protocole APPLICATIF que ce nœud parle et annonce (J3).
+///
+/// Distincte de `VERSION_BLOC`, de `VERSION_ETAT` et de `VERSION_SYNCHRO` : celles-là
+/// versionnent des ARTEFACTS (un bloc, un dump, une réponse), celle-ci versionne le
+/// DIALOGUE. Les confondre reviendrait à ne pouvoir faire évoluer l'un sans l'autre.
+pub const VERSION_PROTOCOLE: u16 = 1;
+
+/// Version minimale avec laquelle nous acceptons de dialoguer.
+///
+/// Strictement en dessous, la connexion est fermée PROPREMENT et SANS sanction : un
+/// pair en retard n'est pas hostile, c'est [`MessageError::version_inconnue`]
+/// généralisé au dialogue entier. Le pénaliser bannirait, en cours de mise à jour,
+/// les nœuds restés en arrière — et avec eux la diversité de groupes réseau dont
+/// dépend l'anti-eclipse.
+///
+/// Égale à [`VERSION_PROTOCOLE`] aujourd'hui : rien d'antérieur n'a existé sur un
+/// réseau public. Elle ne doit monter qu'en connaissance de cause — chaque
+/// incrément EXCLUT une population de nœuds.
+pub const VERSION_MIN_ACCEPTEE: u16 = 1;
 
 /// Dernier tag attribué. **À incrémenter avec chaque nouveau message.**
 ///
@@ -53,7 +74,7 @@ const TAG_VOTE: u8 = 9;
 /// version plus récente du protocole et ne doit PAS être sanctionné. Le test
 /// `le_tag_de_demande_bloc_nest_pas_une_version_future` s'en sert — sans cette
 /// constante il figeait le dernier tag en dur, et il a cassé au premier ajout.
-const DERNIER_TAG: u8 = TAG_VOTE;
+const DERNIER_TAG: u8 = TAG_VERSION;
 
 /// CONSIGNÉ À LA COMPILATION : `DERNIER_TAG` majore bien tous les tags attribués.
 ///
@@ -70,7 +91,18 @@ const _: () = assert!(
         && TAG_HISTORIQUE <= DERNIER_TAG
         && TAG_PROPOSITION <= DERNIER_TAG
         && TAG_VOTE <= DERNIER_TAG
+        && TAG_VERSION <= DERNIER_TAG
 );
+
+/// CONSIGNÉ À LA COMPILATION : la négociation de version prend un tag NEUF, au-delà
+/// de la frontière connue des nœuds d'AVANT J3 (`TAG_VOTE`).
+///
+/// C'est ce qui rend la coexistence possible dans le sens « ancien reçoit du neuf » :
+/// chez un nœud en arrière, `TAG_VERSION` tombe dans `TagInconnu`, donc dans
+/// [`MessageError::version_inconnue`] — ignoré, jamais sanctionné. Réutiliser ou
+/// abaisser ce tag ferait décoder notre annonce comme un AUTRE message chez lui, et
+/// la malformation qui s'ensuivrait le ferait bannir un pair à jour.
+const _: () = assert!(TAG_VERSION > TAG_VOTE);
 
 /// Majorant du VOTE sur le fil : id + index + signature longueur-préfixée.
 const TAILLE_VOTE_MAX: usize = 64 + 2 + 4 + ledger::bloc::TAILLE_SCELLEMENT_MAX;
@@ -227,6 +259,28 @@ pub enum Message {
     /// une demande peut donc produire PLUSIEURS messages. Le découpage est canonique et
     /// vérifié au décodage (cf. [`crate::synchro::ReponseHistorique`]).
     Historique(Box<ReponseHistorique>),
+    /// « Voici la version du protocole que je parle » — négociation EXPLICITE (J3).
+    ///
+    /// Émis en TÊTE de connexion, comme premier message applicatif, dans les deux
+    /// sens (sortant comme entrant). Il circule sur la `Session` déjà chiffrée : le
+    /// transport reste PUR (`net` n'en sait rien), et la version n'est donc jamais
+    /// annoncée en clair à un observateur.
+    ///
+    /// # Ce qu'il change par rapport à l'existant
+    ///
+    /// La tolérance de version était RÉACTIVE : [`MessageError::version_inconnue`] ne
+    /// sanctionne pas ce qu'elle ne comprend pas, mais aucun nœud ne SAIT ce que parle
+    /// son pair — la version n'était constatée qu'a posteriori, par échec de décodage,
+    /// message par message. Ici elle est dite.
+    ///
+    /// # ⚠️ OPTIONNEL, et ce n'est pas un détail
+    ///
+    /// Son ABSENCE n'est pas une faute : un nœud d'une version antérieure n'en émet
+    /// aucun, et rien ne doit l'exiger — ni sanction, ni attente bloquante, ni refus
+    /// de servir. Le pair est alors présumé parler la version de base. Exiger ce
+    /// message forkerait le réseau au premier déploiement, exactement ce que la
+    /// négociation existe pour éviter.
+    Version { protocole: u16 },
 }
 
 impl Message {
@@ -275,6 +329,10 @@ impl Message {
             Message::Historique(reponse) => {
                 b.push(TAG_HISTORIQUE);
                 b.extend_from_slice(&reponse.to_bytes());
+            }
+            Message::Version { protocole } => {
+                b.push(TAG_VERSION);
+                b.extend_from_slice(&protocole.to_le_bytes());
             }
         }
         b
@@ -350,6 +408,29 @@ impl Message {
                 let r = ReponseHistorique::from_bytes(reste)
                     .map_err(MessageError::HistoriqueInvalide)?;
                 Ok(Message::Historique(Box::new(r)))
+            }
+            // Longueur EXACTE : 2 octets, ni moins (troncature) ni plus (résiduels).
+            // Aucune allocation à borner — le message est de taille fixe, et c'est
+            // délibéré : un champ de longueur variable en tête de connexion serait
+            // le premier octet qu'un pair non authentifié nous ferait allouer.
+            //
+            // ⚠️ Aucun filtrage de VALEUR ici. `0` comme `u16::MAX` se décodent :
+            // constater n'est pas décider. La politique (refus sous
+            // `VERSION_MIN_ACCEPTEE`) appartient à l'orchestration, sans quoi un pair
+            // trop ancien serait indistinguable d'un pair MALFORMÉ — et donc
+            // sanctionné, ce que toute cette mécanique existe pour empêcher.
+            TAG_VERSION => {
+                let brut: [u8; 2] = reste
+                    .get(..2)
+                    .ok_or(MessageError::Tronque)?
+                    .try_into()
+                    .map_err(|_| MessageError::Tronque)?;
+                if reste.len() > 2 {
+                    return Err(MessageError::OctetsResiduels);
+                }
+                Ok(Message::Version {
+                    protocole: u16::from_le_bytes(brut),
+                })
             }
             _ => Err(MessageError::TagInconnu),
         }
@@ -858,6 +939,78 @@ mod tests {
             erreur(&futur).version_inconnue(),
             "une version de synchronisation supérieure est un message du FUTUR"
         );
+    }
+
+    /// Petit utilitaire partagé par les tests de version : extrait l'erreur par
+    /// filtrage (`Message` n'est ni `Debug` ni `PartialEq`).
+    fn erreur(o: &[u8]) -> MessageError {
+        match Message::from_bytes(o) {
+            Err(e) => e,
+            Ok(_) => panic!("décodage inattendu"),
+        }
+    }
+
+    /// `Message::Version` fait l'aller-retour sur le fil (TAG_VERSION ‖ u16 LE).
+    #[test]
+    fn version_aller_retour() {
+        let m = Message::Version {
+            protocole: VERSION_PROTOCOLE,
+        };
+        let octets = m.to_bytes();
+        assert_eq!(octets.len(), 3, "tag + u16, rien d'autre");
+        let relu = Message::from_bytes(&octets).expect("décodable");
+        assert!(matches!(relu, Message::Version { protocole } if protocole == VERSION_PROTOCOLE));
+    }
+
+    /// Aux BORNES du domaine : la version vient du réseau, `0` et `u16::MAX` doivent
+    /// traverser comme n'importe quelle autre valeur. Les REFUSER ici serait une
+    /// erreur de couche — le décodeur constate, la politique décide.
+    #[test]
+    fn version_roundtrip_aux_bornes() {
+        for v in [0u16, 1, 42, u16::MAX] {
+            let octets = Message::Version { protocole: v }.to_bytes();
+            match Message::from_bytes(&octets).expect("décodable") {
+                Message::Version { protocole } => assert_eq!(protocole, v),
+                _ => panic!("mauvais type"),
+            }
+        }
+    }
+
+    /// `TAG_VERSION` est le dernier tag connu ; un tag au-delà reste « version future ».
+    #[test]
+    fn version_est_le_dernier_tag_connu() {
+        assert_eq!(DERNIER_TAG, TAG_VERSION);
+        assert!(erreur(&[TAG_VERSION + 1]).version_inconnue());
+    }
+
+    /// Un `Message::Version` TRONQUÉ ou suivi d'octets parasites est une
+    /// MALFORMATION, pas une version future : sinon un pair pourrait envoyer des
+    /// messages cassés sans jamais être pénalisé.
+    #[test]
+    fn version_tronquee_est_malformation() {
+        assert!(matches!(erreur(&[TAG_VERSION]), MessageError::Tronque));
+        assert!(!erreur(&[TAG_VERSION]).version_inconnue());
+        assert!(matches!(erreur(&[TAG_VERSION, 1]), MessageError::Tronque));
+        assert!(matches!(
+            erreur(&[TAG_VERSION, 1, 0, 0]),
+            MessageError::OctetsResiduels
+        ));
+    }
+
+    /// COEXISTENCE, sens « ancien nœud reçoit du neuf » : un nœud d'AVANT J3 ne
+    /// connaît que les tags jusqu'à `TAG_VOTE`. `TAG_VERSION` tombe donc chez lui dans
+    /// `TagInconnu`, c'est-à-dire « version future » — ignoré, JAMAIS sanctionné.
+    ///
+    /// Le tag lui-même est tenu par l'assertion de COMPILATION `TAG_VERSION >
+    /// TAG_VOTE` ci-dessus (un tag repris serait mal décodé par un nœud en arrière) ;
+    /// ici on vérifie la POLITIQUE qui en découle : un tag hors frontière est classé
+    /// « version future », donc jamais sanctionné.
+    #[test]
+    fn tag_version_est_une_version_future_pour_un_noeud_davant_j3() {
+        // La frontière d'un nœud d'avant J3 était `TAG_VOTE` ; pour lui, notre tag
+        // est « au-delà », exactement comme `DERNIER_TAG + 1` l'est pour nous.
+        assert!(erreur(&[DERNIER_TAG + 1]).version_inconnue());
+        assert!(MessageError::TagInconnu.version_inconnue());
     }
 
     /// La borne d'annonce tient compte du cadrage : `MAX_DIGESTS` digests doivent

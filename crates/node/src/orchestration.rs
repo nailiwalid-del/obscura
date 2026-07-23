@@ -57,6 +57,24 @@ pub const PENALITE_MESSAGE_INVALIDE: i32 = -10;
 /// nœuds scellent en même temps, ou quand on est simplement en retard.
 pub const PENALITE_BLOC_INVALIDE: i32 = -34;
 
+/// Pourquoi une connexion est fermée. **Toujours nommée, jamais un silence.**
+///
+/// Une déconnexion muette est indiscernable d'un lien mort : l'opérateur d'en face
+/// ne peut pas savoir qu'il doit mettre à jour, et le nôtre ne peut pas savoir
+/// pourquoi ses liens tombent. Le type existe pour que chaque fermeture décidée par
+/// le protocole porte sa cause.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RaisonDeconnexion {
+    /// Le pair annonce une version de protocole antérieure à
+    /// [`crate::message::VERSION_MIN_ACCEPTEE`].
+    ///
+    /// ⚠️ **Sans sanction.** Ce n'est pas une faute : c'est un nœud qui n'a pas
+    /// encore été mis à jour. Le pénaliser bannirait, en cours de déploiement, les
+    /// nœuds restés en arrière — et avec eux la diversité de groupes réseau dont
+    /// dépend l'anti-eclipse. On cesse de dialoguer, on ne condamne pas.
+    VersionTropAncienne { annoncee: u16, minimale: u16 },
+}
+
 /// Action à exécuter par la boucle d'événements. Aucune E/S n'est faite ici.
 pub enum Action {
     /// Envoyer un message à UN pair (relais de tige Dandelion++, ou réponse).
@@ -71,6 +89,20 @@ pub enum Action {
     /// la garantie, et l'exécuteur doit **abandonner les actions suivantes** si
     /// l'écriture échoue — sans quoi on aurait dit sans avoir promis.
     PersisterVotes(Box<RegistreVotes>),
+    /// FERMER le lien avec un pair, pour une raison NOMMÉE.
+    ///
+    /// Distincte d'une sanction de score : bannir, c'est refuser un pair pour son
+    /// COMPORTEMENT (et durablement, via la sélection sortante) ; déconnecter, c'est
+    /// constater qu'il n'y a rien à se dire. Un pair déconnecté ici peut revenir dès
+    /// qu'il est à jour, avec un score intact.
+    ///
+    /// L'exécuteur doit couper le lien VRAIMENT — pas seulement cesser d'émettre :
+    /// tant que le flux entrant vit, les messages du pair continueraient d'être
+    /// traités et la « déconnexion » ne serait qu'une moitié de geste.
+    Deconnecter {
+        pair: PeerId,
+        raison: RaisonDeconnexion,
+    },
 }
 
 /// Un nœud : état de consensus + réserve + vue du réseau.
@@ -118,6 +150,26 @@ pub struct Noeud {
     /// pas d'étranglement possible — et servir sans étrangler reviendrait à n'avoir
     /// rien écrit.
     adresses: HashMap<PeerId, SocketAddr>,
+    /// Version de protocole ANNONCÉE par chaque pair connecté (J3).
+    ///
+    /// Absente = pair qui ne s'est pas annoncé, donc présumé parler la version de
+    /// base : c'est le cas d'un nœud d'avant J3, et ce n'est pas une faute. Rien dans
+    /// le nœud ne doit EXIGER une entrée ici — sans quoi le déploiement de la
+    /// négociation partitionnerait le réseau qu'elle sert à préserver.
+    ///
+    /// Bornée et purgée à la déconnexion, exactement comme `adresses` et pour la même
+    /// raison : le `PeerId` est gratuit.
+    versions: HashMap<PeerId, u16>,
+    /// Pairs à qui NOTRE `Version` est déjà partie (J3).
+    ///
+    /// C'est ce qui rend la règle ASYMÉTRIQUE terminante : seul le CONNECTEUR annonce
+    /// spontanément, l'ACCEPTEUR ne répond que s'il a reçu une annonce — et il ne
+    /// répond qu'UNE fois. Sans cette trace, deux nœuds qui se répondent mutuellement
+    /// rebondiraient sans fin, et un pair qui réannonce en boucle obtiendrait une
+    /// réponse gratuite à chaque fois (amplification).
+    ///
+    /// Bornée et purgée par le même point que `adresses` et `versions`.
+    version_envoyee: std::collections::HashSet<PeerId>,
     /// Seaux à jetons du service d'historique, indexés sur le GROUPE RÉSEAU.
     etrangleur: Etrangleur,
     /// Dernier vote émis — la règle de sûreté du consensus (cf. [`crate::votes`]).
@@ -215,6 +267,8 @@ impl Noeud {
             archive: ArchiveBlocs::new(),
             hauteur_max_vue,
             adresses: HashMap::new(),
+            versions: HashMap::new(),
+            version_envoyee: std::collections::HashSet::new(),
             etrangleur: Etrangleur::new(),
             votes: RegistreVotes::neuf(),
             votes_recus: HashMap::new(),
@@ -276,9 +330,39 @@ impl Noeud {
         self.adresses.insert(id, adresse);
     }
 
-    /// Oublie l'adresse d'un pair déconnecté.
+    /// Oublie TOUT ce que le lien portait : adresse observée, version annoncée, et
+    /// la trace de NOTRE propre annonce.
+    ///
+    /// Un seul point de purge, appelé par le runtime à la mort d'un lien — deux
+    /// méthodes en laisseraient une oubliée dans un chemin, et le `PeerId` étant
+    /// gratuit, la table survivante croîtrait d'une entrée par identité de transport
+    /// éphémère (le wallet en tire une neuve à chaque commande).
     pub fn oublier_adresse(&mut self, id: &PeerId) {
         self.adresses.remove(id);
+        self.versions.remove(id);
+        self.version_envoyee.remove(id);
+    }
+
+    /// Le runtime signale qu'il a déposé NOTRE `Version` sur un lien SORTANT.
+    ///
+    /// C'est la moitié « connecteur » de la règle asymétrique : sans cette trace, la
+    /// réponse du pair (lui-même une `Version`) nous ferait répondre à notre tour, et
+    /// les deux nœuds se renverraient la politesse indéfiniment.
+    pub fn noter_version_envoyee(&mut self, id: PeerId) {
+        if !self.version_envoyee.contains(&id) && self.version_envoyee.len() >= MAX_ADRESSES_SUIVIES
+        {
+            return;
+        }
+        self.version_envoyee.insert(id);
+    }
+
+    /// Version de protocole annoncée par un pair, si elle l'a été.
+    ///
+    /// `None` = pair qui ne s'est pas annoncé, donc **présumé parler la version de
+    /// base**. Ce n'est pas une anomalie et rien ne doit s'y conditionner comme si
+    /// c'en était une : c'est ce que produit un nœud d'avant J3.
+    pub fn version_annoncee(&self, id: &PeerId) -> Option<u16> {
+        self.versions.get(id).copied()
     }
 
     /// Seaux du service d'historique (diagnostic et tests).
@@ -354,7 +438,93 @@ impl Noeud {
             // adresse. Sanctionner ici ferait payer un décalage de calendrier. Le coût
             // reste borné par le cadre réseau (1 Mio), déjà décodé à ce stade.
             Message::Historique(_) => Vec::new(),
+            Message::Version { protocole } => self.sur_version(de, protocole),
         }
+    }
+
+    /// Un pair annonce sa version : on la note, ou on cesse de dialoguer.
+    ///
+    /// # Refuser sans condamner
+    ///
+    /// Sous [`crate::message::VERSION_MIN_ACCEPTEE`], la connexion est fermée par une
+    /// [`Action::Deconnecter`] NOMMÉE — et **le score n'est pas touché**. C'est la
+    /// même règle que [`crate::message::MessageError::version_inconnue`], portée du
+    /// message au dialogue entier : un pair en retard n'est pas hostile. Le
+    /// pénaliser bannirait, pendant une mise à jour, les nœuds restés en arrière ;
+    /// la sélection sortante y perdrait des groupes réseau, et c'est exactement la
+    /// diversité sur laquelle repose l'anti-eclipse — donc l'anonymat de Dandelion++.
+    ///
+    /// # Une version SUPÉRIEURE n'est pas un motif
+    ///
+    /// Nous ne refusons jamais un pair parce qu'il est plus avancé que nous : c'est
+    /// nous qui serions alors en arrière, et le tri message par message
+    /// (`version_inconnue()`) continue de faire son travail. Un plafond ici
+    /// partitionnerait le réseau à chaque déploiement, dans l'autre sens.
+    ///
+    /// # La réponse : UNE, et seulement si nous n'avons pas déjà annoncé
+    ///
+    /// Règle **ASYMÉTRIQUE** : seul le CONNECTEUR annonce spontanément (le runtime le
+    /// déclare par [`Noeud::noter_version_envoyee`]) ; l'ACCEPTEUR ne répond que
+    /// parce qu'il a reçu une annonce. Un client qui n'annonce rien ne reçoit donc
+    /// AUCUNE `Version` — ce qui supprime l'écriture SYSTÉMATIQUE en tête de lien,
+    /// c'est-à-dire le cas « toujours » de la perte silencieuse d'un « j'envoie et je
+    /// raccroche » (fermer une socket portant des octets non lus provoque un `RST`,
+    /// qui fait jeter au nœud d'en face son tampon de réception, transaction
+    /// comprise).
+    ///
+    /// ⚠️ Ce n'est PAS « rien, jamais » : une [`Action::Diffuser`] atteint tous les
+    /// liens ouverts, entrants compris, pour des causes indépendantes du client
+    /// (embargo Dandelion++ expiré, scellement, relais de bloc, proposition de
+    /// changement d'autorités). Le hasard du `RST` est RÉDUIT, pas supprimé, et un
+    /// client tiers doit tolérer de lire ce qu'il n'a pas demandé.
+    ///
+    /// La trace `version_envoyee` est ce qui rend l'échange TERMINANT : sans elle le
+    /// connecteur répondrait à la réponse, et un pair qui réannonce en boucle
+    /// obtiendrait une réponse gratuite à chaque fois.
+    ///
+    /// ⚠️ Rien ne MÉMORISE un refus de version au-delà du lien : un pair déconnecté
+    /// pour version trop ancienne qui se reconnecte est réexaminé de zéro. Inoffensif
+    /// aujourd'hui — le nœud n'a aucune boucle de reconnexion automatique, donc c'est
+    /// le pair qui paie l'effort. À revoir le jour où une telle boucle existera.
+    fn sur_version(&mut self, de: PeerId, protocole: u16) -> Vec<Action> {
+        if protocole < crate::message::VERSION_MIN_ACCEPTEE {
+            // Rien n'est retenu d'un pair avec qui on ne dialogue pas : ce serait une
+            // entrée de table offerte à qui se reconnecte en boucle. Et surtout, pas
+            // de réponse : on ferme, on ne bavarde pas.
+            self.versions.remove(&de);
+            self.version_envoyee.remove(&de);
+            return vec![Action::Deconnecter {
+                pair: de,
+                raison: RaisonDeconnexion::VersionTropAncienne {
+                    annoncee: protocole,
+                    minimale: crate::message::VERSION_MIN_ACCEPTEE,
+                },
+            }];
+        }
+        // Bornée AVANT insertion, comme `adresses` : à saturation, un pair de plus
+        // n'est simplement pas retenu — il reste présumé « version de base », ce qui
+        // est le repli sûr (aucun service ne se conditionne à cette table).
+        if self.versions.contains_key(&de) || self.versions.len() < MAX_ADRESSES_SUIVIES {
+            self.versions.insert(de, protocole);
+        }
+        self.repondre_version(de)
+    }
+
+    /// Notre `Version` en réponse, si et seulement si elle n'est pas déjà partie sur
+    /// ce lien. Bornée comme les autres tables : à saturation on ne retient pas, donc
+    /// on ne répond pas — sinon la borne deviendrait un levier d'amplification.
+    fn repondre_version(&mut self, de: PeerId) -> Vec<Action> {
+        if self.version_envoyee.contains(&de) || self.version_envoyee.len() >= MAX_ADRESSES_SUIVIES
+        {
+            return Vec::new();
+        }
+        self.version_envoyee.insert(de);
+        vec![Action::Envoyer(
+            de,
+            Message::Version {
+                protocole: crate::message::VERSION_PROTOCOLE,
+            },
+        )]
     }
 
     /// Scelle un bloc avec les transactions du mempool, l'applique, et le diffuse.
@@ -2419,6 +2589,217 @@ mod tests {
         );
         assert!(actions.is_empty());
         assert_eq!(n.pairs.get(&p).unwrap().score, 0);
+    }
+
+    /// Un pair annonçant une version < `VERSION_MIN_ACCEPTEE` est refusé PROPREMENT
+    /// et NOMMÉMENT, SANS sanction de score : un pair en retard n'est pas hostile.
+    #[test]
+    fn version_trop_basse_refusee_sans_sanction() {
+        let mut n = noeud_de_test();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+
+        let actions = n.traiter(p, Message::Version { protocole: 0 }, 0);
+        assert_eq!(actions.len(), 1, "une seule action : la déconnexion");
+        match &actions[0] {
+            Action::Deconnecter { pair: vers, raison } => {
+                assert_eq!(*vers, p);
+                assert_eq!(
+                    *raison,
+                    RaisonDeconnexion::VersionTropAncienne {
+                        annoncee: 0,
+                        minimale: crate::message::VERSION_MIN_ACCEPTEE,
+                    },
+                    "la raison est NOMMÉE, pas un silence"
+                );
+            }
+            _ => panic!("déconnexion attendue"),
+        }
+        assert_eq!(
+            n.pairs.get(&p).unwrap().score,
+            0,
+            "AUCUNE pénalité : c'est `version_inconnue()` généralisé au dialogue"
+        );
+        assert!(!n.pairs.get(&p).unwrap().banni());
+        assert_eq!(
+            n.version_annoncee(&p),
+            None,
+            "rien à retenir d'un pair avec qui on ne dialogue pas"
+        );
+    }
+
+    /// Un pair à version acceptée est ENREGISTRÉ, et reçoit la NÔTRE en réponse.
+    ///
+    /// C'est la moitié « accepteur » de la règle asymétrique : nous n'annonçons pas
+    /// spontanément, mais nous répondons à qui nous annonce.
+    #[test]
+    fn version_acceptee_enregistree() {
+        let mut n = noeud_de_test();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+        let actions = n.traiter(
+            p,
+            Message::Version {
+                protocole: crate::message::VERSION_PROTOCOLE,
+            },
+            0,
+        );
+        assert!(
+            matches!(
+                actions.as_slice(),
+                [Action::Envoyer(vers, Message::Version { protocole })]
+                    if *vers == p && *protocole == crate::message::VERSION_PROTOCOLE
+            ),
+            "l'accepteur répond sa version — une fois"
+        );
+        assert_eq!(
+            n.version_annoncee(&p),
+            Some(crate::message::VERSION_PROTOCOLE)
+        );
+        assert_eq!(n.pairs.get(&p).unwrap().score, 0);
+    }
+
+    /// La réponse est UNIQUE : réannoncer n'obtient plus rien.
+    ///
+    /// Sans cette borne, un pair obtiendrait une réponse gratuite par annonce
+    /// (amplification), et deux nœuds qui se répondraient mutuellement rebondiraient
+    /// indéfiniment.
+    #[test]
+    fn version_repondue_une_seule_fois() {
+        let mut n = noeud_de_test();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+        let v = || Message::Version {
+            protocole: crate::message::VERSION_PROTOCOLE,
+        };
+        assert_eq!(n.traiter(p, v(), 0).len(), 1, "la première annonce répond");
+        assert!(n.traiter(p, v(), 0).is_empty(), "la seconde n'obtient rien");
+        assert!(n.traiter(p, v(), 0).is_empty());
+    }
+
+    /// Le CONNECTEUR ne répond pas à la réponse : le runtime a déclaré son annonce,
+    /// et c'est ce qui rend l'échange terminant.
+    #[test]
+    fn connecteur_ne_repond_pas_a_la_reponse() {
+        let mut n = noeud_de_test();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+        // Ce que fait `Runtime::enregistrer` sur un lien SORTANT.
+        n.noter_version_envoyee(p);
+        let actions = n.traiter(
+            p,
+            Message::Version {
+                protocole: crate::message::VERSION_PROTOCOLE,
+            },
+            0,
+        );
+        assert!(
+            actions.is_empty(),
+            "notre version est déjà partie : y répondre ferait rebondir les deux nœuds"
+        );
+        assert_eq!(
+            n.version_annoncee(&p),
+            Some(crate::message::VERSION_PROTOCOLE),
+            "elle est tout de même ENREGISTRÉE"
+        );
+    }
+
+    /// La trace de notre propre annonce part avec le lien : sans purge, un pair
+    /// reconnecté ne recevrait jamais notre version.
+    #[test]
+    fn trace_dannonce_oubliee_a_la_deconnexion() {
+        let mut n = noeud_de_test();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+        n.noter_version_envoyee(p);
+        n.oublier_adresse(&p);
+        let actions = n.traiter(
+            p,
+            Message::Version {
+                protocole: crate::message::VERSION_PROTOCOLE,
+            },
+            0,
+        );
+        assert_eq!(
+            actions.len(),
+            1,
+            "lien neuf, annonce neuve : la réponse repart"
+        );
+    }
+
+    /// Un pair annonçant une version PLUS RÉCENTE que la nôtre n'est ni refusé ni
+    /// pénalisé : c'est nous qui sommes en arrière, et le décodage message par
+    /// message continue de trier ce que nous savons lire.
+    #[test]
+    fn version_future_acceptee() {
+        let mut n = noeud_de_test();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+        let actions = n.traiter(
+            p,
+            Message::Version {
+                protocole: u16::MAX,
+            },
+            0,
+        );
+        assert!(
+            matches!(
+                actions.as_slice(),
+                [Action::Envoyer(_, Message::Version { .. })]
+            ),
+            "une version future n'est pas une faute : on répond comme à toute annonce"
+        );
+        assert_eq!(n.version_annoncee(&p), Some(u16::MAX));
+        assert_eq!(n.pairs.get(&p).unwrap().score, 0);
+    }
+
+    /// COEXISTENCE, sens « nouveau nœud face à un ancien » : un pair qui n'envoie
+    /// JAMAIS `Version` est servi normalement, sans sanction et sans attente.
+    ///
+    /// C'est l'invariant qui empêche le déploiement de forker le réseau. Le tester
+    /// ici, sur la fonction pure, en fait une propriété de POLITIQUE et pas un
+    /// accident de câblage.
+    #[test]
+    fn absence_de_version_ne_bloque_ni_ne_penalise() {
+        let mut n = noeud_de_test();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+        // Le pair parle directement, sans s'être annoncé.
+        let actions = n.traiter(p, Message::Annonce(vec![dg(1)]), 0);
+        assert!(
+            matches!(
+                actions.as_slice(),
+                [Action::Envoyer(_, Message::Demande(_))]
+            ),
+            "un pair muet sur sa version est servi comme n'importe quel autre"
+        );
+        assert_eq!(n.pairs.get(&p).unwrap().score, 0, "aucune sanction");
+        assert_eq!(
+            n.version_annoncee(&p),
+            None,
+            "présumé version de base : rien de retenu, rien d'exigé"
+        );
+    }
+
+    /// La table des versions est PURGÉE à la déconnexion, comme l'adresse.
+    ///
+    /// Le `PeerId` est gratuit : sans purge, une rotation d'identité par connexion
+    /// ferait croître cette table indéfiniment.
+    #[test]
+    fn version_oubliee_a_la_deconnexion() {
+        let mut n = noeud_de_test();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+        let _ = n.traiter(
+            p,
+            Message::Version {
+                protocole: crate::message::VERSION_PROTOCOLE,
+            },
+            0,
+        );
+        assert!(n.version_annoncee(&p).is_some());
+        n.oublier_adresse(&p);
+        assert_eq!(n.version_annoncee(&p), None, "le lien fini, la trace part");
     }
 
     /// Un message indécodable pénalise — le pair ne parle pas le protocole.

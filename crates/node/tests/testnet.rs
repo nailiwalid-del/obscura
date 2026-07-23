@@ -19,6 +19,8 @@ use node::message::Message;
 use node::orchestration::{Action, Noeud};
 use node::runtime::Runtime;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const DEPTH: usize = 4;
@@ -178,9 +180,21 @@ fn transaction_se_propage_entre_deux_noeuds() {
     )]);
 
     // A doit répondre à la DEMANDE de B en envoyant la transaction : on pompe.
+    //
+    // ⚠️ « au moins un événement » ne suffit plus : depuis J3, le PREMIER événement
+    // reçu est la `Message::Version` que B dépose en tête de connexion. S'arrêter
+    // dessus ferait cesser de pomper avant même la demande de B. On pompe donc
+    // jusqu'à ce que B ait conclu — c'est-à-dire jusqu'à ce qu'il détienne la
+    // transaction.
     assert!(
-        attendre(|| a.pomper(0) > 0, Duration::from_secs(30)),
-        "A doit recevoir la demande de B"
+        attendre(
+            || {
+                a.pomper(0);
+                b.is_finished()
+            },
+            Duration::from_secs(30)
+        ),
+        "A doit servir la demande de B"
     );
 
     b.join().expect("nœud B");
@@ -230,6 +244,12 @@ fn transaction_traverse_un_intermediaire() {
     let ecoute_c = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();
     let adr_c = ecoute_c.local_addr().unwrap();
 
+    // Ce que C a réellement obtenu, visible depuis B. Depuis J3, « B a pompé au moins
+    // un événement » ne prouve plus rien (le premier est la `Version` de C, déposée
+    // en tête de connexion) : B doit pomper jusqu'à ce que C soit servi.
+    let c_a_recu = Arc::new(AtomicBool::new(false));
+    let c_signale = Arc::clone(&c_a_recu);
+
     // Nœud C : terminal, doit finir par détenir la transaction.
     let c = std::thread::spawn(move || {
         let mut rt = Runtime::new(Noeud::new(
@@ -246,6 +266,7 @@ fn transaction_traverse_un_intermediaire() {
             },
             Duration::from_secs(60),
         );
+        c_signale.store(recu, Ordering::SeqCst);
         assert!(recu, "C doit recevoir la transaction VIA B");
     });
 
@@ -274,10 +295,17 @@ fn transaction_traverse_un_intermediaire() {
             Message::Annonce(vec![digest]),
         )]);
 
-        // Puis répondre à la demande de C.
+        // Puis répondre à la demande de C — en pompant jusqu'à ce que C l'ait
+        // réellement obtenue, pas jusqu'au premier événement venu.
         assert!(
-            attendre(|| rt.pomper(0) > 0, Duration::from_secs(45)),
-            "B doit recevoir la demande de C"
+            attendre(
+                || {
+                    rt.pomper(0);
+                    c_a_recu.load(Ordering::SeqCst)
+                },
+                Duration::from_secs(45)
+            ),
+            "B doit servir la demande de C"
         );
     });
 
@@ -289,9 +317,17 @@ fn transaction_traverse_un_intermediaire() {
         pair_b,
         Message::Annonce(vec![digest]),
     )]);
+    // Même raison qu'au test précédent : le premier événement pompé est la `Version`
+    // de B, pas sa demande. A pompe jusqu'à ce que B ait fini son relais.
     assert!(
-        attendre(|| a.pomper(0) > 0, Duration::from_secs(45)),
-        "A doit recevoir la demande de B"
+        attendre(
+            || {
+                a.pomper(0);
+                b.is_finished()
+            },
+            Duration::from_secs(45)
+        ),
+        "A doit servir la demande de B"
     );
 
     b.join().expect("nœud B");
