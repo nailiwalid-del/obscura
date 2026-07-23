@@ -227,6 +227,23 @@ pub enum BlocRefus {
     /// rendrait deux encodages valides pour le même bloc (canonicité).
     #[error("scellement présent sur une chaîne sans autorités")]
     ScellementInattendu,
+    /// Un bloc de reconfiguration ne porte AUCUNE transaction (gouvernance vide).
+    #[error("bloc de changement d'autorités portant {recues} transactions")]
+    ChangementAvecTransactions { recues: usize },
+    /// Reconfiguration sur une chaîne OUVERTE : aucun comité à reconfigurer.
+    #[error("changement d'autorités sur une chaîne ouverte (aucun comité)")]
+    ChangementSurChaineOuverte,
+    /// Un changement resterait en attente après ce bloc (un seul en vol).
+    #[error("un changement d'autorités est déjà en attente")]
+    ChangementDejaEnAttente,
+    /// `hauteur + K` déborderait `u64`.
+    #[error("hauteur d'effet du changement ({hauteur} + {k}) déborde u64")]
+    ChangementHauteurOverflow { hauteur: u64, k: u64 },
+    /// Liste de changement structurellement invalide (vide, hors borne, ou doublon) —
+    /// distincte de `ChangementSurChaineOuverte` : celle-ci ne vaut QUE pour l'absence
+    /// de comité, pas pour une liste mal formée sur une chaîne qui EN a un.
+    #[error("liste de changement d'autorités invalide (vide, hors borne ou doublon)")]
+    ChangementInvalide,
     #[error("transaction {index} refusée : {source}")]
     Transaction {
         index: usize,
@@ -594,6 +611,13 @@ impl ProvedLedgerState {
         self.changement_en_attente = Some((nouvelle, effet));
     }
 
+    /// Force tête + hauteur pour éprouver les débordements. Tests seulement.
+    #[cfg(test)]
+    fn forcer_hauteur_pour_test(&mut self, hauteur: u64, tete: [u8; TAILLE_ID]) {
+        self.hauteur = hauteur;
+        self.tete = tete;
+    }
+
     /// Historique des sorties, si ce nœud tient le rôle d'archiviste.
     ///
     /// `None` est le cas NORMAL : l'archivage est optionnel, et un nœud qui rend `None`
@@ -800,6 +824,51 @@ impl ProvedLedgerState {
             }
         }
 
+        // VALIDITÉ DU CHANGEMENT D'AUTORITÉS (J1-c), si le bloc en porte un. Contrôles
+        // O(1), placés AVANT l'instantané et la boucle STARK (frontière du coût).
+        if let Some(nouvelle) = &bloc.changement_autorites {
+            // Chaîne à autorités seulement : `autorites_actives` non vide (une chaîne
+            // ouverte n'a rien à reconfigurer). NB : sur chaîne ouverte, la branche
+            // certificat ci-dessus a déjà refusé un certificat ; ici on nomme la cause.
+            if autorites_actives.is_empty() {
+                return Err(BlocRefus::ChangementSurChaineOuverte);
+            }
+            // Bloc de gouvernance VIDE de transactions.
+            if !bloc.transactions.is_empty() {
+                return Err(BlocRefus::ChangementAvecTransactions {
+                    recues: bloc.transactions.len(),
+                });
+            }
+            // Validité structurelle (défense : `Bloc` a des champs publics).
+            if nouvelle.is_empty() || nouvelle.len() > crate::bloc::MAX_AUTORITES {
+                return Err(BlocRefus::ChangementInvalide);
+            }
+            if crate::bloc::liste_a_un_doublon(nouvelle) {
+                return Err(BlocRefus::ChangementInvalide);
+            }
+            // UN SEUL EN VOL : le bloc peut annoncer SSI aucun changement ne restera en
+            // attente après lui — soit `changement_en_attente` est None, soit il est
+            // ACTIVÉ par ce bloc (effet == hauteur).
+            let pendant_survit = match &self.changement_en_attente {
+                None => false,
+                Some((_, e)) => *e != bloc.hauteur,
+            };
+            if pendant_survit {
+                return Err(BlocRefus::ChangementDejaEnAttente);
+            }
+            // `hauteur + K` ne doit pas déborder.
+            if bloc
+                .hauteur
+                .checked_add(DELAI_CHANGEMENT_AUTORITES)
+                .is_none()
+            {
+                return Err(BlocRefus::ChangementHauteurOverflow {
+                    hauteur: bloc.hauteur,
+                    k: DELAI_CHANGEMENT_AUTORITES,
+                });
+            }
+        }
+
         // Instantané de ce qui n'est pas restaurable autrement (la frontier est
         // append-only : elle ne sait pas revenir en arrière).
         let arbre_avant = self.tree.clone();
@@ -861,7 +930,10 @@ impl ProvedLedgerState {
             }
         }
         if let Some(nouvelle) = &bloc.changement_autorites {
-            let effet = bloc.hauteur + DELAI_CHANGEMENT_AUTORITES;
+            let effet = bloc
+                .hauteur
+                .checked_add(DELAI_CHANGEMENT_AUTORITES)
+                .expect("débordement déjà refusé par ChangementHauteurOverflow");
             self.changement_en_attente = Some((nouvelle.clone(), effet));
         }
         // Seul endroit, avec `amorcer`, où l'historique est écrit — et il l'est APRÈS
@@ -1066,25 +1138,19 @@ mod tests {
         b
     }
 
-    /// Bloc VIDE de hauteur `h` en vue 0, scellé et voté au quorum par les `q`
-    /// premières autorités de `cles` (indices producteur = (h−1) mod n).
-    ///
-    /// Pas encore appelé dans CE jalon (T3) : réservé aux tests d'atomicité et de
-    /// back-to-back des jalons suivants (T4/T5), qui doivent certifier un bloc à une
-    /// hauteur arbitraire sans reconstruire ce boilerplate à chaque fois.
-    #[allow(dead_code)]
-    fn bloc_certifie(
-        parent: [u8; crate::bloc::TAILLE_ID],
+    /// Bloc de changement à hauteur `h`, scellé par le producteur du tour et voté au
+    /// quorum de la liste active de `h`.
+    fn bloc_changement(
+        etat: &ProvedLedgerState,
         h: u64,
         cles: &[crypto::sig::SigKeypair],
-        q: usize,
+        nouvelle: Vec<crypto::sig::SigPublicKey>,
     ) -> crate::bloc::Bloc {
-        let n = cles.len() as u64;
-        let prod = ((h - 1) % n) as usize;
-        let mut b = crate::bloc::Bloc::sceller(&parent, h, Vec::new()).unwrap();
+        let prod = ((h - 1) % cles.len() as u64) as usize;
+        let mut b = crate::bloc::Bloc::sceller_changement(&etat.tete(), h, nouvelle).unwrap();
         b.signer_scellement(&cles[prod]);
-        for (i, c) in cles.iter().enumerate().take(q) {
-            b.signer_vote(i, c);
+        for (i, cle) in cles.iter().enumerate().take(etat.quorum_a(h)) {
+            b.signer_vote(i, cle);
         }
         b
     }
@@ -1269,6 +1335,104 @@ mod tests {
             Err(BlocRefus::CertificatInattendu)
         ));
     }
+
+    /// Un changement sur une CHAÎNE OUVERTE (sans autorités) n'a aucun sens : refusé.
+    #[test]
+    fn changement_sur_chaine_ouverte_refuse() {
+        let mut etat = ProvedLedgerState::with_depth(4);
+        let mut b = crate::bloc::Bloc::sceller_changement(
+            &etat.tete(),
+            1,
+            vec![crypto::sig::SigKeypair::generate().public],
+        )
+        .unwrap();
+        b.vue = 0; // chaîne ouverte : pas de scellement, pas de certificat
+        assert!(matches!(
+            etat.appliquer_bloc(&b),
+            Err(BlocRefus::ChangementSurChaineOuverte)
+        ));
+    }
+
+    /// Un bloc de changement PORTANT des transactions est refusé (gouvernance vide).
+    /// Bloc HOSTILE par littéral (le constructeur l'interdit) ; la tx n'est jamais
+    /// vérifiée — le refus O(1) précède tout STARK — mais il faut une `ProvedTx`
+    /// décodable, d'où le gating release. Le motif `ProvedTx::from_bytes(&tx.to_bytes())`
+    /// est celui de `bloc_hors_borne_refuse_avant_verification`, et `setup()` la fabrique
+    /// (déjà présente dans ce module de tests).
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
+    fn changement_avec_transactions_refuse() {
+        let (mut etat, cles) = chaine_a(4);
+        let (_, tx) = setup();
+        let mut b = crate::bloc::Bloc {
+            parent: etat.tete(),
+            hauteur: 1,
+            vue: 0,
+            transactions: vec![circuit::ProvedTx::from_bytes(&tx.to_bytes()).unwrap()],
+            emissions: Vec::new(),
+            autorites: Vec::new(),
+            changement_autorites: Some(vec![crypto::sig::SigKeypair::generate().public]),
+            extension: Vec::new(),
+            scellement: None,
+            certificat: None,
+        };
+        b.signer_scellement(&cles[0]);
+        for (i, cle) in cles.iter().enumerate().take(etat.quorum_a(1)) {
+            b.signer_vote(i, cle);
+        }
+        assert!(matches!(
+            etat.appliquer_bloc(&b),
+            Err(BlocRefus::ChangementAvecTransactions { .. })
+        ));
+    }
+
+    /// Deux changements empilés : le second est refusé tant que le premier est en vol.
+    #[test]
+    fn deuxieme_changement_pendant_lattente_refuse() {
+        let (mut etat, cles) = chaine_a(4);
+        // Installer un pendant à effet lointain (test, sans dérouler K blocs).
+        etat.injecter_changement_pour_test(
+            (0..4)
+                .map(|_| crypto::sig::SigKeypair::generate().public)
+                .collect(),
+            1 + DELAI_CHANGEMENT_AUTORITES,
+        );
+        let b = bloc_changement(
+            &etat,
+            1,
+            &cles,
+            vec![crypto::sig::SigKeypair::generate().public],
+        );
+        assert!(matches!(
+            etat.appliquer_bloc(&b),
+            Err(BlocRefus::ChangementDejaEnAttente)
+        ));
+    }
+
+    /// `hauteur + K` qui déborderait u64 est refusé (jamais de wrap silencieux).
+    #[test]
+    fn changement_hauteur_overflow_refuse() {
+        let (mut etat, cles) = chaine_a(4);
+        // Forcer l'état près de u64::MAX pour que h+1 puis h+1+K déborde. On règle la
+        // tête à une hauteur telle que prochaine + K > u64::MAX.
+        etat.forcer_hauteur_pour_test(u64::MAX - 1, etat.tete());
+        // prochaine = u64::MAX, +K déborde.
+        let mut b = crate::bloc::Bloc::sceller_changement(
+            &etat.tete(),
+            u64::MAX,
+            vec![crypto::sig::SigKeypair::generate().public],
+        )
+        .unwrap();
+        b.signer_scellement(&cles[((u64::MAX - 1) % 4) as usize]);
+        for (i, cle) in cles.iter().enumerate().take(etat.quorum_a(u64::MAX)) {
+            b.signer_vote(i, cle);
+        }
+        assert!(matches!(
+            etat.appliquer_bloc(&b),
+            Err(BlocRefus::ChangementHauteurOverflow { .. })
+        ));
+    }
+
     use circuit::{prove_tx, ProvedInput, SpendNote};
     use proved_hash::domain::Domain;
     use proved_hash::felt::Felt;
