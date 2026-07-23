@@ -412,6 +412,29 @@ Aucune dépense externe.
 
 ### Jalon J2 — Le mécanisme économique *(SPÉCIFIÉ, non implémenté)*
 
+> ⚠️ **CORRECTIONS DU 2026-07-23, apportées par ADR-002 (J2).** Deux affirmations
+> de cette carte sont fausses et doivent être lues corrigées :
+>
+> 1. **« coinbase prouvée, collecteur de frais » ne sont pas DEUX sujets, mais UN
+>    SEUL MÉCANISME.** Collecter les frais exige de créer une sortie de niveau bloc
+>    dont la valeur est la somme des `fee` du bloc — publiquement calculable,
+>    puisque `fee` est public. C'est exactement la structure d'une coinbase : une
+>    sortie de bloc, de valeur publiquement dérivable, de bénéficiaire caché, avec
+>    une preuve d'ouverture. Même format, même circuit, même place dans `extension` ;
+>    seule l'arithmétique de `R(h)` diffère. **Conséquence à ne pas manquer :**
+>    graver « jamais de coinbase » interdirait aussi la collecte de frais, et
+>    condamnerait donc la masse à décroître dès qu'un marché de frais existera.
+> 2. **J2 ne livre PAS l'anti-Sybil à J3.** ADR-001 (point 6) suppose une admission
+>    au comité par caution (`stake`), « ce qui suppose le mécanisme économique de
+>    J2 ». C'est faux : une preuve d'enjeu pondère les votes par un enjeu, ce qui
+>    exige des soldes **publiquement attribuables** — la négation exacte de la thèse
+>    d'Obscura. J2 fournit de quoi *rémunérer* un comité, pas de quoi en *ouvrir
+>    l'appartenance*. Le budget de sécurité et l'anti-Sybil sont deux problèmes
+>    distincts, et **J3 ne peut pas supposer que J2 lui livre le second.** Si
+>    l'ouverture de l'appartenance devient un objectif, elle exige son propre ADR,
+>    lequel devra affronter une incompatibilité de fond entre BFT à comité borné et
+>    confidentialité des soldes.
+
 **Statut révisé.** La révision 1 plaçait l'implémentation en B. **C'était une
 erreur, révélée en corrigeant le point précédent :** l'argument de la coinbase
 est le budget de sécurité, qui est un argument **A**. Sous une fédération de

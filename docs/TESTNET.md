@@ -104,6 +104,20 @@ de décisions écrites, et chacune renvoie à son document de référence.
   la preuve. C'est pourquoi **seuls des frais nuls sont acceptés** sur ce testnet
   (`obscura-wallet envoyer --frais 0`, ou l'option omise) : les frais étant
   brûlés, en payer n'achète rien et marquerait durablement le payeur.
+- **La masse totale de la chaîne n'est PAS auditable — et c'est le revers assumé
+  des montants cachés.** Les allocations de genèse sont des commitments dont les
+  aléas viennent d'`OsRng` : ce qui est public à jamais est leur **nombre**, jamais
+  leur **somme**. La promesse monétaire se décompose donc en deux moitiés très
+  inégales :
+
+  | affirmation | vérifiable ? |
+  |---|---|
+  | « aucune unité n'est créée hors du mécanisme prévu » | **oui** — chaque nœud l'impose (`hauteur > 0 ⇒ emissions.is_empty()`) |
+  | « la genèse contenait exactement N unités » | **non** — parole de l'auteur de la genèse |
+
+  Aucune coinbase n'existe : ce trou est **antérieur** à toute question d'émission,
+  il tient à la confidentialité des montants elle-même. Le prendre en compte fait
+  partie de ce que vous acceptez en rejoignant cette chaîne.
 - **Le nœud qui vous sert l'historique apprend votre IP, la cadence de vos
   demandes et votre position de chaîne.** Il peut aussi **mentir par omission** :
   taire une sortie produit une chaîne parfaitement cohérente dont la racine est
