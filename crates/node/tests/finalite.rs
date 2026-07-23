@@ -16,6 +16,7 @@ use ledger::bloc::Bloc;
 use ledger::proved_state::ProvedLedgerState;
 use node::message::Message;
 use node::orchestration::{Action, Noeud};
+use node::persistance::Donnees;
 use node::runtime::Runtime;
 use proved_hash::digest::ShieldedSecret;
 use proved_hash::felt::Felt;
@@ -305,11 +306,18 @@ fn deux_autorites_alternent_sur_sockets() {
     let (fin_tx, fin_rx) = std::sync::mpsc::channel::<()>();
 
     let serveur = std::thread::spawn(move || {
-        let mut rt = Runtime::new(Noeud::new(id_b, etat_b, [3u8; 32]));
+        // n=2 ⇒ quorum 2 : B DOIT voter pour la proposition de A, et A pour celle
+        // de B. Le vote est fail-closed sans dépôt, d'où le répertoire de données.
+        let dir_b = std::env::temp_dir().join(format!("obscura_finalite_b_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir_b);
+        let donnees_b = Donnees::ouvrir(&dir_b).expect("dépôt B");
+        let mut noeud_b = Noeud::new(id_b, etat_b, [3u8; 32]);
+        noeud_b.adopter_votes(donnees_b.charger_ou_creer_votes().expect("registre B"));
+        let mut rt = Runtime::new(noeud_b).avec_donnees(donnees_b);
         let (flux, _) = ecoute.accept().unwrap();
         rt.accepter(flux, &identite_transport_b).expect("handshake");
 
-        // B applique le bloc 1 de A…
+        // B vote pour la proposition de A, reçoit le bloc 1 certifié, l'applique.
         let a_recu_h1 = attendre(
             || {
                 rt.pomper(0);
@@ -317,9 +325,9 @@ fn deux_autorites_alternent_sur_sockets() {
             },
             Duration::from_secs(60),
         );
-        assert!(a_recu_h1, "B doit appliquer le bloc 1 scellé par A");
+        assert!(a_recu_h1, "B doit appliquer le bloc 1 (certifié par A+B)");
 
-        // …puis scelle la hauteur 2 : c'est SON tour.
+        // …puis PROPOSE la hauteur 2 : c'est SON tour. A votera, B assemblera.
         rt.noeud_mut().soumettre(tx_b, 0).expect("admission chez B");
         let (bloc2, actions) = rt.noeud_mut().sceller().expect("le tour de B");
         assert_eq!(bloc2.hauteur, 2);
@@ -333,34 +341,47 @@ fn deux_autorites_alternent_sur_sockets() {
             },
             Duration::from_secs(60),
         );
-        (
+        let r = (
             rt.noeud().etat.tree.root(),
             rt.noeud().etat.tete(),
             rt.noeud().etat.hauteur(),
-        )
+        );
+        let _ = std::fs::remove_dir_all(&dir_b);
+        r
     });
 
-    let mut a = Runtime::new(Noeud::new(id_a, etat_a, [1u8; 32]));
+    let dir_a = std::env::temp_dir().join(format!("obscura_finalite_a_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir_a);
+    let donnees_a = Donnees::ouvrir(&dir_a).expect("dépôt A");
+    let mut noeud_a = Noeud::new(id_a, etat_a, [1u8; 32]);
+    noeud_a.adopter_votes(donnees_a.charger_ou_creer_votes().expect("registre A"));
+    let mut a = Runtime::new(noeud_a).avec_donnees(donnees_a);
     a.connecter(adresse_b, &SigKeypair::generate())
         .expect("handshake");
 
-    // A scelle la hauteur 1 : c'est son tour (autorité n° 0).
+    // A PROPOSE la hauteur 1 : c'est son tour (autorité n° 0). Le bloc n'est PAS
+    // appliqué tout de suite — il faut le vote de B pour atteindre le quorum 2.
     a.noeud_mut().soumettre(tx_a, 0).expect("admission chez A");
     let (bloc1, actions) = a.noeud_mut().sceller().expect("le tour de A");
     assert_eq!(bloc1.hauteur, 1);
     assert!(bloc1.verifier_scellement(&id_a_pub), "scellé par A");
     a.executer(actions);
 
-    // Puis A applique le bloc 2 de B, reçu par le fil.
-    let a_recu_h2 = attendre(
+    // A reçoit le vote de B, assemble le certificat, applique la hauteur 1, puis
+    // vote pour la proposition de B et applique la hauteur 2 reçue certifiée.
+    let a_atteint_h2 = attendre(
         || {
             a.pomper(0);
             a.noeud().etat.hauteur() == 2
         },
         Duration::from_secs(60),
     );
-    assert!(a_recu_h2, "A doit appliquer le bloc 2 scellé par B");
+    assert!(
+        a_atteint_h2,
+        "A doit atteindre la hauteur 2 après alternance"
+    );
     let _ = fin_tx.send(());
+    let _ = std::fs::remove_dir_all(&dir_a);
 
     let (racine_b, tete_b, hauteur_b) = serveur.join().expect("thread B");
     assert_eq!(hauteur_b, 2);

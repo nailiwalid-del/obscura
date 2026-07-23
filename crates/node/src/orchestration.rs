@@ -1465,14 +1465,18 @@ mod tests {
 
     /// ÉLECTION : à son tour, `sceller` SIGNE — et le bloc diffusé porte le
     /// scellement (il doit survivre au réencodage wire).
+    ///
+    /// ⚠️ n=1 délibérément : c'est le SEUL cas où le quorum vaut 1 et où `sceller`
+    /// applique directement en diffusant un `Message::Bloc`. Depuis la
+    /// généralisation du quorum, n=2 exige 2 votes et passe par le chemin de
+    /// PROPOSITION (testé séparément). L'auto-application ne survit qu'à n=1.
     #[test]
     #[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
     fn sceller_signe_a_son_tour() {
         let nous = SigKeypair::generate();
         let nous_pub = nous.public.clone();
-        let autre_pub = SigKeypair::generate().public;
-        // La hauteur 1 nous revient.
-        let (mut n, tx) = noeud_avec_transaction_param(nous, vec![nous_pub.clone(), autre_pub]);
+        // Autorité UNIQUE : la hauteur 1 nous revient, quorum 1, auto-application.
+        let (mut n, tx) = noeud_avec_transaction_param(nous, vec![nous_pub.clone()]);
         n.mempool.admettre(&n.etat, tx).expect("admission");
 
         let (bloc, actions) = n.sceller().expect("notre tour : un bloc");

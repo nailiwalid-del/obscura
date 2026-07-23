@@ -504,18 +504,31 @@ impl ProvedLedgerState {
         Some(&self.autorites[i])
     }
 
-    /// Quorum requis : `2f + 1`, avec `n = 3f + 1` donc `f = (n − 1) / 3`.
+    /// Quorum requis : `⌊2n/3⌋ + 1`.
     ///
-    /// À `n = 1` (autorité unique), `f = 0` et le quorum vaut 1 : la seule autorité
-    /// se certifie elle-même. Ce n'est pas une faiblesse du calcul — c'est ce que
-    /// « tolérer zéro faute » signifie, et c'est la configuration d'un testnet à un
-    /// seul opérateur.
+    /// # Pourquoi cette formule et pas `2f + 1`
+    ///
+    /// `2f + 1` (avec `f = ⌊(n−1)/3⌋`) n'est correct que si `n = 3f + 1`. Pour
+    /// `n = 5` il donnait 3, et deux blocs à trois votes qui ne partagent que le
+    /// nœud fautif atteignaient TOUS DEUX le quorum → **divergence définitive**.
+    /// La formule était donc une faille de sûreté pour n ∈ {2, 5, 6, …}.
+    ///
+    /// `⌊2n/3⌋ + 1` **égale `2f + 1` exactement quand `n = 3f + 1`** (n = 1, 4, 7,
+    /// 10 : rien ne change) et reste sûre pour tout autre `n` : deux quorums de
+    /// cette taille se recoupent en `2q − n > f` nœuds, dont au moins un honnête —
+    /// or un honnête ne vote qu'un `id` par hauteur. Elle satisfait aussi la
+    /// liveness (`q ≤ n − f` toujours).
+    ///
+    /// À `n = 1`, `q = 1` : l'unique autorité se certifie elle-même (testnet à un
+    /// seul opérateur). À `n = 2`, `q = 2` : les deux doivent voter — un nœud seul
+    /// ne finalise plus rien, ce qui était le défaut silencieux de l'ancienne
+    /// formule (elle rendait 1).
     pub fn quorum_requis(&self) -> usize {
         let n = self.autorites.len();
         if n == 0 {
             return 0;
         }
-        2 * ((n - 1) / 3) + 1
+        (2 * n) / 3 + 1
     }
 
     /// Historique des sorties, si ce nœud tient le rôle d'archiviste.
@@ -968,13 +981,44 @@ mod tests {
         b
     }
 
-    /// `2f+1` sur `n = 3f+1`. À n=4, f=1, il faut 3 votes.
+    /// Quorum = ⌊2n/3⌋+1, qui égale 2f+1 quand n = 3f+1 et reste SÛR partout.
     #[test]
-    fn quorum_requis_suit_3f_plus_1() {
-        for (n, attendu) in [(1, 1), (2, 1), (3, 1), (4, 3), (7, 5), (10, 7), (64, 43)] {
+    fn quorum_generalise() {
+        for (n, attendu) in [
+            (1, 1),
+            (2, 2),
+            (3, 3),
+            (4, 3),
+            (5, 4),
+            (6, 5),
+            (7, 5),
+            (10, 7),
+            (64, 43),
+        ] {
             let (etat, _) = chaine_a(n);
             assert_eq!(etat.quorum_requis(), attendu, "n = {n}");
         }
+    }
+
+    /// La FAILLE fermée : à n=5, deux quorums disjoints sauf un nœud sont
+    /// impossibles. Le quorum est 4, donc deux blocs à 4 votes sur 5 autorités se
+    /// recoupent en ≥ 3 nœuds — dont au moins 2 honnêtes (f=1). Aucun nœud fautif
+    /// ne peut à lui seul faire finaliser deux blocs.
+    ///
+    /// Avec l'ANCIENNE formule (quorum 3), A={0,1,2} et B={2,3,4} ne partageaient
+    /// que le nœud 2 : s'il était fautif, les deux atteignaient le quorum. C'est
+    /// exactement ce que cette formule ferme.
+    #[test]
+    fn n5_ferme_la_divergence_par_un_seul_fautif() {
+        let (etat, _) = chaine_a(5);
+        let q = etat.quorum_requis();
+        assert_eq!(q, 4, "n=5 exige 4 votes, pas 3");
+        // Intersection minimale de deux quorums = 2q − n.
+        let intersection_min = 2 * q - 5;
+        assert!(
+            intersection_min >= 2,
+            "deux quorums se recoupent en ≥ {intersection_min} nœuds, > f=1 fautif"
+        );
     }
 
     #[test]
@@ -1166,12 +1210,14 @@ mod tests {
         ));
 
         // Le BON producteur, trois hauteurs de suite : a (h=1), b (h=2), a (h=3).
-        // À n=2, f=0 donc le quorum vaut 1 : le vote du producteur suffit. C'est le
-        // sens de « tolérer zéro faute », pas une faiblesse du calcul.
-        for (h, producteur, index) in [(1u64, &a, 0usize), (2, &b, 1), (3, &a, 0)] {
+        // À n=2, le quorum vaut désormais 2 (⌊2·2/3⌋+1) : les DEUX autorités
+        // doivent voter. Un producteur seul ne finalise plus rien — c'est
+        // précisément la faille que la formule généralisée ferme.
+        for (h, producteur) in [(1u64, &a), (2, &b), (3, &a)] {
             let mut bloc = crate::bloc::Bloc::sceller(&etat.tete(), h, Vec::new()).unwrap();
             bloc.signer_scellement(producteur);
-            bloc.signer_vote(index, producteur);
+            bloc.signer_vote(0, &a);
+            bloc.signer_vote(1, &b);
             etat.appliquer_bloc(&bloc)
                 .unwrap_or_else(|e| panic!("hauteur {h} par le bon producteur : {e}"));
             assert_eq!(etat.hauteur(), h);
@@ -1225,7 +1271,7 @@ mod tests {
     /// règle sans relire la genèse.
     #[test]
     fn letat_recharge_garde_ses_autorites() {
-        let (a, _b, etat) = chaine_a_deux_autorites();
+        let (a, b, etat) = chaine_a_deux_autorites();
         let mut relu = ProvedLedgerState::from_bytes(&etat.to_bytes()).expect("état relisible");
         assert_eq!(
             relu.autorites().len(),
@@ -1241,9 +1287,11 @@ mod tests {
             ),
             "l'état rechargé doit encore exiger le scellement"
         );
+        // n=2 ⇒ quorum 2 : les deux autorités votent.
         let mut bon = crate::bloc::Bloc::sceller(&relu.tete(), 1, Vec::new()).unwrap();
         bon.signer_scellement(&a);
         bon.signer_vote(0, &a);
+        bon.signer_vote(1, &b);
         relu.appliquer_bloc(&bon)
             .expect("bon producteur accepté après rechargement");
     }
