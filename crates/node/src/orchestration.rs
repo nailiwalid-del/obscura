@@ -163,6 +163,40 @@ pub struct Noeud {
 /// manqué. À saturation, un pair de plus n'est simplement pas servi.
 pub const MAX_ADRESSES_SUIVIES: usize = 4_096;
 
+/// Facteur entre la cadence de consensus et le délai de vue de BASE.
+///
+/// ≥ 3 pour qu'un producteur qui répond ne soit JAMAIS tourné avant d'avoir eu le
+/// temps de proposer : le délai (ce que les autres attendent) doit dépasser la
+/// cadence (l'intervalle où le producteur propose).
+const FACTEUR_VUE: u64 = 3;
+
+/// Cadence de consensus par défaut d'une autorité, même sans `--sceller`.
+///
+/// Le délai de vue doit tourner chez TOUTES les autorités — c'est une nécessité de
+/// consensus, pas une option d'opérateur. Une autorité prend donc cette cadence par
+/// défaut ; `--sceller <ms>` ne fait que la régler.
+pub const CADENCE_CONSENSUS_MS_DEFAUT: u64 = 5_000;
+
+/// Plafond de vues par hauteur. Au-delà, la hauteur est déclarée CALÉE (split de
+/// votes) : plus aucun incrément, journal CRITIQUE, compteur. 1000 vues à backoff
+/// plafonné valent déjà des heures — une chaîne qui l'atteint est calée, pas lente.
+const MAX_VUE_PAR_HAUTEUR: u32 = 1_000;
+
+/// Plafond du backoff exponentiel, pour borner l'attente maximale d'une vue.
+const PLAFOND_DELAI_VUE_MS: u64 = 60_000;
+
+/// Délai de vue à backoff exponentiel : base × 2^vue, plafonné.
+///
+/// Les horloges des nœuds ne sont pas synchronisées : leurs délais ne tirent pas
+/// ensemble. Sans backoff, un décalage persistant ferait se rater les vues
+/// indéfiniment (livelock). Le backoff garantit qu'une vue finit par durer assez
+/// longtemps pour que tous s'alignent.
+fn delai_vue(vue: u32) -> u64 {
+    let base = FACTEUR_VUE * CADENCE_CONSENSUS_MS_DEFAUT;
+    base.saturating_mul(1u64 << vue.min(20))
+        .min(PLAFOND_DELAI_VUE_MS)
+}
+
 impl Noeud {
     pub fn new(identite: SigKeypair, etat: ProvedLedgerState, secret_dandelion: [u8; 32]) -> Self {
         let hauteur_max_vue = etat.hauteur();
@@ -964,11 +998,44 @@ impl Noeud {
     /// Sans cela, un successeur malveillant qui avale nos tiges les ferait
     /// disparaître silencieusement (*black-holing*).
     pub fn tick(&mut self, maintenant_ms: u64) -> Vec<Action> {
+        let mut actions = self.tick_dandelion(maintenant_ms);
+
+        // DÉTECTEUR DE PANNE (chaîne à autorités seulement) : passé le délai de vue
+        // sans que la hauteur ait avancé, le producteur du tour est réputé absent.
+        if !self.etat.autorites().is_empty()
+            && maintenant_ms.saturating_sub(self.debut_vue_ms) >= delai_vue(self.vue_courante)
+        {
+            if self.vue_courante >= MAX_VUE_PAR_HAUTEUR {
+                // CALAGE : plafond atteint sans avancée (rempli en T6).
+                actions.extend(self.declarer_calage());
+            } else {
+                self.vue_courante += 1;
+                self.debut_vue_ms = maintenant_ms;
+                // Nouveau producteur ? Si c'est nous, proposer (rempli en T5).
+                actions.extend(self.proposer_si_notre_tour(maintenant_ms));
+            }
+        }
+        actions
+    }
+
+    /// Ancien corps de `tick` : diffuse les embargos Dandelion++ expirés.
+    fn tick_dandelion(&mut self, maintenant_ms: u64) -> Vec<Action> {
         let expirees = self.dandelion.embargos_expires(maintenant_ms);
         if expirees.is_empty() {
             return Vec::new();
         }
         vec![Action::Diffuser(Message::Annonce(expirees))]
+    }
+
+    /// Propose un bloc si nous sommes le producteur de `(prochaine_hauteur,
+    /// vue_courante)`. Stub jusqu'à T5.
+    fn proposer_si_notre_tour(&mut self, _maintenant_ms: u64) -> Vec<Action> {
+        Vec::new()
+    }
+
+    /// Déclare la hauteur courante CALÉE. Stub jusqu'à T6.
+    fn declarer_calage(&mut self) -> Vec<Action> {
+        Vec::new()
     }
 
     /// Signale qu'une transaction a été revue sur le réseau : l'embargo tombe.
@@ -994,6 +1061,58 @@ mod tests {
             ProvedLedgerState::with_depth(4),
             [7u8; 32],
         )
+    }
+
+    #[test]
+    fn delai_de_vue_depasse_la_cadence() {
+        // Le délai de BASE (vue 0) vaut FACTEUR_VUE × cadence, donc STRICTEMENT
+        // supérieur à la cadence — un producteur qui répond n'est jamais tourné.
+        assert_eq!(delai_vue(0), FACTEUR_VUE * CADENCE_CONSENSUS_MS_DEFAUT);
+        assert!(delai_vue(0) > CADENCE_CONSENSUS_MS_DEFAUT);
+        // Backoff : la vue 1 attend plus que la vue 0, et tout est plafonné.
+        assert!(delai_vue(1) > delai_vue(0));
+        assert!(delai_vue(30) <= PLAFOND_DELAI_VUE_MS);
+    }
+
+    /// Une chaîne à quatre autorités, un nœud qui n'est PAS le producteur de (1,0).
+    fn noeud_autorite(index: usize) -> (Noeud, Vec<SigKeypair>) {
+        let cles: Vec<SigKeypair> = (0..4).map(|_| SigKeypair::generate()).collect();
+        let genese = ledger::bloc::Bloc::genese_avec_autorites(
+            Vec::new(),
+            cles.iter().map(|k| k.public.clone()).collect(),
+        )
+        .unwrap();
+        let etat = ProvedLedgerState::depuis_genese_depth(&genese, 4).unwrap();
+        let n = Noeud::new(
+            SigKeypair::from_bytes_secret(&cles[index].to_bytes_secret()).unwrap(),
+            etat,
+            [7u8; 32],
+        );
+        (n, cles)
+    }
+
+    #[test]
+    fn tick_incremente_la_vue_au_franchissement() {
+        let (mut n, _) = noeud_autorite(1);
+        n.debut_vue_ms = 0;
+
+        // Avant le délai : rien ne bouge.
+        let _ = n.tick(delai_vue(0) - 1);
+        assert_eq!(n.vue_courante, 0);
+
+        // Au franchissement : la vue monte, le timer se réarme.
+        let _ = n.tick(delai_vue(0));
+        assert_eq!(n.vue_courante, 1);
+        assert_eq!(n.debut_vue_ms, delai_vue(0), "le timer est réarmé");
+    }
+
+    /// Sur une chaîne OUVERTE (aucune autorité), le détecteur de panne est inactif.
+    #[test]
+    fn tick_ne_change_pas_de_vue_sur_chaine_ouverte() {
+        let mut n = noeud_de_test();
+        n.debut_vue_ms = 0;
+        let _ = n.tick(delai_vue(0) + 1_000_000);
+        assert_eq!(n.vue_courante, 0, "pas de changement de vue sans autorités");
     }
 
     /// Le helper de reset remet TOUT l'état de vue à zéro, par un seul point.
