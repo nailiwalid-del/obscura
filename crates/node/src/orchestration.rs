@@ -506,8 +506,9 @@ impl Noeud {
             // NOTRE VOTE. Il compte dans le quorum comme celui de n'importe quelle
             // autre autorité — nous ne nous accordons aucun privilège. L'index est
             // celui du producteur de (prochaine, vue).
-            let index =
-                ((prochaine - 1 + vue as u64) % self.etat.autorites().len() as u64) as usize;
+            let index = ((prochaine - 1 + vue as u64)
+                % self.etat.autorites_a_hauteur(prochaine).len() as u64)
+                as usize;
             bloc.signer_vote(index, &self.identite);
 
             // Le vote que NOUS émettons obéit à la même règle de sûreté que ceux des
@@ -626,7 +627,7 @@ impl Noeud {
         }
 
         // Sommes-nous une autorité, et laquelle ?
-        let Some(notre_index) = self.notre_index() else {
+        let Some(notre_index) = self.notre_index_a(bloc.hauteur) else {
             return Vec::new();
         };
 
@@ -663,7 +664,11 @@ impl Noeud {
         if proposition.id() != vote.id {
             return Vec::new();
         }
-        let Some(pk) = self.etat.autorites().get(vote.index as usize) else {
+        let Some(pk) = self
+            .etat
+            .autorites_a_hauteur(self.etat.hauteur() + 1)
+            .get(vote.index as usize)
+        else {
             // Un index hors liste : le pair nous a fait chercher pour rien.
             self.pairs.ajuster_score(&de, PENALITE_BLOC_INVALIDE);
             return Vec::new();
@@ -728,11 +733,11 @@ impl Noeud {
         }
     }
 
-    /// Notre index dans la liste d'autorités, si nous en sommes une.
-    fn notre_index(&self) -> Option<u16> {
+    /// Notre index dans le comité ACTIF à `hauteur`, si nous en sommes membre.
+    fn notre_index_a(&self, hauteur: u64) -> Option<u16> {
         let notre = self.identite.public.to_bytes();
         self.etat
-            .autorites()
+            .autorites_a_hauteur(hauteur)
             .iter()
             .position(|pk| pk.to_bytes() == notre)
             .map(|i| i as u16)

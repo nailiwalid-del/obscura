@@ -564,6 +564,13 @@ impl ProvedLedgerState {
         }
     }
 
+    /// Comité ACTIF pour un bloc à `hauteur` (version publique de `autorites_a`),
+    /// pour que le nœud calcule index de vote et clés de vérification sur le MÊME
+    /// comité que celui contre lequel `appliquer_bloc` validera le bloc.
+    pub fn autorites_a_hauteur(&self, hauteur: u64) -> &[crypto::sig::SigPublicKey] {
+        self.autorites_a(hauteur)
+    }
+
     /// Quorum requis pour un bloc à `hauteur`, liste active de cette hauteur comprise.
     pub fn quorum_a(&self, hauteur: u64) -> usize {
         quorum_pour(self.autorites_a(hauteur).len())
