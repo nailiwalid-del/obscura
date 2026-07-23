@@ -392,30 +392,36 @@ impl Noeud {
     ///
     /// Retourne le bloc scellé et l'action de diffusion, ou `None` si le mempool ne
     /// contient rien à sceller.
+    /// Point d'entrée OPÉRATEUR du scellement : propose à la vue courante.
     pub fn sceller(&mut self) -> Option<(Bloc, Vec<Action>)> {
-        // ÉLECTION DE PRODUCTEUR : sur une chaîne à autorités, on ne scelle QUE si
-        // la prochaine hauteur nous revient. Produire hors de son tour ne serait
-        // même pas diffusable — chaque récepteur le refuse avant tout coût STARK —
-        // donc on n'y brûle pas un cycle. Chaîne OUVERTE : comportement historique.
+        self.proposer_a_vue(self.vue_courante, 0)
+    }
+
+    /// Construit et propose (ou applique, si quorum 1) un bloc pour
+    /// `(prochaine_hauteur, vue)`. Cœur commun du chemin opérateur (`sceller`) et du
+    /// battement (`tick` → `proposer_si_notre_tour`).
+    ///
+    /// # Deux changements par rapport à J1-a
+    ///
+    /// - la vue est un PARAMÈTRE, plus `0` en dur : le changement de vue produit à
+    ///   `vue_courante` ;
+    /// - sur une chaîne à AUTORITÉS, un mempool vide ne rend plus `None` : on produit
+    ///   un bloc VIDE (le battement, ce qui rend le détecteur de panne trivial). Sur
+    ///   une chaîne OUVERTE, comportement historique conservé (pas de bloc vide).
+    fn proposer_a_vue(&mut self, vue: u32, maintenant_ms: u64) -> Option<(Bloc, Vec<Action>)> {
         let prochaine = self.etat.hauteur() + 1;
-        // VUE 0 : J1-a ne livre pas le protocole de vue (c'est J1-b). Le nœud ne
-        // produit donc que des blocs de vue 0, et n'en accepte pas d'autre tant que
-        // rien ne fait avancer la vue.
-        let vue = 0u32;
+        let a_autorites = !self.etat.autorites().is_empty();
         let doit_signer = match self.etat.producteur_attendu(prochaine, vue) {
             Some(attendu) => {
                 if attendu.to_bytes() != self.identite.public.to_bytes() {
-                    return None;
+                    return None; // pas notre tour à cette vue
                 }
                 true
             }
-            None => false,
+            None => false, // chaîne ouverte
         };
 
         let mut digests = self.mempool.digests();
-        if digests.is_empty() {
-            return None;
-        }
         digests.sort_unstable();
 
         // SÉLECTION SOUS DOUBLE BUDGET : nombre ET octets. Le second est le seul qui
@@ -445,21 +451,26 @@ impl Noeud {
             transactions.push(tx);
             retenus.push(*d);
         }
-        if transactions.is_empty() {
+        // Chaîne OUVERTE sans rien à sceller : pas de bloc vide spontané
+        // (comportement historique). Chaîne à AUTORITÉS : le bloc vide est le
+        // battement, on le produit.
+        if transactions.is_empty() && !a_autorites {
             return None;
         }
         // Seuls les RETENUS quittent le mempool : ce qui n'entrait pas dans ce bloc
         // doit rester candidat pour le suivant, sinon sceller PERDRAIT des paiements.
         let digests = retenus;
 
-        let mut bloc =
-            Bloc::sceller(&self.etat.tete(), self.etat.hauteur() + 1, transactions).ok()?;
+        let mut bloc = Bloc::sceller(&self.etat.tete(), prochaine, transactions).ok()?;
+        // La vue entre dans l'identifiant : la fixer AVANT de signer.
+        bloc.vue = vue;
         if doit_signer {
             bloc.signer_scellement(&self.identite);
             // NOTRE VOTE. Il compte dans le quorum comme celui de n'importe quelle
-            // autre autorité — nous ne nous accordons aucun privilège.
+            // autre autorité — nous ne nous accordons aucun privilège. L'index est
+            // celui du producteur de (prochaine, vue).
             let index =
-                ((self.etat.hauteur() + vue as u64) % self.etat.autorites().len() as u64) as usize;
+                ((prochaine - 1 + vue as u64) % self.etat.autorites().len() as u64) as usize;
             bloc.signer_vote(index, &self.identite);
 
             // Le vote que NOUS émettons obéit à la même règle de sûreté que ceux des
@@ -511,7 +522,7 @@ impl Noeud {
                 self.archive.conserver(&bloc);
                 self.hauteur_max_vue = self.hauteur_max_vue.max(bloc.hauteur);
                 // Auto-application (quorum 1) : la hauteur avance, reset de vue.
-                self.hauteur_avancee(0);
+                self.hauteur_avancee(maintenant_ms);
                 let octets = bloc.to_bytes();
                 let copie = Bloc::from_bytes(&octets).ok()?;
                 Some((bloc, vec![Action::Diffuser(Message::Bloc(Box::new(copie)))]))
@@ -1028,9 +1039,12 @@ impl Noeud {
     }
 
     /// Propose un bloc si nous sommes le producteur de `(prochaine_hauteur,
-    /// vue_courante)`. Stub jusqu'à T5.
-    fn proposer_si_notre_tour(&mut self, _maintenant_ms: u64) -> Vec<Action> {
-        Vec::new()
+    /// vue_courante)`. Appelé par `tick` au changement de vue.
+    fn proposer_si_notre_tour(&mut self, maintenant_ms: u64) -> Vec<Action> {
+        match self.proposer_a_vue(self.vue_courante, maintenant_ms) {
+            Some((_, actions)) => actions,
+            None => Vec::new(),
+        }
     }
 
     /// Déclare la hauteur courante CALÉE. Stub jusqu'à T6.
@@ -1089,6 +1103,46 @@ mod tests {
             [7u8; 32],
         );
         (n, cles)
+    }
+
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
+    fn bloc_vide_produit_sur_chaine_a_autorites() {
+        // Autorité unique (quorum 1), mempool VIDE : sceller produit quand même un
+        // bloc vide et l'applique (le battement).
+        let nous = SigKeypair::generate();
+        let genese =
+            ledger::bloc::Bloc::genese_avec_autorites(Vec::new(), vec![nous.public.clone()])
+                .unwrap();
+        let etat = ProvedLedgerState::depuis_genese_depth(&genese, 4).unwrap();
+        let mut n = Noeud::new(nous, etat, [7u8; 32]);
+        let (bloc, _) = n.sceller().expect("bloc vide produit");
+        assert_eq!(bloc.hauteur, 1);
+        assert!(bloc.transactions.is_empty(), "bloc vide");
+        assert_eq!(n.etat.hauteur(), 1, "appliqué (quorum 1)");
+    }
+
+    /// Chaîne OUVERTE, mempool vide : PAS de bloc vide spontané (historique).
+    #[test]
+    fn pas_de_bloc_vide_sur_chaine_ouverte() {
+        let mut n = noeud_de_test();
+        assert!(n.sceller().is_none(), "chaîne ouverte : rien à sceller");
+    }
+
+    /// Après un changement de vue à 1, si c'est notre tour, la proposition porte la
+    /// vue 1.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
+    fn proposition_porte_la_vue_courante() {
+        // Producteur de (1,1) = autorites[(1-1+1) mod 4] = autorites[1] : nous.
+        let (mut n, _) = noeud_autorite(1);
+        n.debut_vue_ms = 0;
+        let actions = n.tick(delai_vue(0));
+        assert_eq!(n.vue_courante, 1);
+        let a_propose = actions
+            .iter()
+            .any(|a| matches!(a, Action::Diffuser(Message::Proposition(b)) if b.vue == 1));
+        assert!(a_propose, "nous proposons à la vue 1, notre tour");
     }
 
     #[test]
