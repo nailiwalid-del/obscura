@@ -346,16 +346,26 @@ joignables entre elles ; il en existe **au plus un**, par construction.
   rien à réconcilier à la guérison. Le gel est **suspensif**, comme celui d'une
   autorité absente.
 - **Il CONTINUE de servir.** Servir n'exige aucun quorum : `DemandeBloc`,
-  `DemandeHistorique`, annonces et relais de transactions restent assurés. Un
-  nœud minoritaire reste donc utile — et il reste **honnête** : ce qu'il sert est
-  un préfixe correct de la chaîne, jamais une branche à lui. ⚠️ Il est en
-  revanche **en retard sans le savoir**, et un wallet qui s'y synchronise se
-  croira à jour : c'est exactement le mode d'échec que `--temoin` ferme
-  (cf. `docs/THREAT_MODEL.md`).
+  `DemandeHistorique`, annonces et relais de transactions restent assurés dans
+  la mesure où le rôle concerné est actif — `DemandeHistorique` suppose
+  `--archiver` (rôle optionnel, OFF par défaut) et reste soumis à
+  l'étranglement par groupe réseau (`node::etranglement`) : à crédit épuisé, le
+  nœud répond par le SILENCE, jamais par une réponse courte ni une erreur. Un
+  nœud minoritaire reste donc utile dans ces limites — et il reste
+  **honnête** : ce qu'il sert est un préfixe correct de la chaîne, jamais une
+  branche à lui. ⚠️ Il est en revanche **en retard sans le savoir**, et un
+  wallet qui s'y synchronise se croira à jour : c'est exactement le mode
+  d'échec que `--temoin` ferme (cf. `docs/THREAT_MODEL.md`).
 - **Il ne FORKE jamais.** L'état est append-only et la finalité est instantanée :
-  il n'existe aucun chemin par lequel un nœud applique un bloc non certifié. La
-  sûreté ne repose donc pas sur une détection de partition — le nœud n'a même pas
-  besoin de savoir qu'il est en minorité.
+  **sur une chaîne à autorités**, il n'existe aucun chemin par lequel un nœud
+  applique un bloc non certifié. La sûreté ne repose donc pas sur une détection
+  de partition — le nœud n'a même pas besoin de savoir qu'il est en minorité.
+  ⚠️ Sur une **chaîne OUVERTE** (genèse sans autorités, défaut du testnet local),
+  ce paragraphe entier ne s'applique pas : ni scellement ni certificat n'y sont
+  exigés (`autorites_actives.is_empty()` ⇒ `certificat` doit être `None`, jamais
+  vérifié pour un quorum), c'est le comportement historique, ordre CONVENU pas
+  DÉFENDU, et son absence de fork tient à une autre raison — le mempool ne
+  bifurque pas.
 - **Le côté majoritaire avance normalement**, y compris quand la partition lui a
   pris le producteur du tour : le changement de vue le contourne (J1-b2).
 - **Partition sans côté majoritaire** (deux moitiés, trois tiers…) : **personne**

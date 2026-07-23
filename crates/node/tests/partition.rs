@@ -61,7 +61,10 @@ const HORLOGE_MAJORITE: u64 = 30_000;
 const BOND_MINORITE_MS: u64 = 120_000;
 
 /// Délai RÉEL accordé aux échanges de sockets (le consensus, lui, est en temps injecté).
-const PATIENCE: Duration = Duration::from_secs(120);
+/// Généreux mais pas 120 s : le test tourne en ≈0,10 s en régime normal, donc une
+/// régression sur une assertion négative brûlerait sinon deux minutes avant de
+/// rendre RED.
+const PATIENCE: Duration = Duration::from_secs(15);
 
 fn repertoire(nom: &str) -> std::path::PathBuf {
     let p = std::env::temp_dir().join(format!("obscura_partition_{}_{}", nom, std::process::id()));
@@ -289,9 +292,14 @@ fn minorite_sarrete_majorite_avance_puis_convergence() {
     assert_ne!(
         propose.id(),
         bloc1_majorite.id(),
-        "ce bloc EST un concurrent de celui de la majorité : appliqué, il ferait une \
-         divergence DÉFINITIVE sur un état append-only. C'est bien un fork qui est \
-         évité, pas une coïncidence de contenu"
+        "cette assertion DOCUMENTE la divergence de vue (0 côté isolée, 1 côté \
+         majorité qui a dû contourner le producteur) : elle ne la DISCRIMINE pas — \
+         les deux blocs sont vides, même parent, même hauteur, et `vue` entre dans \
+         l'identifiant, donc l'inégalité est structurelle, pas un fait sur le \
+         contenu. Corollaire : si l'isolée avait produit à la MÊME vue, les deux \
+         id auraient coïncidé (blocs vides). Ce qui empêche le fork n'est pas cette \
+         différence d'id, c'est que la minorité n'APPLIQUE jamais son propre bloc \
+         (vérifié plus bas)"
     );
     isolee.executer(actions);
     assert_eq!(
