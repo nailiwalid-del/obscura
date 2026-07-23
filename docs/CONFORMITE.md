@@ -71,6 +71,7 @@ défaut n'expose que la surface de consensus, et c'est un invariant vérifié en
 
 | Sujet | Document |
 |---|---|
+| Rôles et invariants par crate | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
 | Protocole, formats, versioning | [`PROTOCOL.md`](PROTOCOL.md) |
 | Modèle de menace et limites connues | [`THREAT_MODEL.md`](THREAT_MODEL.md) |
 | Énoncé prouvé par le circuit, argument HVZK | [`STARK_STATEMENT.md`](STARK_STATEMENT.md) |
