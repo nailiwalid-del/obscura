@@ -177,6 +177,76 @@ version précédente intacte, jamais un fichier à moitié écrit. Sauvegarder �
 chaud est donc sûr. L'état est enregistré toutes les 30 s ; au pire, le nœud
 repart de la sauvegarde précédente et rattrape auprès de ses pairs.
 
+## Mettre à jour le logiciel
+
+Un réseau vivant ne s'arrête pas pour être mis à jour : plusieurs versions du
+nœud tournent forcément côte à côte le temps du déploiement. Faire évoluer le
+logiciel sans le forker exige de savoir, AVANT de déployer, dans laquelle des
+deux natures suivantes tombe le changement — les confondre EST un fork.
+
+### (a) Changement compatible fil
+
+N'affecte **ni le format de bloc ni les règles de validation** : journalisation,
+CLI, une métrique, l'ajout d'un message applicatif qui ne change rien au
+décodage de ceux qui existent déjà (un nouveau tag au-delà de `DERNIER_TAG`,
+cf. `crates/node/src/message.rs`). Se déploie **nœud par nœud, dans n'importe
+quel ordre** : c'est exactement le cas que couvre la tolérance de version
+réactive du protocole (`MessageError::version_inconnue()`) — un tag ou une
+version inconnus sont traités comme un message **du futur**, jamais comme une
+faute, et n'entraînent donc **aucune sanction** ni bannissement. Un pair resté
+en arrière continue de servir l'ancien format pendant que les autres migrent ;
+rien n'oblige à mettre à jour tout le monde au même instant.
+
+### (b) Rupture de consensus
+
+Change une **règle de validation** ou le **format de bloc**. Deux exemples
+tirés du dépôt, pour reconnaître le cas :
+
+- **Un bump de `VERSION_BLOC`** (`crates/ledger/src/bloc.rs`) : le passage de
+  `0x04` à `0x05` lors de J1-c (changement d'autorités certifié) en est
+  l'exemple direct. La version périmée (`VERSION_BLOC_PERIMEE`) est **refusée
+  par son nom** dès le décodage — elle ne cohabite jamais avec la version
+  courante, il n'existe pas de fenêtre où les deux formats sont valides à la
+  fois.
+- **Tout changement touchant `crates/ledger/src/proved_state.rs`**
+  (`appliquer_bloc` et les règles qu'il impose à un bloc pour l'accepter) est
+  **suspect par défaut** : c'est la porte unique par laquelle un bloc devient
+  ou non partie de l'état.
+
+À l'inverse, un changement purement **local** à un nœud — le format d'une
+ligne de statut, une option CLI qui ne touche à rien sur le fil — n'en est pas
+une, même s'il modifie du code dans les mêmes crates.
+
+### La règle du testnet fédéré : une rupture = une nouvelle chaîne
+
+Périmètre B ne fait **pas** d'activation par hauteur (pas de hard-fork
+coordonné) : c'est explicitement **hors périmètre**. La seule réponse à une
+rupture de consensus est de **graver une nouvelle genèse** et d'y migrer — ce
+qui est cohérent avec le reste du projet : une chaîne de testnet est déjà
+`consommable` par conception (voir « Procédure de reset »,
+[`docs/TESTNET.md`](TESTNET.md)), et les autorités comme les allocations sont
+gravées dans l'identifiant de genèse — les changer EST déjà, structurellement,
+changer de chaîne. Une rupture de règle de validation n'est qu'un cas de plus
+qui appelle la même procédure, pas un cas à part.
+
+En pratique : annoncez l'arrêt de l'ancienne chaîne, fabriquez la nouvelle
+genèse (`obscura-genese`, voir « Créer la genèse » ci-dessus) avec le logiciel
+mis à jour, et redémarrez tous les nœuds dessus. Ne déployez **jamais** une
+rupture de consensus progressivement : tant qu'une partie du réseau valide
+encore l'ancienne règle, les deux moitiés produisent des blocs que l'autre
+refuse — un fork silencieux, indiscernable au démarrage d'une simple
+désynchronisation (cf. « `désaccords` augmente » ci-dessous).
+
+### Lien avec la négociation de version
+
+La tolérance de version ci-dessus est **réactive** : elle empêche qu'un pair à
+jour sanctionne un pair en retard, mais ne dit à personne QUI parle QUELLE
+version. Une négociation de version explicite à l'établissement de la
+connexion (message dédié, prévue au périmètre B) fermera ce manque : elle
+permettra de **constater** la composition réelle du réseau — combien de pairs
+ont déjà migré — avant de décider qu'un déploiement nœud par nœud est terminé,
+ou qu'une rupture peut être annoncée sans risque de fork partiel.
+
 ## Dépanner
 
 **Le nœud démarre puis ne fait rien.** Regardez `liens`. À 0, aucun pair n'est
