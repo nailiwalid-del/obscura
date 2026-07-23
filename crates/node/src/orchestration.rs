@@ -178,9 +178,9 @@ impl Noeud {
         self.votes = votes;
     }
 
-    /// Position du dernier vote émis — pour le journal d'exploitation.
-    pub fn position_de_vote(&self) -> (u64, u32) {
-        self.votes.position()
+    /// Dernière hauteur votée — pour le journal d'exploitation.
+    pub fn hauteur_de_vote(&self) -> u64 {
+        self.votes.hauteur()
     }
 
     /// Mémorise l'adresse OBSERVÉE d'un pair connecté (entrant comme sortant).
@@ -389,10 +389,10 @@ impl Noeud {
             // Le vote que NOUS émettons obéit à la même règle de sûreté que ceux des
             // autres : on ne propose pas à une position déjà promise ailleurs.
             let id = bloc.id();
-            if !self.votes.peut_voter(bloc.hauteur, vue, &id) {
+            if !self.votes.peut_voter(bloc.hauteur, &id) {
                 return None;
             }
-            self.votes.enregistrer(bloc.hauteur, vue, id);
+            self.votes.enregistrer(bloc.hauteur, id);
 
             // QUORUM 1 (n ≤ 3, donc f = 0) : notre vote suffit, on applique et on
             // diffuse comme avant. AU-DELÀ, il faut PROPOSER et attendre les autres —
@@ -494,10 +494,10 @@ impl Noeud {
         let id = bloc.id();
         // LA RÈGLE DE SÛRETÉ. Un refus ici n'est pas une faute du proposeur : c'est
         // nous qui avons déjà promis ailleurs.
-        if !self.votes.peut_voter(bloc.hauteur, bloc.vue, &id) {
+        if !self.votes.peut_voter(bloc.hauteur, &id) {
             return Vec::new();
         }
-        self.votes.enregistrer(bloc.hauteur, bloc.vue, id);
+        self.votes.enregistrer(bloc.hauteur, id);
 
         // PERSISTER D'ABORD, ÉMETTRE ENSUITE. L'ordre des actions porte la garantie ;
         // l'exécuteur abandonne la suite si l'écriture échoue.
@@ -1322,7 +1322,7 @@ mod tests {
 
         // On a déjà promis, à la hauteur 1 vue 0, pour un AUTRE bloc.
         let mut registre = crate::votes::RegistreVotes::neuf();
-        registre.enregistrer(1, 0, [0xAB; 64]);
+        registre.enregistrer(1, [0xAB; 64]);
         n.adopter_votes(registre);
 
         let bloc = proposition_de(&n, &cles[0]);
