@@ -399,7 +399,19 @@ impl Noeud {
     /// contient rien à sceller.
     /// Point d'entrée OPÉRATEUR du scellement : propose à la vue courante.
     pub fn sceller(&mut self) -> Option<(Bloc, Vec<Action>)> {
-        self.proposer_a_vue(self.vue_courante, 0)
+        self.proposer_a_vue(self.vue_courante, 0, None)
+    }
+
+    /// Propose un CHANGEMENT D'AUTORITÉS (J1-c) : scelle un bloc de reconfiguration à
+    /// notre tour, se certifie (quorum 1) ou le propose (au-delà). Décision
+    /// d'opérateur, exactement comme `sceller`. `None` si ce n'est pas notre tour ou
+    /// sur chaîne ouverte.
+    pub fn proposer_changement(
+        &mut self,
+        nouvelles: Vec<crypto::sig::SigPublicKey>,
+        maintenant_ms: u64,
+    ) -> Option<(Bloc, Vec<Action>)> {
+        self.proposer_a_vue(self.vue_courante, maintenant_ms, Some(nouvelles))
     }
 
     /// Construit et propose (ou applique, si quorum 1) un bloc pour
@@ -413,7 +425,19 @@ impl Noeud {
     /// - sur une chaîne à AUTORITÉS, un mempool vide ne rend plus `None` : on produit
     ///   un bloc VIDE (le battement, ce qui rend le détecteur de panne trivial). Sur
     ///   une chaîne OUVERTE, comportement historique conservé (pas de bloc vide).
-    fn proposer_a_vue(&mut self, vue: u32, maintenant_ms: u64) -> Option<(Bloc, Vec<Action>)> {
+    ///
+    /// # `changement` (J1-c)
+    ///
+    /// `Some(nouvelles)` produit un bloc de RECONFIGURATION (vide de transactions,
+    /// via `Bloc::sceller_changement`) plutôt qu'un bloc de sélection mempool. Le
+    /// chemin sign/vote/propose/apply qui suit est COMMUN aux deux : une
+    /// reconfiguration se certifie exactement comme un bloc ordinaire.
+    fn proposer_a_vue(
+        &mut self,
+        vue: u32,
+        maintenant_ms: u64,
+        changement: Option<Vec<crypto::sig::SigPublicKey>>,
+    ) -> Option<(Bloc, Vec<Action>)> {
         let prochaine = self.etat.hauteur() + 1;
         let a_autorites = !self.etat.autorites().is_empty();
         let doit_signer = match self.etat.producteur_attendu(prochaine, vue) {
@@ -426,47 +450,55 @@ impl Noeud {
             None => false, // chaîne ouverte
         };
 
-        let mut digests = self.mempool.digests();
-        digests.sort_unstable();
-
-        // SÉLECTION SOUS DOUBLE BUDGET : nombre ET octets. Le second est le seul qui
-        // garantisse un bloc DIFFUSABLE — à ≈68 Kio la transaction, la borne de 512
-        // est atteinte des dizaines de fois après le cadre réseau. On s'arrête au
-        // premier dépassement plutôt que de continuer à chercher plus petit : l'ordre
-        // est celui du digest, le fausser ici rendrait deux nœuds divergents.
-        let mut octets = ledger::bloc::SURCOUT_BLOC_VIDE;
-        let mut transactions: Vec<circuit::ProvedTx> = Vec::new();
-        let mut retenus: Vec<[u8; 64]> = Vec::new();
-        for d in &digests {
-            if transactions.len() >= ledger::bloc::MAX_TX_PAR_BLOC {
-                break;
+        let (mut bloc, digests): (Bloc, Vec<[u8; 64]>) = if let Some(nouvelles) = changement {
+            // RECONFIGURATION : bloc VIDE de transactions, changement attaché. Refusé
+            // hors chaîne à autorités (rien à reconfigurer).
+            if !a_autorites {
+                return None;
             }
-            let Some(brute) = self.mempool.get(d) else {
-                continue;
-            };
-            let o = brute.to_bytes();
-            let cout = ledger::bloc::cout_transaction(o.len());
-            if octets + cout > ledger::bloc::MAX_OCTETS_BLOC {
-                break;
-            }
-            let Ok(tx) = ProvedTx::from_bytes(&o) else {
-                continue;
-            };
-            octets += cout;
-            transactions.push(tx);
-            retenus.push(*d);
-        }
-        // Chaîne OUVERTE sans rien à sceller : pas de bloc vide spontané
-        // (comportement historique). Chaîne à AUTORITÉS : le bloc vide est le
-        // battement, on le produit.
-        if transactions.is_empty() && !a_autorites {
-            return None;
-        }
-        // Seuls les RETENUS quittent le mempool : ce qui n'entrait pas dans ce bloc
-        // doit rester candidat pour le suivant, sinon sceller PERDRAIT des paiements.
-        let digests = retenus;
+            let bloc = Bloc::sceller_changement(&self.etat.tete(), prochaine, nouvelles).ok()?;
+            (bloc, Vec::new())
+        } else {
+            let mut digests = self.mempool.digests();
+            digests.sort_unstable();
 
-        let mut bloc = Bloc::sceller(&self.etat.tete(), prochaine, transactions).ok()?;
+            // SÉLECTION SOUS DOUBLE BUDGET : nombre ET octets. Le second est le seul
+            // qui garantisse un bloc DIFFUSABLE — à ≈68 Kio la transaction, la borne
+            // de 512 est atteinte des dizaines de fois après le cadre réseau. On
+            // s'arrête au premier dépassement plutôt que de continuer à chercher plus
+            // petit : l'ordre est celui du digest, le fausser ici rendrait deux nœuds
+            // divergents.
+            let mut octets = ledger::bloc::SURCOUT_BLOC_VIDE;
+            let mut transactions: Vec<circuit::ProvedTx> = Vec::new();
+            let mut retenus: Vec<[u8; 64]> = Vec::new();
+            for d in &digests {
+                if transactions.len() >= ledger::bloc::MAX_TX_PAR_BLOC {
+                    break;
+                }
+                let Some(brute) = self.mempool.get(d) else {
+                    continue;
+                };
+                let o = brute.to_bytes();
+                let cout = ledger::bloc::cout_transaction(o.len());
+                if octets + cout > ledger::bloc::MAX_OCTETS_BLOC {
+                    break;
+                }
+                let Ok(tx) = ProvedTx::from_bytes(&o) else {
+                    continue;
+                };
+                octets += cout;
+                transactions.push(tx);
+                retenus.push(*d);
+            }
+            // Chaîne OUVERTE sans rien à sceller : pas de bloc vide spontané
+            // (comportement historique). Chaîne à AUTORITÉS : le bloc vide est le
+            // battement, on le produit.
+            if transactions.is_empty() && !a_autorites {
+                return None;
+            }
+            let bloc = Bloc::sceller(&self.etat.tete(), prochaine, transactions).ok()?;
+            (bloc, retenus)
+        };
         // La vue entre dans l'identifiant : la fixer AVANT de signer.
         bloc.vue = vue;
         if doit_signer {
@@ -489,7 +521,7 @@ impl Noeud {
             // QUORUM 1 (n ≤ 3, donc f = 0) : notre vote suffit, on applique et on
             // diffuse comme avant. AU-DELÀ, il faut PROPOSER et attendre les autres —
             // c'est tout l'objet de J1-b1.
-            if self.etat.quorum_requis() > 1 {
+            if self.etat.quorum_a(prochaine) > 1 {
                 self.proposition_en_cours = Some(
                     Bloc::from_bytes(&bloc.to_bytes()).expect("bloc que nous venons de produire"),
                 );
@@ -646,7 +678,7 @@ impl Noeud {
         // Table indexée : recevoir deux fois le même votant ne le compte qu'une fois.
         let recus = self.votes_recus.entry(vote.id).or_default();
         recus.insert(vote.index, vote.signature);
-        if recus.len() < self.etat.quorum_requis() {
+        if recus.len() < self.etat.quorum_a(self.etat.hauteur() + 1) {
             return Vec::new();
         }
 
@@ -659,7 +691,7 @@ impl Noeud {
         // signatures PQ ne s'agrègent pas — chaque vote surnuméraire serait de la
         // bande passante et une vérification en plus, pour rien. On pose les
         // `quorum` plus petits index, triés.
-        let requis = self.etat.quorum_requis();
+        let requis = self.etat.quorum_a(self.etat.hauteur() + 1);
         let mut votants: Vec<u16> = recus.keys().copied().collect();
         votants.sort_unstable();
         votants.truncate(requis);
@@ -1065,7 +1097,7 @@ impl Noeud {
     /// Propose un bloc si nous sommes le producteur de `(prochaine_hauteur,
     /// vue_courante)`. Appelé par `tick` au changement de vue.
     fn proposer_si_notre_tour(&mut self, maintenant_ms: u64) -> Vec<Action> {
-        match self.proposer_a_vue(self.vue_courante, maintenant_ms) {
+        match self.proposer_a_vue(self.vue_courante, maintenant_ms, None) {
             Some((_, actions)) => actions,
             None => Vec::new(),
         }
@@ -1851,6 +1883,41 @@ mod tests {
             }
             autres => panic!("diffusion attendue, reçu {} actions", autres.len()),
         }
+    }
+
+    /// Une AUTORITÉ UNIQUE reconfigure la chaîne : elle scelle un bloc de changement,
+    /// se certifie (quorum 1), l'applique, et le diffuse. Le pendant est enregistré.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
+    fn proposer_changement_auto_applique_a_n1() {
+        let nous = SigKeypair::generate();
+        let nous_pub = nous.public.clone();
+        let genese =
+            ledger::bloc::Bloc::genese_avec_autorites(Vec::new(), vec![nous_pub.clone()]).unwrap();
+        let mut n = Noeud::new(
+            nous,
+            ProvedLedgerState::depuis_genese_depth(&genese, 4).unwrap(),
+            [3u8; 32],
+        );
+        let nouvelle = SigKeypair::generate().public;
+        let (bloc, actions) = n
+            .proposer_changement(vec![nouvelle.clone()], 0)
+            .expect("notre tour : un bloc de reconfiguration");
+        assert_eq!(bloc.hauteur, 1);
+        assert!(bloc.transactions.is_empty());
+        assert_eq!(bloc.changement_autorites.as_ref().unwrap().len(), 1);
+        assert_eq!(n.etat.hauteur(), 1, "appliqué à notre état");
+        assert!(matches!(
+            actions.as_slice(),
+            [Action::Diffuser(Message::Bloc(_))]
+        ));
+        // Le changement est enregistré : quorum à la hauteur d'effet = 1 (nouvelle
+        // liste n=1).
+        assert_eq!(
+            n.etat
+                .quorum_a(1 + ledger::proved_state::DELAI_CHANGEMENT_AUTORITES),
+            1
+        );
     }
 
     /// Un bloc qui ne s'enchaîne PAS ne pénalise pas.
