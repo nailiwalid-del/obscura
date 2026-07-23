@@ -217,7 +217,35 @@ implémentée. `extension` est réservée et entre dans l'`id`, donc le format n
 pas refondu — mais la chaîne, elle, sera refaite. Fonctionnement normal d'un
 testnet, **à condition que ce soit écrit d'avance** (c'est fait dans `TESTNET.md`).
 
-### Cycle 5 — J3, consensus périmètre B — **taille L**
+### Cycle 5 — J3, consensus périmètre B — ✅ **CLOS le 2026-07-24** (PR #27)
+
+**Livré.** Les trois chantiers sont faits et fusionnés :
+- **Partitions** — la minorité scelle mais n'applique jamais, et converge à la
+  guérison sur la MÊME tête ET la même racine (`crates/node/tests/partition.rs`,
+  sockets réelles). Test à dents prouvées **par mutation du code de production**.
+  Politique de minorité écrite. *Non couvert et dit comme tel : la partition
+  ÉQUILIBRÉE (2/2) est documentée, pas testée.*
+- **Mise à jour** — procédure *compatible fil* vs *rupture de consensus*
+  (= nouvelle chaîne en périmètre B) dans `OPERATEUR.md`.
+- **Négociation de version** — au niveau NODE, **`crates/net` intact** (invariant
+  « pur transport » préservé). Règle **asymétrique** : seul le connecteur annonce,
+  l'accepteur répond une fois ; refus sans sanction ; absence jamais exigée.
+
+⚠️ **Deux erreurs trouvées par revue adversariale, à ne pas rejouer.** (1) Émettre
+spontanément en tête casse les clients « envoie puis raccroche » : octets non lus →
+`RST` → le nœud jette son tampon → **transaction perdue**. (2) L'argument qui
+justifiait la parade — « un client muet ne reçoit jamais rien de non sollicité » —
+était **FAUX** (`Action::Diffuser` atteint les liens ENTRANTS, pour des causes
+indépendantes du client) et avait été promu au rang de **garantie normative**. Le
+format était bon ; c'est l'argument qui ne l'était pas. Leçon : *un argument de
+sûreté non vérifié qui entre dans `docs/` est pire que pas d'argument.*
+
+**Limites publiées** : `VERSION_MIN_ACCEPTEE` n'est opposable qu'à qui annonce
+(coordination, jamais contrôle d'accès) ; le budget de messages ignorés en
+synchronisation n'est dimensionné par aucune mesure ; la fenêtre RST résiduelle est
+réduite, pas fermée.
+
+<details><summary>État avant livraison (archive)</summary>
 
 **État vérifié.** `Message::version_inconnue()` distingue déjà « version future »
 de « malformation » et ne sanctionne pas la première — suffisant pour ne pas
@@ -239,6 +267,13 @@ jour sans fork non intentionnel.
 **Hors périmètre (A) :** admission ouverte, anti-Sybil économique, et leur coût.
 **Coût :** le plus élevé en exploitation multi-nœuds réelle. C'est le seul cycle
 de taille L.
+
+</details>
+
+**Critère de franchissement (B) : ✅ ATTEINT** — le réseau survit à une partition
+(testé) et se met à jour sans fork non intentionnel (procédure écrite + négociation
+de version livrée). **Hors périmètre (A), inchangé :** admission ouverte et
+anti-Sybil économique — et ADR-002 a établi que **J2 ne les livre pas**.
 
 ---
 
@@ -305,18 +340,24 @@ fichiers en cours ont été commités puis migrés ; la spec combinée « clôtu
 voie sans regret » a été écrite, planifiée, **exécutée et fusionnée** (PR #25) ; et
 le loose end J1-c s'est réglé du même geste. **Cycles 1, 2 et 3 clos.**
 
-Reste, dans l'ordre recommandé :
+**Mise à jour du 2026-07-24 — le cycle 5 (J3) est CLOS** (PR #27), déviation
+net→node validée et exécutée. **Quatre cycles sur cinq sont fermés.**
+
+**Il ne reste qu'un chantier avant l'état B :**
 
 1. **Cycle 4 — T5 (ouverture).** Spec et plan écrits
-   (`plans/2026-07-23-t5-ouverture-testnet.md`). Prérequis d'exécution :
-   `minisign` disponible sur la machine. C'est la première irréversibilité réelle.
-2. **Cycle 5 — J3 (consensus B).** Spec et plan écrits
-   (`plans/2026-07-23-j3-consensus-perimetre-b.md`). ⚠️ **À trancher avant
-   exécution** : le plan dévie de sa spec en plaçant la négociation de version au
-   niveau NODE plutôt que dans le handshake `net`, pour préserver l'invariant
-   « net = pur transport ». La déviation est flaggée en tête du plan.
-3. Après quoi **l'état B est atteint**, et il ne reste que la décision écrite
+   (`plans/2026-07-23-t5-ouverture-testnet.md`), non exécutés. **Prérequis
+   BLOQUANT : `minisign` n'est pas installé** sur la machine de développement — le
+   plan en dépend de bout en bout (le test de la Tâche 1 signe avec une clé jetable
+   et vérifie qu'un octet altéré est rejeté). C'est la première irréversibilité
+   réelle du projet : elle gèle une genèse.
+2. Après T5, **l'état B est atteint**, et il ne reste que la décision écrite
    B → A.
+
+⚠️ **Rappel du gate hérité de D-final** : avant d'exécuter `obscura-genese` en
+production, rejouer et CONSIGNER les critères de `BACKEND_PQ.md`, même si la réponse
+reste « toujours non ». C'est l'étape 1 du runbook `docs/OUVERTURE.md` que T5 doit
+produire.
 
 ## Ce que ce document ne fait pas
 
