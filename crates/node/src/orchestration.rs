@@ -139,6 +139,20 @@ pub struct Noeud {
     /// `None` si nous ne sommes pas le producteur du tour, ou si le bloc est déjà
     /// certifié. Conservée entière parce que le certificat s'assemble dessus.
     proposition_en_cours: Option<Bloc>,
+    /// Vue de la hauteur qu'on essaie d'atteindre (ADR J1-b2). Remise à 0 par
+    /// [`Noeud::hauteur_avancee`] à chaque hauteur appliquée.
+    vue_courante: u32,
+    /// Uptime (ms) auquel la fenêtre `(hauteur, vue)` courante a commencé. Réarmé à
+    /// chaque avancée de hauteur ET à chaque adoption d'une vue future — sans quoi
+    /// une vue adoptée expirerait au tick suivant et monterait en boucle.
+    debut_vue_ms: u64,
+    /// `true` une fois le CALAGE de la hauteur courante déjà signalé, pour ne le
+    /// compter qu'une fois. Remis à `false` par [`Noeud::hauteur_avancee`].
+    calage_signale: bool,
+    /// Hauteurs déclarées CALÉES (vue plafonnée sans avancée). Non nul = un split
+    /// de votes a figé une hauteur, une nouvelle chaîne est nécessaire. Compteur
+    /// d'exploitation, remonté au statut.
+    hauteurs_calees: u64,
 }
 
 /// Nombre maximal d'adresses de pairs mémorisées.
@@ -166,7 +180,35 @@ impl Noeud {
             votes: RegistreVotes::neuf(),
             votes_recus: HashMap::new(),
             proposition_en_cours: None,
+            vue_courante: 0,
+            debut_vue_ms: 0,
+            calage_signale: false,
+            hauteurs_calees: 0,
         }
+    }
+
+    /// Point d'entrée UNIQUE du reset de vue. À appeler après CHAQUE
+    /// `appliquer_bloc` réussi, par tous les chemins — DRY, et pas d'oubli
+    /// possible : oublier le reset dans un seul chemin laisserait un nœud
+    /// désynchronisé.
+    fn hauteur_avancee(&mut self, maintenant_ms: u64) {
+        self.vue_courante = 0;
+        self.debut_vue_ms = maintenant_ms;
+        self.calage_signale = false;
+        self.votes_recus.clear();
+        self.proposition_en_cours = None;
+    }
+
+    /// Vue courante de la hauteur qu'on tente d'atteindre — pour le journal et les
+    /// tests.
+    pub fn vue_courante(&self) -> u32 {
+        self.vue_courante
+    }
+
+    /// Nombre de hauteurs calées — pour le statut d'exploitation. Non nul appelle
+    /// une nouvelle chaîne.
+    pub fn hauteurs_calees(&self) -> u64 {
+        self.hauteurs_calees
     }
 
     /// Installe le registre de votes chargé depuis le disque.
@@ -254,13 +296,13 @@ impl Noeud {
             Message::Annonce(digests) => self.sur_annonce(de, digests),
             Message::Demande(digests) => self.sur_demande(de, digests),
             Message::Transaction(tx) => self.sur_transaction(de, *tx, maintenant_ms),
-            Message::Bloc(bloc) => self.sur_bloc(de, *bloc),
+            Message::Bloc(bloc) => self.sur_bloc(de, *bloc, maintenant_ms),
             // Câblés par J1-b1 tâche 3. Ignorés SANS pénalité d'ici là : un pair
             // qui les émet parle une version PLUS RÉCENTE du protocole, pas une
             // version fautive — le sanctionner partitionnerait le réseau à la
             // première mise à jour.
             Message::Proposition(bloc) => self.sur_proposition(de, *bloc),
-            Message::Vote(v) => self.sur_vote(de, *v),
+            Message::Vote(v) => self.sur_vote(de, *v, maintenant_ms),
             Message::DemandeBloc { hauteur } => self.sur_demande_bloc(de, hauteur, maintenant_ms),
             Message::DemandeHistorique { hauteur } => {
                 self.sur_demande_historique(de, hauteur, maintenant_ms)
@@ -434,6 +476,8 @@ impl Noeud {
                 // que des pairs en retard demanderont le plus probablement.
                 self.archive.conserver(&bloc);
                 self.hauteur_max_vue = self.hauteur_max_vue.max(bloc.hauteur);
+                // Auto-application (quorum 1) : la hauteur avance, reset de vue.
+                self.hauteur_avancee(0);
                 let octets = bloc.to_bytes();
                 let copie = Bloc::from_bytes(&octets).ok()?;
                 Some((bloc, vec![Action::Diffuser(Message::Bloc(Box::new(copie)))]))
@@ -515,7 +559,7 @@ impl Noeud {
     }
 
     /// Reçoit un VOTE : l'accumule, et diffuse le bloc certifié au quorum.
-    fn sur_vote(&mut self, de: PeerId, vote: Vote) -> Vec<Action> {
+    fn sur_vote(&mut self, de: PeerId, vote: Vote, maintenant_ms: u64) -> Vec<Action> {
         // Nous ne collectons que pour NOTRE proposition en cours. Un vote pour autre
         // chose est ignoré sans pénalité : il peut viser un autre producteur.
         let Some(proposition) = self.proposition_en_cours.as_ref() else {
@@ -555,9 +599,6 @@ impl Noeud {
                 bloc.poser_vote(index as usize, sig.clone());
             }
         }
-        self.proposition_en_cours = None;
-        self.votes_recus.clear();
-
         // On l'applique chez nous d'abord : diffuser un bloc qu'on n'a pas su
         // appliquer soi-même reviendrait à demander aux autres de nous croire.
         match self.etat.appliquer_bloc(&bloc) {
@@ -568,12 +609,21 @@ impl Noeud {
                 self.mempool.purger(&self.etat);
                 self.archive.conserver(&bloc);
                 self.hauteur_max_vue = self.hauteur_max_vue.max(bloc.hauteur);
+                // Reset de vue par le point d'entrée unique (vide aussi votes_recus
+                // et proposition_en_cours).
+                self.hauteur_avancee(maintenant_ms);
                 match Bloc::from_bytes(&bloc.to_bytes()) {
                     Ok(copie) => vec![Action::Diffuser(Message::Bloc(Box::new(copie)))],
                     Err(_) => Vec::new(),
                 }
             }
-            Err(_) => Vec::new(),
+            // Un bloc que NOUS avons assemblé mais échouons à appliquer est un bug
+            // interne : on nettoie l'état de collecte pour ne pas boucler dessus.
+            Err(_) => {
+                self.votes_recus.clear();
+                self.proposition_en_cours = None;
+                Vec::new()
+            }
         }
     }
 
@@ -626,7 +676,7 @@ impl Noeud {
     ///
     /// Le rattrapage progresse donc d'un bloc par échange, et s'éteint dès qu'un
     /// échange ne fait plus avancer la hauteur.
-    fn sur_bloc(&mut self, de: PeerId, bloc: Bloc) -> Vec<Action> {
+    fn sur_bloc(&mut self, de: PeerId, bloc: Bloc, maintenant_ms: u64) -> Vec<Action> {
         // Enregistré AVANT toute décision : même un bloc refusé nous apprend qu'une
         // chaîne plus longue existe, et c'est précisément le cas où on en a besoin.
         self.hauteur_max_vue = self.hauteur_max_vue.max(bloc.hauteur);
@@ -640,6 +690,8 @@ impl Noeud {
                 }
                 self.mempool.purger(&self.etat);
                 self.archive.conserver(&bloc);
+                // Reset de vue : la hauteur a avancé, on repart en vue 0.
+                self.hauteur_avancee(maintenant_ms);
 
                 let mut actions = Vec::new();
                 match Bloc::from_bytes(&bloc.to_bytes()) {
@@ -942,6 +994,26 @@ mod tests {
             ProvedLedgerState::with_depth(4),
             [7u8; 32],
         )
+    }
+
+    /// Le helper de reset remet TOUT l'état de vue à zéro, par un seul point.
+    #[test]
+    fn hauteur_avancee_remet_la_vue_a_zero() {
+        let mut n = noeud_de_test();
+        n.vue_courante = 5;
+        n.debut_vue_ms = 100;
+        n.calage_signale = true;
+        n.votes_recus.insert([1u8; 64], Default::default());
+        n.proposition_en_cours =
+            Some(ledger::bloc::Bloc::sceller(&n.etat.tete(), 1, Vec::new()).unwrap());
+
+        n.hauteur_avancee(999);
+
+        assert_eq!(n.vue_courante, 0);
+        assert_eq!(n.debut_vue_ms, 999);
+        assert!(!n.calage_signale);
+        assert!(n.votes_recus.is_empty());
+        assert!(n.proposition_en_cours.is_none());
     }
 
     fn pair(n: u8) -> (PeerId, SocketAddr) {
