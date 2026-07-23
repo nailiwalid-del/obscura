@@ -285,6 +285,12 @@ pub enum BlocConstructionError {
     TropDOctets { octets: usize },
     #[error("{recues} autorités (borne : {MAX_AUTORITES})")]
     TropDAutorites { recues: usize },
+    #[error("liste de changement d'autorités vide (interdite)")]
+    ChangementListeVide,
+    #[error("clé d'autorité en double dans la liste")]
+    AutoriteDupliquee,
+    #[error("{recues} autorités dans le changement (borne : {MAX_AUTORITES})")]
+    ChangementTropDAutorites { recues: usize },
 }
 
 /// Une émission : un commitment de note créé EX NIHILO, avec son enveloppe chiffrée.
@@ -508,6 +514,9 @@ impl Bloc {
                 recues: autorites.len(),
             });
         }
+        if liste_a_un_doublon(&autorites) {
+            return Err(BlocConstructionError::AutoriteDupliquee);
+        }
         Ok(Bloc {
             parent: PAS_DE_PARENT,
             hauteur: 0,
@@ -559,6 +568,50 @@ impl Bloc {
         };
         // Budget vérifié SCELLEMENT COMPRIS : le champ pèse ~4,7 Kio une fois signé,
         // et la borne doit couvrir le bloc tel qu'il partira sur le fil.
+        let octets = bloc.to_bytes().len() + TAILLE_SCELLEMENT_MAX;
+        if octets > MAX_OCTETS_BLOC {
+            return Err(BlocConstructionError::TropDOctets { octets });
+        }
+        Ok(bloc)
+    }
+
+    /// Scelle un bloc de RECONFIGURATION : vide de transactions, portant la nouvelle
+    /// liste d'autorités (J1-c). Un bloc de gouvernance vide simplifie l'audit et
+    /// écarte le risque d'un changement rejeté après une vérification STARK coûteuse.
+    ///
+    /// Les bornes (non vide, taille, doublon, poids diffusable) sont vérifiées ICI et
+    /// pas seulement au décodage — même discipline que `genese_avec_autorites` : une
+    /// borne de `from_bytes` doit exister aussi dans le constructeur.
+    pub fn sceller_changement(
+        parent: &[u8; TAILLE_ID],
+        hauteur: u64,
+        nouvelles: Vec<SigPublicKey>,
+    ) -> Result<Self, BlocConstructionError> {
+        if nouvelles.is_empty() {
+            return Err(BlocConstructionError::ChangementListeVide);
+        }
+        if nouvelles.len() > MAX_AUTORITES {
+            return Err(BlocConstructionError::ChangementTropDAutorites {
+                recues: nouvelles.len(),
+            });
+        }
+        if liste_a_un_doublon(&nouvelles) {
+            return Err(BlocConstructionError::AutoriteDupliquee);
+        }
+        let bloc = Bloc {
+            parent: *parent,
+            hauteur,
+            vue: 0,
+            transactions: Vec::new(),
+            emissions: Vec::new(),
+            autorites: Vec::new(),
+            changement_autorites: Some(nouvelles),
+            extension: Vec::new(),
+            scellement: None,
+            certificat: None,
+        };
+        // Budget vérifié SCELLEMENT COMPRIS et LISTE COMPRISE (point 7 de la revue) :
+        // la nouvelle liste pèse jusqu'à ~127 Kio, le bloc doit rester diffusable.
         let octets = bloc.to_bytes().len() + TAILLE_SCELLEMENT_MAX;
         if octets > MAX_OCTETS_BLOC {
             return Err(BlocConstructionError::TropDOctets { octets });
@@ -1568,6 +1621,67 @@ mod tests {
         assert!(matches!(
             Bloc::from_bytes(&octets),
             Err(BlocDecodeError::VersionPerimee { version: 0x04 })
+        ));
+    }
+
+    /// `sceller_changement` produit un bloc VIDE de transactions portant la nouvelle
+    /// liste, diffusable, à identifiant stable.
+    #[test]
+    fn sceller_changement_construit_un_bloc_de_reconfig() {
+        let a = SigKeypair::generate().public;
+        let b = SigKeypair::generate().public;
+        let bloc =
+            Bloc::sceller_changement(&Bloc::genese().id(), 5, vec![a.clone(), b.clone()]).unwrap();
+        assert_eq!(bloc.hauteur, 5);
+        assert!(
+            bloc.transactions.is_empty(),
+            "reconfig = aucune transaction"
+        );
+        assert_eq!(bloc.changement_autorites.as_ref().unwrap().len(), 2);
+        // Diffusable et stable au fil.
+        let relu = Bloc::from_bytes(&bloc.to_bytes()).unwrap();
+        assert_eq!(relu.id(), bloc.id());
+    }
+
+    /// Liste vide refusée AU CONSTRUCTEUR (elle n'existe pas sur le fil : `0 = absent`).
+    #[test]
+    fn sceller_changement_liste_vide_refusee() {
+        assert!(matches!(
+            Bloc::sceller_changement(&Bloc::genese().id(), 1, Vec::new()),
+            Err(BlocConstructionError::ChangementListeVide)
+        ));
+    }
+
+    /// Doublon refusé au constructeur de changement.
+    #[test]
+    fn sceller_changement_doublon_refuse() {
+        let pk = SigKeypair::generate().public;
+        assert!(matches!(
+            Bloc::sceller_changement(&Bloc::genese().id(), 1, vec![pk.clone(), pk.clone()]),
+            Err(BlocConstructionError::AutoriteDupliquee)
+        ));
+    }
+
+    /// Liste trop longue refusée au constructeur (borne aussi côté fabricant, pas
+    /// seulement au décodage).
+    #[test]
+    fn sceller_changement_trop_dautorites_refuse() {
+        let pk = SigKeypair::generate().public;
+        let trop: Vec<_> = (0..MAX_AUTORITES + 1).map(|_| pk.clone()).collect();
+        assert!(matches!(
+            Bloc::sceller_changement(&Bloc::genese().id(), 1, trop),
+            Err(BlocConstructionError::ChangementTropDAutorites { .. })
+        ));
+    }
+
+    /// FAILLE LATENTE FERMÉE : un doublon d'autorité en GENÈSE était accepté — une clé
+    /// à deux index votait deux fois. Désormais refusé au constructeur de genèse.
+    #[test]
+    fn genese_doublon_dautorite_refuse() {
+        let pk = SigKeypair::generate().public;
+        assert!(matches!(
+            Bloc::genese_avec_autorites(Vec::new(), vec![pk.clone(), pk.clone()]),
+            Err(BlocConstructionError::AutoriteDupliquee)
         ));
     }
 }
