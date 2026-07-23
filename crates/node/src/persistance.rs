@@ -389,25 +389,25 @@ mod tests {
 
         // Premier démarrage : registre vierge, tout vote est permis.
         let mut r = d.charger_ou_creer_votes().expect("registre vierge");
-        assert!(r.peut_voter(1, 0, &[1u8; 64]));
+        assert!(r.peut_voter(1, &[1u8; 64]));
 
         // On promet, PUIS on persiste — l'ordre inverse est celui qui perd.
-        r.enregistrer(1, 0, [1u8; 64]);
+        r.enregistrer(1, [1u8; 64]);
         d.enregistrer_votes(&r).expect("écriture");
 
         // REDÉMARRAGE : nouveau dépôt sur le même répertoire.
         let d2 = Donnees::ouvrir(&dir).expect("réouverture");
         let relu = d2.charger_ou_creer_votes().expect("registre relu");
         assert!(
-            !relu.peut_voter(1, 0, &[2u8; 64]),
+            !relu.peut_voter(1, &[2u8; 64]),
             "l'ÉQUIVOCATION doit rester interdite après redémarrage"
         );
         assert!(
-            relu.peut_voter(1, 0, &[1u8; 64]),
+            relu.peut_voter(1, &[1u8; 64]),
             "re-voter pour le MÊME bloc reste permis (idempotent)"
         );
         assert!(
-            relu.peut_voter(2, 0, &[2u8; 64]),
+            relu.peut_voter(2, &[2u8; 64]),
             "la hauteur suivante est ouverte"
         );
 
