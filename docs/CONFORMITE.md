@@ -44,13 +44,14 @@ tests unitaires de `crates/crypto`.
 
 ## 2. Consensus
 
-Fixture rejouable : [`docs/fixtures/conformite-v2/`](fixtures/conformite-v2/README.md).
+Fixture rejouable : [`docs/fixtures/conformite-v3/`](fixtures/conformite-v3/README.md).
 
 ```bash
 cargo test -p node --test conformite
 ```
 
-Couvre : décodage de bloc **`0x04`**, identifiant de genèse (autorités
+Couvre : décodage de bloc **`0x05`** (J1-c : le changement d'ensemble
+d'autorités entre dans l'identifiant), identifiant de genèse (autorités
 comprises), amorçage d'état, chaînage, élection de producteur, vérification de
 scellement, **certificat de quorum**, avancée de la tête. **Ne couvre aucune
 transaction ni preuve STARK**, et son quorum n'a qu'**un seul votant** (`n = 1`,
@@ -93,10 +94,13 @@ raison**, et la divergence est un défaut à signaler.
   vecteurs officiels (§1).
 - La fixture de consensus ne couvre aucune transaction (§2), ni un quorum à
   plusieurs votants.
-- **Le protocole de vue n'est pas livré** (jalon J1-b) : le format du certificat
-  et sa vérification le sont, mais aucun vote ne circule sur le fil. Une chaîne à
-  `n ≥ 4` ne produit donc aucun bloc aujourd'hui
-  ([`PROTOCOL.md`](PROTOCOL.md), « Finalité : le bloc »).
+- **Le protocole de vue est livré** (jalons J1-b1/J1-b2) : les votes circulent
+  réellement sur le fil, la vue avance par délai à backoff exponentiel, et un
+  nœud ne vote qu'une fois par hauteur. La liveness qu'ouvrait J1-a est fermée :
+  une chaîne à `n ≥ 4` produit désormais des blocs
+  ([`PROTOCOL.md`](PROTOCOL.md), « Finalité : le bloc »). Ce que la fixture
+  ci-dessus ne couvre pas reste vrai (quorum à un seul votant, aucune
+  transaction) ; ce n'est plus une limite du protocole de vue lui-même.
 - Le backend PQ est marqué `unmaintained` en amont — dette ouverte, assumée et
   datée ([`BACKEND_PQ.md`](BACKEND_PQ.md)).
 - Les limites connues du réseau sont listées dans
