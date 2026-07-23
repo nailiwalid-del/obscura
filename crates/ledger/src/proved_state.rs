@@ -65,6 +65,9 @@ pub enum StateDecodeError {
     BadVersion(u8),
     /// Autorité de scellement indécodable ou hors bornes.
     BadAutorite,
+    /// Changement d'autorités en attente incohérent (vide, hors borne, doublon, ou
+    /// hauteur d'effet déjà dépassée).
+    BadChangement,
 }
 
 /// Erreur de chargement d'un état depuis un fichier (`load`).
@@ -123,7 +126,10 @@ const _: () = assert!(RECENT_ROOTS_WINDOW > crate::bloc::MAX_TX_PAR_BLOC);
 /// `0x04` : les AUTORITÉS de scellement entrent dans le dump (élection de
 /// producteur) — et `VERSION_BLOC` passant à 0x03, tous les identifiants de bloc
 /// changent : un dump antérieur porte une tête périmée, refusé plutôt que relu.
-pub const VERSION_ETAT: u8 = 0x04;
+/// `0x05` : le CHANGEMENT D'AUTORITÉS EN ATTENTE entre dans le dump (J1-c) — un nœud
+/// redémarré dans `[h+1, h+K)` doit retrouver le basculement ; et `VERSION_BLOC`
+/// passant à 0x05, tous les identifiants changent.
+pub const VERSION_ETAT: u8 = 0x05;
 
 /// `K` de `h + K` : délai entre l'annonce d'un changement d'autorités et son effet.
 ///
@@ -987,6 +993,22 @@ impl ProvedLedgerState {
             b.extend_from_slice(&(o.len() as u32).to_le_bytes());
             b.extend_from_slice(&o);
         }
+
+        // Changement d'autorités en attente (0x05) : `count u32` (0 = absent), puis
+        // `effet u64 ‖ [len(pk) ‖ pk]`. Canonique : count = 0 ⇔ absent (liste vide
+        // interdite, donc jamais confondue).
+        match &self.changement_en_attente {
+            None => b.extend_from_slice(&0u32.to_le_bytes()),
+            Some((liste, effet)) => {
+                b.extend_from_slice(&(liste.len() as u32).to_le_bytes());
+                b.extend_from_slice(&effet.to_le_bytes());
+                for pk in liste {
+                    let o = pk.to_bytes();
+                    b.extend_from_slice(&(o.len() as u32).to_le_bytes());
+                    b.extend_from_slice(&o);
+                }
+            }
+        }
         b
     }
 
@@ -1070,6 +1092,36 @@ impl ProvedLedgerState {
             autorites.push(pk);
         }
 
+        // Changement d'autorités en attente (0x05). `from_bytes` ne fait pas confiance
+        // au fichier : liste vide / hors borne / doublon / effet déjà dépassé → refus.
+        let nc = u32::from_le_bytes(take(b, &mut pos, 4)?.try_into().unwrap()) as usize;
+        let changement_en_attente = if nc == 0 {
+            None
+        } else {
+            if nc > crate::bloc::MAX_AUTORITES {
+                return Err(StateDecodeError::BadChangement);
+            }
+            let effet = u64::from_le_bytes(take(b, &mut pos, 8)?.try_into().unwrap());
+            // Un effet déjà dépassé est un basculement qui ne se produira jamais.
+            if effet <= hauteur {
+                return Err(StateDecodeError::BadChangement);
+            }
+            let mut liste = Vec::with_capacity(nc);
+            for _ in 0..nc {
+                let lp = u32::from_le_bytes(take(b, &mut pos, 4)?.try_into().unwrap()) as usize;
+                if lp > crate::bloc::TAILLE_AUTORITE_MAX {
+                    return Err(StateDecodeError::BadChangement);
+                }
+                let pk = crypto::sig::SigPublicKey::from_bytes(take(b, &mut pos, lp)?)
+                    .map_err(|_| StateDecodeError::BadChangement)?;
+                liste.push(pk);
+            }
+            if crate::bloc::liste_a_un_doublon(&liste) {
+                return Err(StateDecodeError::BadChangement);
+            }
+            Some((liste, effet))
+        };
+
         if pos != b.len() {
             return Err(StateDecodeError::TrailingBytes);
         }
@@ -1082,7 +1134,7 @@ impl ProvedLedgerState {
             hauteur,
             genese,
             autorites,
-            changement_en_attente: None,
+            changement_en_attente,
             // L'historique vit dans un fichier SÉPARÉ et se rattache par
             // `adopter_historique`, qui le confronte à cet état. L'embarquer ici
             // aurait forcé TOUS les nœuds à porter un dump de plusieurs Gio pour un
@@ -2412,10 +2464,10 @@ mod tests {
     fn dump_dautre_version_refuse() {
         let etat = ProvedLedgerState::with_depth(4);
         let mut octets = etat.to_bytes();
-        octets[0] = 0x05; // version FUTURE
+        octets[0] = 0x06; // version FUTURE
         assert!(matches!(
             ProvedLedgerState::from_bytes(&octets),
-            Err(StateDecodeError::BadVersion(0x05))
+            Err(StateDecodeError::BadVersion(0x06))
         ));
         // Versions PRÉCÉDENTES : refusées aussi — le 0x02 n'a pas de genèse gravée,
         // le 0x03 pas d'autorités ; les relire décalerait les champs suivants.
@@ -2437,6 +2489,50 @@ mod tests {
         assert!(matches!(
             ProvedLedgerState::from_bytes(&octets),
             Err(StateDecodeError::BadVersion(0x01))
+        ));
+    }
+
+    /// Le changement en attente survit à un aller-retour de dump (0x05).
+    #[test]
+    fn changement_en_attente_persiste() {
+        let (mut etat, _cles) = chaine_a(4);
+        let nouvelle: Vec<_> = (0..7)
+            .map(|_| crypto::sig::SigKeypair::generate().public)
+            .collect();
+        etat.injecter_changement_pour_test(nouvelle.clone(), 1 + DELAI_CHANGEMENT_AUTORITES);
+        let relu = ProvedLedgerState::from_bytes(&etat.to_bytes()).expect("relecture");
+        // Le basculement est retrouvé : quorum de la nouvelle liste à la hauteur d'effet.
+        assert_eq!(relu.quorum_a(1 + DELAI_CHANGEMENT_AUTORITES), 5);
+    }
+
+    /// Un dump d'état 0x04 est refusé par son nom.
+    #[test]
+    fn dump_0x04_refuse_par_son_nom() {
+        let (etat, _cles) = chaine_a(4);
+        let mut octets = etat.to_bytes();
+        octets[0] = 0x04;
+        assert!(matches!(
+            ProvedLedgerState::from_bytes(&octets),
+            Err(StateDecodeError::BadVersion(0x04))
+        ));
+    }
+
+    /// Un `changement_en_attente` corrompu au chargement (hauteur d'effet DÉPASSÉE)
+    /// est refusé : l'accepter laisserait un basculement qui ne se produira jamais.
+    #[test]
+    fn changement_a_effet_depasse_refuse_au_chargement() {
+        let (mut etat, _cles) = chaine_a(4);
+        etat.forcer_hauteur_pour_test(10, etat.tete());
+        etat.injecter_changement_pour_test(
+            (0..4)
+                .map(|_| crypto::sig::SigKeypair::generate().public)
+                .collect(),
+            5, // effet 5 <= hauteur 10 : incohérent
+        );
+        let octets = etat.to_bytes();
+        assert!(matches!(
+            ProvedLedgerState::from_bytes(&octets),
+            Err(StateDecodeError::BadChangement)
         ));
     }
 
