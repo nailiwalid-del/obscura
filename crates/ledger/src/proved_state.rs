@@ -229,6 +229,8 @@ pub enum GeneseRefus {
     TropDEmissions { borne: usize, recues: usize },
     #[error("{recues} autorités dans la genèse (borne : {borne})")]
     TropDAutorites { borne: usize, recues: usize },
+    #[error("doublons dans les autorités de la genèse")]
+    AutoritesDupliquees,
     #[error("émission {index} refusée : {source}")]
     Emission {
         index: usize,
@@ -343,6 +345,13 @@ impl ProvedLedgerState {
                 borne: crate::bloc::MAX_AUTORITES,
                 recues: genese.autorites.len(),
             });
+        }
+        // Doublon re-vérifié ici pour la même raison que la borne ci-dessus : `Bloc`
+        // a des champs publics, et le chemin `--genese <fichier>` (`Bloc::from_bytes`
+        // puis `depuis_genese`) contourne `genese_avec_autorites`. Sans ce contrôle,
+        // une clé comptant deux fois graverait un doublon dans le masque de quorum.
+        if crate::bloc::liste_a_un_doublon(&genese.autorites) {
+            return Err(GeneseRefus::AutoritesDupliquees);
         }
         etat.autorites = genese.autorites.clone();
         etat.tete = genese.id();
@@ -1318,6 +1327,29 @@ mod tests {
         assert!(matches!(
             ProvedLedgerState::depuis_genese_depth(&hostile, DEPTH),
             Err(GeneseRefus::TropDAutorites { .. })
+        ));
+    }
+
+    /// Un doublon d'autorité passé à l'amorçage (champs publics) est refusé —
+    /// le constructeur n'est pas le seul rempart.
+    #[test]
+    fn depuis_genese_doublon_dautorite_refuse() {
+        let pk = crypto::sig::SigKeypair::generate().public;
+        let hostile = crate::bloc::Bloc {
+            parent: crate::bloc::PAS_DE_PARENT,
+            hauteur: 0,
+            vue: 0,
+            transactions: Vec::new(),
+            emissions: Vec::new(),
+            autorites: vec![pk.clone(), pk.clone()],
+            changement_autorites: None,
+            extension: Vec::new(),
+            scellement: None,
+            certificat: None,
+        };
+        assert!(matches!(
+            ProvedLedgerState::depuis_genese_depth(&hostile, 4),
+            Err(GeneseRefus::AutoritesDupliquees)
         ));
     }
 

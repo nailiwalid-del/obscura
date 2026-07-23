@@ -253,6 +253,8 @@ pub enum BlocDecodeError {
     TropDAutorites,
     #[error("autorité indécodable ou hors bornes en position {0}")]
     AutoriteInvalide(usize),
+    #[error("doublon dans la liste d'autorités de genèse")]
+    AutoriteDupliquee,
     #[error("certificat de quorum indécodable ou hors bornes")]
     CertificatInvalide,
     #[error("scellement indécodable ou hors bornes")]
@@ -857,6 +859,12 @@ impl Bloc {
                 .map_err(|_| BlocDecodeError::AutoriteInvalide(k))?;
             autorites.push(pk);
         }
+        // Doublon d'autorité de GENÈSE refusé au DÉCODAGE : sans ce contrôle, un
+        // bloc fabriqué à la main (chemin `--genese <fichier>`, hors constructeur)
+        // graverait une clé comptant deux fois dans le masque de quorum.
+        if liste_a_un_doublon(&autorites) {
+            return Err(BlocDecodeError::AutoriteDupliquee);
+        }
 
         // CHANGEMENT D'AUTORITÉS (J1-c). `0 = absent`. Bornes AVANT allocation, comme
         // partout dans ce décodeur, et doublons refusés (une clé à deux index voterait
@@ -1047,6 +1055,29 @@ mod tests {
         assert!(matches!(
             Bloc::from_bytes(&hostile.to_bytes()),
             Err(BlocDecodeError::TropDAutorites)
+        ));
+    }
+
+    /// Un doublon d'autorité de GENÈSE est refusé au DÉCODAGE (chemin --genese
+    /// fichier), pas seulement au constructeur — même idiome que MAX_AUTORITES.
+    #[test]
+    fn genese_doublon_dautorite_refuse_au_decodage() {
+        let pk = SigKeypair::generate().public;
+        let hostile = Bloc {
+            parent: PAS_DE_PARENT,
+            hauteur: 0,
+            vue: 0,
+            transactions: Vec::new(),
+            emissions: Vec::new(),
+            autorites: vec![pk.clone(), pk.clone()],
+            changement_autorites: None,
+            extension: Vec::new(),
+            scellement: None,
+            certificat: None,
+        };
+        assert!(matches!(
+            Bloc::from_bytes(&hostile.to_bytes()),
+            Err(BlocDecodeError::AutoriteDupliquee)
         ));
     }
 
