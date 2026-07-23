@@ -1,7 +1,13 @@
 # ADR-002 (J2) : le mécanisme économique d'Obscura
 
-**Statut :** **PROPOSÉ** le 2026-07-22.
+**Statut :** **ACCEPTÉ** le 2026-07-23 (proposé le 2026-07-22).
 **Date :** 2026-07-22
+**Ce qui a permis l'acceptation :** l'action 4 (mesure de l'ouverture aux
+paramètres de CONSENSUS — **21 227 o, 2,02 % du bloc**) a fermé le seul écart
+qui rendait le point 6 conditionnel à une mesure manquante. Le résidu restant
+(surcoût du masquage) est borné par une majoration ×3 laissant ~6,1 % de marge,
+et il appartient à l'IMPLÉMENTATION derrière la porte A — pas à la décision de
+mécanisme que tranche cet ADR.
 **Décideur :** l'auteur du projet.
 **Jalon :** J2 de `2026-07-22-portes-vers-le-mainnet-design.md`.
 **Portée :** ce document tranche le **MÉCANISME** d'émission et laisse
@@ -406,7 +412,10 @@ soldes.
 
 ## Actions
 
-1. [ ] **Accepter ou amender cet ADR.**
+1. [x] **Accepter ou amender cet ADR.** — **ACCEPTÉ le 2026-07-23**, sur la base
+       de la mesure de consensus (action 4). Le mécanisme est engageant : la
+       monnaie peut naître ailleurs qu'en genèse, sous condition d'une preuve
+       d'ouverture sur une valeur RECALCULÉE. `R(h)` reste NON tranchée.
 2. [ ] Corriger `2026-07-22-portes-vers-le-mainnet-design.md` : J2 ne livre pas
        l'anti-Sybil à J3, et « collecteur de frais » et « coinbase » y sont un
        seul mécanisme, pas deux.

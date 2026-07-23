@@ -137,14 +137,31 @@ crash.
 > seule spec combinée** (« clôture de la voie sans regret »). C'est la
 > recommandation ci-dessous.
 
-### Cycle 3 — J2, finalisation de l'ADR *(voie irréversible, B = ADR seul)* — **taille M (rédaction)**
+### Cycle 3 — J2, le mécanisme économique *(voie irréversible, B = ADR seul)* — ✅ **CLOS le 2026-07-23**
 
-**État vérifié.** L'ADR-002 existe en **brouillon `PROPOSÉ`** le 2026-07-22
-(`docs/superpowers/specs/2026-07-22-j2-economie-adr.md`, non commité). Il tranche
-le *mécanisme* et laisse ouverte la *politique*.
+**État (2026-07-23) : ✅ CYCLE CLOS — ADR-002 `ACCEPTÉ`.**
+`docs/superpowers/specs/2026-07-22-j2-economie-adr.md`, commité. Il tranche le
+*mécanisme* et laisse `R(h)` — la *politique* — explicitement NON tranchée.
 
-**Ce qui reste.** Le **finaliser et le faire passer à `ACCEPTÉ`.** L'ADR doit
-démontrer, de manière défendable :
+Ce qui a permis l'acceptation : l'**action 4** est faite — l'ouverture d'émission
+mesurée aux paramètres de CONSENSUS pèse **21 227 o, soit 2,02 % du bloc**
+(`cargo test -p circuit --all-features --release --lib mesure_ouverture --
+--ignored --nocapture`). L'effet des paramètres est ×1,35 et non ×2 comme majoré ;
+sous la majoration ×3 du masquage, l'émission tient sous **~6,1 % du bloc**. La
+suffisance d'`extension` est donc adossée à une mesure, et **aucun nouveau
+`VERSION_BLOC` n'est attendu**.
+
+⚠️ **Deux corrections que cet ADR apporte à la carte de juillet** : « coinbase » et
+« collecteur de frais » sont **UN seul mécanisme** (les séparer menait à en refuser
+un sans voir qu'on refusait l'autre) ; et **J2 ne livre PAS l'anti-Sybil à J3** —
+une preuve d'enjeu exige des soldes publiquement attribuables, la négation de la
+thèse d'Obscura.
+
+**Résidu, nommé :** le surcoût du MASQUAGE sur l'ouverture n'est mesurable qu'une
+fois le circuit d'émission écrit — donc derrière la porte A. Il ne conditionne pas
+la décision de mécanisme.
+
+<details><summary>Ce que l'ADR devait démontrer (rappel)</summary>
 - coinbase à **montant public** (dérivable de la hauteur, ne fuit rien) et
   **bénéficiaire caché** (le commitment s'en charge) ; taille de la preuve
   d'ouverture qu'elle exige ;
@@ -153,10 +170,13 @@ démontrer, de manière défendable :
 - **preuve que `extension` telle que réservée suffit** à porter le mécanisme, sans
   nouveau `VERSION_BLOC`.
 
+</details>
+
 **Dépend de :** J1 ✅. **Gèle :** rien en B (l'ADR ne grave rien). En A : le contenu
 d'`extension`, l'énoncé STARK, la règle d'émission.
-**Critère de franchissement (B) :** l'ADR est `ACCEPTÉ` et démontre la suffisance
-de `extension`.
+**Critère de franchissement (B) : ✅ ATTEINT** — l'ADR est `ACCEPTÉ` et la
+suffisance d'`extension` est démontrée par mesure (2,02 % du bloc aux paramètres
+de consensus), non par majoration seule.
 **Coût (B) :** rédaction. **Coût (A, hors périmètre) :** le plus élevé du projet
 (nouvel énoncé STARK, re-bench, re-audit soundness).
 
@@ -280,15 +300,23 @@ de taille L.
 
 ## Partie V — Suite immédiate
 
-1. **Confronter les 8 fichiers non commités** (`CLAUDE.md`, `AGENTS.md`,
-   `POST_QUANTIQUE.md`, `STARK_STATEMENT.md`, `THREAT_MODEL.md`,
-   `obscura-overview.html`, l'exemple, + l'ADR J2) à l'état visé : une partie de
-   AUD-final et de J2 y est déjà en cours. **Ne pas re-spécifier ce qui est déjà
-   écrit.**
-2. **Spec combinée « clôture de la voie sans regret »** (Cycle 1 + Cycle 2), la
-   plus petite et la plus rentable — c'est celle que j'attaque après ce document,
-   sauf redirection.
-3. Trancher le loose end J1-c : PR rétroactive ou « landed » assumé.
+**Mise à jour du 2026-07-23 — les trois points d'origine sont soldés :** les
+fichiers en cours ont été commités puis migrés ; la spec combinée « clôture de la
+voie sans regret » a été écrite, planifiée, **exécutée et fusionnée** (PR #25) ; et
+le loose end J1-c s'est réglé du même geste. **Cycles 1, 2 et 3 clos.**
+
+Reste, dans l'ordre recommandé :
+
+1. **Cycle 4 — T5 (ouverture).** Spec et plan écrits
+   (`plans/2026-07-23-t5-ouverture-testnet.md`). Prérequis d'exécution :
+   `minisign` disponible sur la machine. C'est la première irréversibilité réelle.
+2. **Cycle 5 — J3 (consensus B).** Spec et plan écrits
+   (`plans/2026-07-23-j3-consensus-perimetre-b.md`). ⚠️ **À trancher avant
+   exécution** : le plan dévie de sa spec en plaçant la négociation de version au
+   niveau NODE plutôt que dans le handshake `net`, pour préserver l'invariant
+   « net = pur transport ». La déviation est flaggée en tête du plan.
+3. Après quoi **l'état B est atteint**, et il ne reste que la décision écrite
+   B → A.
 
 ## Ce que ce document ne fait pas
 
