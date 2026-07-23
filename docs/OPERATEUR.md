@@ -115,10 +115,11 @@ post-quantique ne l'offre. Son coût croît **linéairement** avec le comité, p
 toujours. À `n = 64` il vaut l'équivalent de deux transactions par bloc. Mesurez
 avant de graver : `cargo run -p node --example dimensionner-quorum --release`.
 
-⚠️ **Aujourd'hui, ne gravez pas plus de 3 autorités si vous voulez des blocs.**
-Le protocole qui fait circuler les votes est le jalon **J1-b** ; tant qu'il
-n'existe pas, un producteur ne rassemble que son propre vote et **une chaîne à
-`n ≥ 4` ne produit rien** (voir « `--sceller` ne produit aucun bloc »).
+✅ **Une chaîne à `n ≥ 4` produit des blocs.** Le protocole qui fait circuler les
+votes (J1-b1) et le changement de vue (J1-b2) sont livrés : le producteur
+rassemble les votes des autres, finalise dès `⌊2n/3⌋+1`, et une autorité absente
+est contournée par changement de vue. Vous pouvez donc graver le comité dont vous
+avez besoin (voir « `--sceller` ne produit aucun bloc » pour les autres causes).
 
 ⚠️ Le **nombre** d'allocations est public à jamais (les montants et les
 bénéficiaires, non). Une allocation unique désigne son bénéficiaire par sa seule
@@ -197,11 +198,12 @@ repartir d'un répertoire de données vide, avec la bonne genèse.
 
 2. **Ce n'est pas votre tour.** Sur une chaîne à autorités, seul le producteur de
    la hauteur scelle — attendez le tour suivant.
-3. **La chaîne a `n ≥ 4` autorités.** Alors c'est attendu, et ce n'est pas
-   réparable côté exploitation : le quorum vaut `2f+1 ≥ 3`, les votes ne
-   circulent pas encore sur le fil (jalon **J1-b**), et le producteur refuse son
-   propre bloc pour `QuorumInsuffisant`. **Une chaîne à `n ≤ 3` avance ; une
-   chaîne à `n ≥ 4` attend J1-b.**
+3. **Le quorum n'est pas réuni.** Sur une chaîne à `n ≥ 4`, le producteur doit
+   rassembler `⌊2n/3⌋+1` votes avant de finaliser ; s'il manque des pairs joignables
+   (voir `liens`) ou si trop d'autorités sont hors ligne, le bloc n'atteint pas le
+   quorum et le changement de vue tourne sans avancer. Les votes circulent bien sur
+   le fil (J1-b1) et le changement de vue est actif (J1-b2) : vérifiez la
+   connectivité et que les autres autorités tournent.
 
 **« ARCHIVE INUTILISABLE ».** Le nœud démarre en mode **dégradé, sans archive** :
 il reste valide mais ne peut plus servir de wallet. **Aucun fichier n'est
@@ -213,11 +215,11 @@ n'est tenté : un nœud mal amorcé est indiscernable d'un nœud neuf en bonne s
 
 ## Limites connues
 
-- **Une autorité absente FIGE la chaîne à son tour.** Les transactions attendent
-  au mempool, rien n'est perdu. Le **changement de vue** qui ferme ce trou est
-  décidé et le format du bloc le porte déjà ; son protocole est le jalon J1-b.
-- ⚠️ **Une chaîne à `n ≥ 4` autorités ne produit aucun bloc aujourd'hui** — les
-  votes du quorum ne circulent pas encore (J1-b). Voir « Combien d'autorités ? ».
+- **Une autorité absente est CONTOURNÉE par changement de vue** (J1-b2). Passé un
+  délai (à backoff exponentiel), les autres passent à la vue suivante et le
+  producteur suivant reprend la main : la panne d'un participant ne fige plus la
+  chaîne. ⚠️ Limite restante : un producteur « à moitié en ligne » qui émet sans
+  réunir le quorum peut retarder la finalité jusqu'au changement de vue.
 - **Aucune réorganisation n'est possible.** Une divergence est définitive — et
   avec la finalité par quorum, c'est désormais une conséquence assumée du modèle
   plutôt qu'un manque : un bloc certifié n'a rien à réorganiser.
