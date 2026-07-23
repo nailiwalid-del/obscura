@@ -400,6 +400,28 @@ pub fn prove_sponge(
     payload: &[Felt],
     public_idx: &[usize],
 ) -> (Digest, ValidityProof) {
+    prove_sponge_avec(domain, payload, public_idx, crate::proof_options())
+}
+
+/// Même preuve que `prove_sponge`, mais aux `ProofOptions` FOURNIES.
+///
+/// Existe pour la MESURE. Les gadgets autonomes prouvent aux paramètres de DEV
+/// (`proof_options` : 32 requêtes, blowup 8) alors que le consensus utilise
+/// `proof_options_hi` (48, blowup 16). Sans ce point d'entrée, dimensionner une
+/// émission aux paramètres RÉELS du consensus était impossible — `proof_options_hi`
+/// étant `pub(crate)`, aucun appelant externe ne peut la passer (cf. ADR-002 (J2),
+/// action 4 : « mesurer l'ouverture aux paramètres de CONSENSUS »).
+///
+/// ⚠️ **Le comportement de production est INCHANGÉ** : `prove_sponge` passe
+/// toujours `proof_options()`. Cette fonction n'élargit pas la surface de consensus,
+/// elle rend seulement la mesure possible depuis l'intérieur du crate.
+#[cfg(feature = "dev-circuits")]
+pub(crate) fn prove_sponge_avec(
+    domain: Domain,
+    payload: &[Felt],
+    public_idx: &[usize],
+    options: ProofOptions,
+) -> (Digest, ValidityProof) {
     let mut preamble: Vec<BaseElement> = sponge_preamble(domain, payload)
         .iter()
         .map(|f| f.to_winter())
@@ -429,7 +451,7 @@ pub fn prove_sponge(
     };
 
     let prover = SpongeProver {
-        options: crate::proof_options(),
+        options,
         pi: pi.clone(),
     };
     let proof = prover.prove(trace).expect("génération de preuve");
@@ -602,5 +624,51 @@ mod tests {
         let s = ShieldedSecret::from_felts(core::array::from_fn(|i| felt(1000 + i as u64)));
         let (owner_sponge, _) = prove_sponge(Domain::Owner, s.as_felts(), &[]);
         assert_eq!(owner_sponge, rescue::hash(Domain::Owner, s.as_felts()));
+    }
+
+    /// MESURE — ADR-002 (J2), action 4 : coût de l'OUVERTURE d'une émission
+    /// (« ce commitment ouvre sur cette valeur publique, bénéficiaire caché »)
+    /// aux paramètres de DEV **et** aux paramètres de CONSENSUS.
+    ///
+    /// C'est exactement le volet **P7** du bundle de sortie 3b5c (`prove_output`) :
+    /// `oc = H_NoteCommitment(value ‖ owner ‖ rho ‖ r)` avec `value` seule publique.
+    /// Le range-check **P6 est INUTILE** pour une émission — `R(h)` est publique et
+    /// se vérifie en clair — donc il n'entre pas dans ce chiffre.
+    ///
+    /// ⚠️ **Ce que ce test ferme, et ce qu'il ne ferme pas.** L'ADR chiffrait
+    /// 15 157 o en avertissant que c'était un PLANCHER aux paramètres de dev
+    /// (32 requêtes / blowup 8), le consensus exigeant `proof_options_hi`
+    /// (48 / blowup 16). Ce test produit la mesure de consensus manquante. Il reste
+    /// **validity-only** : le MASQUAGE (équivalent 3z-b1) n'est pas inclus, et son
+    /// surcoût — qui rendra en outre la taille VARIABLE à chaque preuve (aléa frais,
+    /// donc une bande, jamais une égalité) — ne sera mesurable qu'une fois le
+    /// circuit d'émission écrit.
+    ///
+    /// `cargo test -p circuit --all-features --release --lib mesure_ouverture -- --ignored --nocapture`
+    #[test]
+    #[ignore = "bench : lancer explicitement avec --ignored --nocapture"]
+    fn mesure_ouverture() {
+        use std::time::Instant;
+        let owner = Digest(core::array::from_fn(|i| felt(40 + i as u64)));
+        let rho = Digest(core::array::from_fn(|i| felt(50 + i as u64)));
+        let r = Digest(core::array::from_fn(|i| felt(60 + i as u64)));
+        let payload = rescue::note_commit_payload(1_000_000, &owner, &rho, &r);
+
+        println!("\n=== ouverture d'émission (P7 seul, validity-only) ===");
+        for (nom, opts) in [
+            ("dev       (32 req, blowup  8)", crate::proof_options()),
+            ("CONSENSUS (48 req, blowup 16)", crate::proof_options_hi()),
+        ] {
+            let t0 = Instant::now();
+            let (_oc, preuve) = prove_sponge_avec(Domain::NoteCommitment, &payload, &[0], opts);
+            let gen = t0.elapsed();
+            let octets = preuve.0.to_bytes().len();
+            println!(
+                "{nom} : {octets:6} o ({:5.1} Kio) | gen {:7.1} ms | {:5.2} % d'un bloc",
+                octets as f64 / 1024.0,
+                gen.as_secs_f64() * 1e3,
+                octets as f64 * 100.0 / 1_048_444.0
+            );
+        }
     }
 }
