@@ -255,8 +255,8 @@ vote = HybridSig("obscura/bloc/vote/v1", id)
   vue supérieure — est refusé. C'est ce qui rend la preuve de sûreté triviale :
   deux quorums à la même hauteur partagent un votant honnête, qui n'a signé
   qu'un id, quelle que soit la vue. **La vue n'entre jamais dans la décision
-  de voter**, contrairement au format `0x02` de J1-b1 où la clé était
-  `(hauteur, vue)`.
+  de voter** — le format COURANT est `0x02` (`VERSION_VOTES`, clé `hauteur`
+  seule) ; l'ancien format `0x01` de J1-b1 avait pour clé `(hauteur, vue)`.
 - **Conséquence directe** : une chaîne à `n ≥ 4` produit désormais des blocs —
   la liveness que J1-a laissait ouverte est fermée par J1-b.
 
