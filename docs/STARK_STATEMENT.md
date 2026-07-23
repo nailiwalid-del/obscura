@@ -439,7 +439,7 @@ sous cet angle, pas seulement pour son gain de taille.
 
 Depuis 3z-b1, la preuve monolithique (`prove_tx`/`verify_tx`) est revendiquée
 **witness-hiding**, au sens précis suivant : **zero-knowledge à vérifieur
-honnête (HVZK honnête-vérifieur) dans le modèle de l'oracle aléatoire (ROM)** —
+honnête (HVZK) dans le modèle de l'oracle aléatoire (ROM)** —
 et rien de plus. La revendication n'a de valeur qu'attaquable : cette section la
 range en **trois registres visuellement distincts** pour qu'un auditeur cible une
 hypothèse précise sans avoir à démêler ce qui est établi de ce qui est supposé.
