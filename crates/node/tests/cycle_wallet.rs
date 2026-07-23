@@ -143,9 +143,11 @@ fn soumettre(adresse: SocketAddr, tx: circuit::ProvedTx) {
     let mut c = client(adresse);
     c.envoyer(&Message::Transaction(Box::new(tx)).to_bytes())
         .expect("envoi de la transaction");
-    // Rien à drainer : sous la règle asymétrique J3, un client qui n'annonce pas sa
-    // version ne reçoit rien de non sollicité. La socket se ferme sans octets non lus,
-    // donc sans `RST`, donc sans faire jeter au nœud son tampon de réception.
+    // Pas de drain : sous la règle asymétrique J3, un client qui n'annonce pas sa
+    // version ne reçoit aucune `Version`, donc plus d'octets SYSTÉMATIQUEMENT non lus
+    // au moment de fermer — plus de `RST` systématique, plus de tampon de réception
+    // jeté chez le nœud. ⚠️ Une DIFFUSION du nœud peut toujours atteindre ce lien
+    // entrant ; la fenêtre est réduite, pas supprimée.
 }
 
 /// LE CYCLE : payer → sceller → recevoir → retrouver sa monnaie → redépenser.

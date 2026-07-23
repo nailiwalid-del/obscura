@@ -466,10 +466,17 @@ impl Noeud {
     /// Règle **ASYMÉTRIQUE** : seul le CONNECTEUR annonce spontanément (le runtime le
     /// déclare par [`Noeud::noter_version_envoyee`]) ; l'ACCEPTEUR ne répond que
     /// parce qu'il a reçu une annonce. Un client qui n'annonce rien ne reçoit donc
-    /// RIEN de non sollicité — ce qui supprime par CONSTRUCTION la perte silencieuse
-    /// d'un « j'envoie et je raccroche » (fermer une socket portant des octets non lus
-    /// provoque un `RST`, qui fait jeter au nœud d'en face son tampon de réception,
-    /// transaction comprise).
+    /// AUCUNE `Version` — ce qui supprime l'écriture SYSTÉMATIQUE en tête de lien,
+    /// c'est-à-dire le cas « toujours » de la perte silencieuse d'un « j'envoie et je
+    /// raccroche » (fermer une socket portant des octets non lus provoque un `RST`,
+    /// qui fait jeter au nœud d'en face son tampon de réception, transaction
+    /// comprise).
+    ///
+    /// ⚠️ Ce n'est PAS « rien, jamais » : une [`Action::Diffuser`] atteint tous les
+    /// liens ouverts, entrants compris, pour des causes indépendantes du client
+    /// (embargo Dandelion++ expiré, scellement, relais de bloc, proposition de
+    /// changement d'autorités). Le hasard du `RST` est RÉDUIT, pas supprimé, et un
+    /// client tiers doit tolérer de lire ce qu'il n'a pas demandé.
     ///
     /// La trace `version_envoyee` est ce qui rend l'échange TERMINANT : sans elle le
     /// connecteur répondrait à la réponse, et un pair qui réannonce en boucle

@@ -51,6 +51,14 @@ fn attendre<F: FnMut() -> bool>(mut condition: F, delai: Duration) -> bool {
 /// donc qu'un message de l'autre est bien arrivé, décodé et traité — et non « un
 /// événement quelconque a été pompé ».
 ///
+/// # Ce que ce test n'envoie plus
+///
+/// Il émettait aussi une `Message::Annonce`, dont AUCUNE assertion n'observait
+/// l'effet : le test restait vert même en supprimant la production de la `Demande`
+/// dans `Noeud::sur_annonce`. Un envoi que rien ne vérifie fait promettre au nom du
+/// test plus qu'il ne tient. L'aller-retour annonce → demande est exercé, lui, par
+/// `annonce_declenche_une_demande_sur_le_fil`, qui DÉCODE la réponse.
+///
 /// Le port 0 laisse l'OS attribuer un port libre : le test peut donc s'exécuter en
 /// parallèle d'autres sans collision.
 #[test]
@@ -83,7 +91,8 @@ fn deux_noeuds_se_connectent_et_echangent() {
         (pair, rt.liens_ouverts())
     });
 
-    // Client : se connecte et envoie une annonce (message le plus simple).
+    // Client : se connecte. Il n'envoie RIEN de plus que sa `Version` — l'échange
+    // observé est celui de la négociation, et lui seul.
     let mut rt_client = Runtime::new(noeud(2));
     let pair_serveur = rt_client
         .connecter(adresse, &id_client)
@@ -100,11 +109,6 @@ fn deux_noeuds_se_connectent_et_echangent() {
         Some(adresse),
         "le pair sortant est mémorisé avec son adresse (sélection anti-eclipse)"
     );
-
-    rt_client.executer(vec![node::orchestration::Action::Envoyer(
-        pair_serveur,
-        Message::Annonce(vec![[7u8; 64]]),
-    )]);
 
     // Sens RETOUR : le serveur a répondu à notre annonce de version, et le client
     // l'apprend. C'est l'effet réel d'un message reçu, pas un compteur d'événements.
@@ -172,8 +176,9 @@ fn annonce_declenche_une_demande_sur_le_fil() {
         .expect("envoi de l'annonce");
 
     // Le serveur doit répondre par une DEMANDE portant exactement ce digest. Rien
-    // d'autre ne doit précéder : ce client n'annonce pas sa version, donc le nœud ne
-    // lui envoie rien de non sollicité (règle asymétrique J3).
+    // d'autre ne précède ici : ce client n'annonce pas sa version (règle asymétrique
+    // J3, donc aucune `Version` en retour) et ce nœud n'a rien à diffuser — une
+    // diffusion, elle, atteindrait ce lien entrant comme tous les autres.
     let octets = client.recevoir().expect("le serveur doit répondre");
     match Message::from_bytes(&octets).expect("réponse décodable") {
         Message::Demande(d) => assert_eq!(

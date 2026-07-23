@@ -160,7 +160,9 @@ impl Runtime {
         let coupure = flux.try_clone().map_err(|e| NetError::Io(e.kind()))?;
         let connexion = Connexion::accepter(flux, identite)?;
         // ENTRANT : on n'annonce RIEN spontanément (règle asymétrique, cf.
-        // `enregistrer`). Un client à un coup ne reçoit donc rien de non sollicité.
+        // `enregistrer`). Un client à un coup ne reçoit donc rien EN RÉPONSE À
+        // L'ÉTABLISSEMENT DU LIEN — ce qui n'est pas « rien, jamais » : une
+        // `Action::Diffuser` atteint tous les liens ouverts, entrants compris.
         let id = self.enregistrer(connexion, coupure, false)?;
         // Volontairement PAS `pairs.ajouter` : la table de pairs sert la sélection
         // SORTANTE anti-eclipse, et y verser les entrants offrirait à un attaquant un
@@ -205,9 +207,18 @@ impl Runtime {
     /// raccroche » : fermer une socket qui porte des octets NON LUS provoque un `RST`,
     /// et un `RST` fait jeter à la pile d'en face son tampon de RÉCEPTION — donc la
     /// transaction qu'on venait de recevoir, si le thread de lecture ne l'avait pas
-    /// encore consommée. Un drain côté client n'ATTÉNUAIT que ce hasard ; ne rien
-    /// émettre de non sollicité l'ÉLIMINE. La négociation nœud↔nœud, elle, ne perd
-    /// rien : tout nœud se connecte en sortant.
+    /// encore consommée. La négociation nœud↔nœud, elle, ne perd rien : tout nœud se
+    /// connecte en sortant.
+    ///
+    /// ⚠️ **Ce que la règle supprime, exactement.** Elle supprime l'écriture
+    /// SYSTÉMATIQUE en tête de lien — le cas « toujours ». Elle ne supprime PAS toute
+    /// écriture non sollicitée : `Action::Diffuser` (cf. [`Runtime::executer`]) part
+    /// vers **tous les liens ouverts, entrants compris**, et naît de causes
+    /// indépendantes du client (embargo Dandelion++ expiré, `--sceller`, relais d'un
+    /// bloc reçu, proposition de changement d'autorités). Le hasard du `RST` est donc
+    /// RÉDUIT à « si une diffusion tombe pendant que le lien est ouvert », pas
+    /// supprimé. Un client tiers doit tolérer de lire des messages qu'il n'a pas
+    /// demandés (c'est ce que fait [`crate::client`]).
     ///
     /// Quand elle part, la version est déposée dans la file AVANT tout autre message,
     /// ce qui en fait le premier message applicatif du lien (la file d'un lien
@@ -268,21 +279,28 @@ impl Runtime {
             }
         });
 
-        // NOTRE VERSION, en tête — SORTANTS seulement. Le `try_send` ne peut échouer
-        // sur une file neuve ; s'il échouait, le lien serait déjà mort et le pair nous
-        // présumerait simplement « version de base » — ce qui reste un état valide,
-        // jamais un blocage. C'est la contrepartie du caractère optionnel du message.
+        // NOTRE VERSION, en tête — SORTANTS seulement.
         //
         // La trace est posée dans le nœud pour que la RÉPONSE du pair (elle-même une
         // `Version`) ne nous fasse pas répondre à notre tour : l'échange doit se
         // terminer, pas rebondir.
-        if annoncer {
-            let _ = file_envoi.try_send(
-                Message::Version {
-                    protocole: VERSION_PROTOCOLE,
-                }
-                .to_bytes(),
-            );
+        //
+        // ⚠️ ORDRE : la trace ne suit qu'un dépôt RÉUSSI. Le `try_send` ne peut pas
+        // échouer sur une file neuve, mais l'écrire dans l'autre sens rendait
+        // l'invariant faux par construction — on aurait mémorisé une annonce jamais
+        // faite, puis refusé de répondre au pair qui, lui, n'a rien reçu : les deux
+        // côtés muets, chacun croyant l'échange terminé. Un échec laisse au contraire
+        // l'état « rien annoncé », qui reste vrai et qui nous fera répondre.
+        if annoncer
+            && file_envoi
+                .try_send(
+                    Message::Version {
+                        protocole: VERSION_PROTOCOLE,
+                    }
+                    .to_bytes(),
+                )
+                .is_ok()
+        {
             self.noeud.noter_version_envoyee(id);
         }
 
@@ -398,6 +416,17 @@ impl Runtime {
                     }
                     self.noeud.oublier_adresse(&pair);
                 }
+                // DIFFUSION : vers TOUS les liens ouverts, ENTRANTS COMPRIS. C'est
+                // délibéré (un pair qui nous appelle doit recevoir nos blocs et nos
+                // annonces), et c'est la raison pour laquelle « le nœud n'écrit
+                // jamais rien de non sollicité à un client » est FAUX : la diffusion
+                // naît d'un embargo expiré, d'un scellement ou du relais d'un bloc,
+                // jamais de ce que le lien a dit. Un client tiers doit donc tolérer
+                // de lire ce qu'il n'a pas demandé — cf. `crate::client`.
+                //
+                // ⚠️ Hors périmètre, connu : les liens sont indexés par `PeerId`, donc
+                // un lien entrant et un lien sortant vers la MÊME identité se
+                // remplacent l'un l'autre dans la table. Préexistant, non traité ici.
                 Action::Diffuser(message) => {
                     let octets = message.to_bytes();
                     let mut morts: Vec<PeerId> = Vec::new();

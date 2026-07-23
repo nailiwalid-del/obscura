@@ -587,10 +587,19 @@ fn envoyer(fichier: &Path, o: &Options, protection: &ProtectionCli) {
         ));
     }
     println!("transaction soumise à {noeud}");
-    // Rien à drainer avant de raccrocher : sous la règle asymétrique J3, le nœud
-    // n'émet RIEN de non sollicité vers un client qui n'annonce pas sa version. La
-    // socket ne porte donc pas d'octets non lus, la fermeture est un FIN propre, et
-    // le tampon de réception du nœud — transaction comprise — n'est jamais jeté.
+    // Pas de drain avant de raccrocher : sous la règle asymétrique J3, le nœud n'écrit
+    // rien EN RÉPONSE À L'ÉTABLISSEMENT DU LIEN vers un client qui n'annonce pas sa
+    // version. Le cas « toujours » — des octets systématiquement non lus au moment de
+    // fermer, donc un `RST`, donc le tampon de réception du nœud jeté avec notre
+    // transaction — a disparu.
+    //
+    // ⚠️ Il RESTE une fenêtre, et il faut la connaître : une diffusion du nœud
+    // (`Action::Diffuser` — embargo Dandelion++ expiré, bloc scellé, bloc relayé,
+    // proposition) atteint tous les liens ouverts, entrants compris. Si l'une tombe
+    // entre notre envoi et notre fermeture, la socket porte des octets non lus et le
+    // hasard du `RST` revient. Un drain ne le fermerait pas non plus (il n'y a pas
+    // d'instant où l'on sait que plus rien n'arrivera) : la fenêtre est étroite et
+    // assumée, pas supprimée.
 
     let tx = match Message::from_bytes(&octets) {
         Ok(Message::Transaction(tx)) => tx,
@@ -652,7 +661,8 @@ fn consolider(fichier: &Path, o: &Options, protection: &ProtectionCli) {
         ));
     }
     println!("transaction soumise à {noeud}");
-    // Même raison qu'à `envoyer` : rien de non sollicité ne revient, rien à drainer.
+    // Même raison qu'à `envoyer` : plus d'écriture systématique en tête de lien, donc
+    // rien à drainer — et la même fenêtre résiduelle en cas de diffusion.
 
     let tx = match Message::from_bytes(&octets) {
         Ok(Message::Transaction(tx)) => tx,

@@ -252,6 +252,13 @@ Deux choses à savoir en exploitation :
   rien est présumé parler la version de base : servi normalement, jamais
   sanctionné, jamais mis en attente. Un `obscura-wallet` n'annonce rien du tout
   — c'est un client, pas un pair.
+- ⚠️ **« Le nœud n'écrit rien à qui n'annonce pas » vaut pour la négociation,
+  PAS pour le trafic.** Une **diffusion** (annonce Dandelion++ dont l'embargo a
+  expiré, bloc scellé sous `--sceller`, bloc relayé, proposition de changement
+  d'autorités) part vers **tous les liens ouverts, y compris entrants** — elle
+  ne dépend pas de ce que le pair a dit. Un client tiers que vous écrivez doit
+  donc **tolérer de recevoir des messages qu'il n'a pas demandés** et lire
+  jusqu'à trouver sa réponse. `obscura-wallet` le fait déjà.
 - **Un refus de version se lit dans le journal** (`avert : lien fermé avec … —
   version de protocole annoncée …`). Il ne touche PAS le score : le pair revient
   dès qu'il est à jour. Si vos `liens` tombent après une mise à jour, cette ligne

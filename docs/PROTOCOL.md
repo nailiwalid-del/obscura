@@ -531,16 +531,34 @@ sortant**.
 
 Ce n'est pas une économie de messages, c'est une règle de **sûreté pour les clients à
 un coup**. Un client qui envoie puis raccroche sans lire (`obscura-wallet envoyer`)
-laisserait, si le nœud écrivait spontanément, des octets NON LUS dans son tampon : la
-fermeture produit alors un `RST`, et un `RST` fait jeter à la pile d'en face son
-tampon de RÉCEPTION — donc la transaction elle-même, d'autant plus souvent que la
-machine est chargée. Ne rien émettre de non sollicité **élimine** ce hasard ; un drain
-côté client ne faisait que l'atténuer.
+laisserait, si le nœud écrivait spontanément **en tête de lien**, des octets NON LUS
+dans son tampon : la fermeture produit alors un `RST`, et un `RST` fait jeter à la
+pile d'en face son tampon de RÉCEPTION — donc la transaction elle-même, d'autant plus
+souvent que la machine est chargée. Comme le nœud écrivait alors **à chaque lien
+entrant**, la perte était structurelle : le cas « toujours ». La règle asymétrique le
+supprime.
 
-**Ce que doit faire un client tiers.** Rien. Un client qui n'annonce pas est servi
-normalement, sans sanction ni attente, et ne recevra jamais de message non sollicité.
-S'il annonce, il doit accepter de lire **une** `Version` en réponse avant sa propre
-réponse attendue — `node::client` la tolère de toute façon, en défense en profondeur.
+⚠️ **Ce que la règle ne fait PAS : supprimer tout envoi non sollicité.** Une
+**diffusion** (`Action::Diffuser`, cf. `crate::runtime`) est écrite vers **tous les
+liens ouverts, entrants compris** — et elle naît de causes **indépendantes du
+client** : un embargo Dandelion++ expiré (`tick`), un scellement périodique
+(`--sceller`), le relais d'un bloc reçu d'un autre pair (`sur_bloc`), une proposition
+de changement d'autorités (`proposer_changement`). Un client qui n'a rien annoncé
+reçoit donc bel et bien une `Annonce`, un `Bloc` ou une `Proposition` s'il se trouve
+connecté au moment où l'une part. **Le hasard du `RST` est RÉDUIT** — sa fenêtre
+devient « si une diffusion tombe pendant que le lien est ouvert », au lieu de
+« toujours » — **il n'est pas supprimé.** Toute formulation en « jamais » à cet
+endroit serait fausse.
+
+**Ce que doit faire un client tiers.** Un client qui n'annonce pas est servi
+normalement, sans sanction ni attente, et le nœud ne lui écrit rien **en réponse à
+l'établissement du lien** ni en réponse à son silence. Mais il **doit tolérer de
+recevoir des messages qu'il n'a pas demandés** — au minimum : lire jusqu'à obtenir ce
+qu'il attend, en ignorant le reste, plutôt que de traiter la première trame venue
+comme sa réponse. S'il annonce, il doit en outre accepter **une** `Version` en
+réponse. C'est exactement ce que fait `node::client` : il ignore et relit les
+messages diffusables (`Annonce`, `Bloc`, `Proposition`) et la `Version`, dans la
+limite d'un budget borné au-delà duquel il nomme l'incohérence.
 
 **Politique à la réception** (`node::orchestration`) :
 
@@ -548,11 +566,21 @@ réponse attendue — `node::client` la tolère de toute façon, en défense en 
 |---|---|
 | `protocole < VERSION_MIN_ACCEPTEE` | `Action::Deconnecter { raison: VersionTropAncienne }` — fermeture NOMMÉE des deux sens, JOURNALISÉE, **score inchangé**. Aucune réponse. |
 | `protocole ≥ VERSION_MIN_ACCEPTEE` | enregistrée (`Noeud::version_annoncee`) — y compris une version SUPÉRIEURE à la nôtre ; **une** `Version` en réponse si la nôtre n'est pas déjà partie sur ce lien |
-| aucune annonce | pair présumé parler la version de base — **aucune sanction, aucune attente, aucun refus de servir, et rien ne lui est envoyé** |
+| aucune annonce | pair présumé parler la version de base — **aucune sanction, aucune attente, aucun refus de servir, et aucune `Version` ne lui est envoyée**. ⚠️ « Aucune `Version` » ne veut pas dire « rien » : une DIFFUSION peut l'atteindre, cf. l'avertissement ci-dessus |
 
 ⚠️ **Aucun refus n'est mémorisé au-delà du lien** : un pair déconnecté pour version
 trop ancienne qui se reconnecte est réexaminé de zéro. Inoffensif tant qu'aucune
 boucle de reconnexion automatique n'existe — c'est le pair qui paie l'effort.
+
+⚠️ **Le plancher n'est opposable qu'à QUI ANNONCE, et c'est structurel.** Le contrôle
+`protocole < VERSION_MIN_ACCEPTEE` ne s'exerce que sur une `Version` REÇUE : un pair
+qui se tait ne traverse jamais ce chemin et reste servi, quelle que soit son
+ancienneté réelle. Conséquence à connaître **avant de relever le plancher** : on
+refuse les anciens nœuds HONNÊTES — ceux qui annoncent — sans exclure un logiciel
+ancien qui s'abstient d'annoncer. `VERSION_MIN_ACCEPTEE` est donc un outil de
+COORDINATION entre participants coopératifs, **jamais un contrôle d'accès**. En
+attendre une exclusion effective serait une erreur de modèle ; et c'est aussi ce qui
+garantit qu'un client à un coup ne peut pas être exclu par un incrément du plancher.
 
 **Refuser n'est pas condamner.** Le refus ne touche pas le score : c'est
 `MessageError::version_inconnue()` porté du message au dialogue entier. Pénaliser un

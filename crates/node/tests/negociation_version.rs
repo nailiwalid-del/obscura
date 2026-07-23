@@ -7,7 +7,7 @@
 //!   autres : ni banni, ni pénalisé, ni mis en attente ;
 //! - un pair annonçant `protocole = 0` (sous le minimum) est déconnecté POUR DE BON,
 //!   et **sans la moindre sanction de score** ;
-//! - un CLIENT qui n'annonce pas ne reçoit RIEN de non sollicité ; s'il annonce, il
+//! - un CLIENT qui n'annonce pas ne reçoit AUCUNE `Version` ; s'il annonce, il
 //!   reçoit UNE réponse et pas deux.
 //!
 //! # L'invariant tenu ici : la coexistence, dans les DEUX sens
@@ -22,11 +22,20 @@
 //! # La règle est ASYMÉTRIQUE
 //!
 //! Seul le CONNECTEUR annonce spontanément ; l'ACCEPTEUR ne répond que s'il a reçu
-//! une annonce, et une seule fois. Un client qui n'annonce pas ne reçoit donc RIEN de
-//! non sollicité — ce qui supprime par construction la perte silencieuse d'un
-//! « j'envoie et je raccroche » (un `RST` de fermeture fait jeter au nœud son tampon
-//! de réception, transaction comprise). La négociation nœud↔nœud ne perd rien : tout
-//! nœud se connecte en sortant.
+//! une annonce, et une seule fois. Un client qui n'annonce pas ne reçoit donc AUCUNE
+//! `Version` — ce qui supprime l'écriture SYSTÉMATIQUE en tête de lien, c'est-à-dire
+//! le cas « toujours » de la perte silencieuse d'un « j'envoie et je raccroche » (un
+//! `RST` de fermeture fait jeter au nœud son tampon de réception, transaction
+//! comprise). La négociation nœud↔nœud ne perd rien : tout nœud se connecte en
+//! sortant.
+//!
+//! ⚠️ Ce que ces tests ne prouvent PAS, et ce que personne ne doit leur faire dire :
+//! que le nœud n'écrit JAMAIS rien de non sollicité. `Action::Diffuser` atteint tous
+//! les liens ouverts, entrants compris, pour des causes indépendantes du client
+//! (embargo Dandelion++ expiré, scellement, relais de bloc, proposition de changement
+//! d'autorités) — cf. `synchronisation.rs::une_diffusion_pendant_la_synchronisation_ne_lavorte_pas`.
+//! Ici aucune de ces causes n'est déclenchée ; le silence observé est donc celui de
+//! la NÉGOCIATION, pas celui du trafic.
 //!
 //! # Pourquoi un pair BRUT plutôt qu'un second `Runtime`
 //!
@@ -253,18 +262,24 @@ const COURT: Duration = Duration::from_secs(3);
 
 /// SCÉNARIO 4 — LA RÈGLE ASYMÉTRIQUE, vérifiée sur le fil dans ses trois moments.
 ///
-/// 1. Un client qui n'annonce rien ne reçoit **rien** de non sollicité. C'est ce qui
-///    supprime PAR CONSTRUCTION la perte silencieuse d'un « j'envoie et je
-///    raccroche » : fermer une socket portant des octets non lus provoque un `RST`,
-///    et un `RST` fait jeter au nœud son tampon de réception — donc la transaction
-///    qu'on venait de lui envoyer. Aucun octet en attente, aucun `RST`, aucune perte.
+/// 1. Un client qui n'annonce rien ne reçoit **aucune `Version`** — et, ce nœud-ci ne
+///    diffusant rien, rien du tout. C'est ce qui supprime l'écriture SYSTÉMATIQUE en
+///    tête de lien, donc le cas « toujours » de la perte silencieuse d'un « j'envoie
+///    et je raccroche » : fermer une socket portant des octets non lus provoque un
+///    `RST`, et un `RST` fait jeter au nœud son tampon de réception — donc la
+///    transaction qu'on venait de lui envoyer.
+///
+///    ⚠️ Ce que ce point NE dit pas : que le nœud n'écrira jamais rien. Une
+///    `Action::Diffuser` atteint tous les liens ouverts, entrants compris, pour des
+///    causes indépendantes du client. Le silence observé ici est celui d'un nœud qui
+///    n'a rien à diffuser, pas une garantie de protocole.
 /// 2. S'il annonce, il reçoit la version du nœud en réponse : la négociation reste
 ///    complète pour qui la demande.
 /// 3. S'il réannonce, il ne reçoit **plus rien** : la réponse est unique. Sans cela,
 ///    un pair obtiendrait une réponse gratuite par annonce (amplification), et deux
 ///    nœuds se répondraient indéfiniment.
 #[test]
-fn un_client_qui_nannonce_pas_ne_recoit_rien_de_non_sollicite() {
+fn un_client_qui_nannonce_pas_ne_recoit_aucune_version() {
     let (l, adresse) = ecoute();
     let (fini_tx, fini_rx) = std::sync::mpsc::channel::<()>();
 
@@ -297,7 +312,7 @@ fn un_client_qui_nannonce_pas_ne_recoit_rien_de_non_sollicite() {
         .unwrap();
     let mut c = net::Connexion::connecter(flux, &SigKeypair::generate()).expect("handshake");
 
-    // 1. RIEN de non sollicité.
+    // 1. AUCUNE `Version` (et ce nœud ne diffusant rien, aucune trame).
     assert!(
         matches!(
             c.recevoir(),
@@ -305,7 +320,7 @@ fn un_client_qui_nannonce_pas_ne_recoit_rien_de_non_sollicite() {
                 std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
             ))
         ),
-        "un client qui n'annonce pas ne doit RIEN recevoir spontanément"
+        "un client qui n'annonce pas ne doit recevoir AUCUNE Version spontanée"
     );
 
     // 2. Qui annonce obtient une réponse.
