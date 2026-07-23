@@ -327,6 +327,59 @@ vote = HybridSig("obscura/bloc/vote/v1", id)
   13,8 % à `n = 64`. **La taille du comité est donc bornée par le budget du
   bloc**, définitivement.
 
+### Partition : la politique de minorité
+
+Rien n'est ajouté ici : ce qui suit est la **conséquence** du quorum sur un état
+append-only. C'est écrit parce qu'une propriété implicite n'est pas une
+propriété : un opérateur doit savoir ce que son nœud fait quand le réseau se
+coupe.
+
+Soit un comité de `n` autorités séparé en deux (ou plus) groupes qui ne se
+joignent plus. Un groupe est **majoritaire** s'il réunit `⌊2n/3⌋ + 1` autorités
+joignables entre elles ; il en existe **au plus un**, par construction.
+
+- **Le côté sous quorum s'ARRÊTE de produire.** Non par une règle dédiée, mais
+  parce qu'il ne peut pas faire autrement : le producteur du tour scelle, signe
+  son propre vote, diffuse sa proposition — et n'obtient jamais les `⌊2n/3⌋ + 1`
+  votes distincts qu'exige `appliquer_bloc`. Aucun bloc n'est appliqué, donc
+  aucun n'est archivé, donc **aucune branche concurrente n'existe** : il n'y a
+  rien à réconcilier à la guérison. Le gel est **suspensif**, comme celui d'une
+  autorité absente.
+- **Il CONTINUE de servir.** Servir n'exige aucun quorum : `DemandeBloc`,
+  `DemandeHistorique`, annonces et relais de transactions restent assurés. Un
+  nœud minoritaire reste donc utile — et il reste **honnête** : ce qu'il sert est
+  un préfixe correct de la chaîne, jamais une branche à lui. ⚠️ Il est en
+  revanche **en retard sans le savoir**, et un wallet qui s'y synchronise se
+  croira à jour : c'est exactement le mode d'échec que `--temoin` ferme
+  (cf. `docs/THREAT_MODEL.md`).
+- **Il ne FORKE jamais.** L'état est append-only et la finalité est instantanée :
+  il n'existe aucun chemin par lequel un nœud applique un bloc non certifié. La
+  sûreté ne repose donc pas sur une détection de partition — le nœud n'a même pas
+  besoin de savoir qu'il est en minorité.
+- **Le côté majoritaire avance normalement**, y compris quand la partition lui a
+  pris le producteur du tour : le changement de vue le contourne (J1-b2).
+- **Partition sans côté majoritaire** (deux moitiés, trois tiers…) : **personne**
+  ne produit. La **sûreté prime la liveness** — c'est le choix du modèle, et il
+  n'est pas négociable : préférer produire reviendrait à accepter deux chaînes
+  définitives, puisque rien ne peut les réorganiser ensuite.
+- **Reprise à la guérison, par le chemin NORMAL.** Le nœud en retard reçoit un
+  bloc en avance, échoue à le chaîner (`ParentInattendu`), et demande la première
+  hauteur qui lui manque (`DemandeBloc`) ; il rattrape un bloc par échange
+  jusqu'à la tête. Aucun mécanisme de réconciliation n'est nécessaire, puisque
+  rien de concurrent n'a été produit. Dès la première hauteur appliquée, sa vue
+  revient à 0 et il redevient participant à part entière.
+
+⚠️ **Ce que la guérison ne répare PAS** : une hauteur **CALÉE**
+(`MAX_VUE_PAR_HAUTEUR` atteint sur un split de votes) reste calée après la
+guérison, parce qu'un vote est définitif à sa hauteur. C'est le seul cas où
+« arrêt plutôt que divergence » se paie d'une chaîne à refaire (§2 de
+`docs/TESTNET.md`).
+
+Testé sur sockets réelles : `crates/node/tests/partition.rs` — `n = 4` coupé en
+`{3}` / `{1}`, la minorité étant le producteur du tour ; la majorité le contourne
+et avance, la minorité scelle sans rien appliquer, et converge à la guérison vers
+la **même tête** et le **même arbre**.
+
 ### Ordre de vérification — non négociable
 
 `appliquer_bloc` va du moins cher au plus cher, et l'ordre est une défense

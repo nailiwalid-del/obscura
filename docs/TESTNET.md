@@ -88,6 +88,19 @@ de décisions écrites, et chacune renvoie à son document de référence.
   producteur partiellement joignable pile au basculement), c'est le prix assumé
   de « arrêt plutôt que divergence », et ce n'est **jamais silencieux** : le
   statut passe en préoccupant et le journal émet une `ERREUR` dédiée.
+- **Une partition sans côté majoritaire fige la production jusqu'à la
+  guérison — et c'est le comportement attendu.** Aucun groupe qui ne réunit pas
+  `⌊2n/3⌋ + 1` autorités joignables ne produit de bloc : il scelle peut-être,
+  mais il n'applique rien, donc il ne crée aucune branche. Concrètement, sur ce
+  réseau : la chaîne s'arrête, les nœuds restent debout et continuent de servir
+  ce qu'ils ont, et **la chaîne reprend d'elle-même quand la connectivité
+  revient** — les nœuds en retard rattrapent par `DemandeBloc`, sans
+  intervention. Politique complète :
+  [`PROTOCOL.md`](PROTOCOL.md), « Partition : la politique de minorité ».
+  ⚠️ Un nœud minoritaire est **en retard sans le savoir** : il sert un
+  historique plus court mais parfaitement cohérent. Raison de plus d'utiliser
+  `--temoin` (§1.3). ⚠️ Le cas d'une hauteur **CALÉE** (split de votes) est le
+  seul que la guérison ne répare pas.
 - **Aucune réorganisation n'est possible.** L'état est append-only de bout en
   bout. Toute divergence est **définitive** : un nœud qui diverge ne se répare
   pas, il se réamorce. Avec la finalité instantanée, cette limite devient une
