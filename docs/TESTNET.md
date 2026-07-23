@@ -52,18 +52,29 @@ de décisions écrites, et chacune renvoie à son document de référence.
 ### 1.2 Consensus
 
 - **Fédéré, pas décentralisé.** La liste des autorités de scellement est gravée
-  dans la genèse. En changer = nouvelle genèse = **nouvelle chaîne**.
+  dans la genèse, mais elle est désormais **reconfigurable sur la même chaîne**
+  (J1-c) : l'ancien comité certifie collectivement la nouvelle liste par son
+  quorum, et le changement prend effet à `h + K` (K = 8 blocs). Échanger, ajouter
+  ou retirer un membre ne refait plus la chaîne. **En revanche, l'ancien quorum
+  décide du nouveau** — y compris se réduire ou se remplacer entièrement : votre
+  place dépend du quorum, pas d'un droit acquis.
+- ⚠️ **Réduire le comité à `n ≤ 3` sacrifie la tolérance aux fautes.** Le quorum
+  vaut alors `n` (tous doivent voter) et le changement de vue ne peut plus
+  contourner une absence. Table de liveness :
+
+  | n | quorum | tolère f absent(s) |
+  |---|---|---|
+  | 1 | 1 | 0 |
+  | 2 | 2 | 0 |
+  | 3 | 3 | 0 |
+  | 4 | 3 | 1 |
+  | 7 | 5 | 2 |
+  | 10 | 7 | 3 |
 - **Un bloc exige un quorum de `2f + 1` autorités** (`n = 3f + 1`) depuis le
   format `0x04`. C'est ce qui donne la **finalité** : un bloc certifié ne peut
   être contredit sans que `f + 1` participants signent deux blocs à la même
   hauteur — une faute prouvable. Une partition qui ne réunit pas le quorum
   **s'arrête** plutôt que de diverger.
-- ⚠️ **Le protocole de vue n'est pas encore livré (jalon J1-b), et cela se voit.**
-  Les votes ne circulent pas sur le fil : un producteur ne rassemble que le sien.
-  **Sur une chaîne à `n ≥ 4`, aucun bloc n'est donc produit aujourd'hui.** Seules
-  les chaînes à `n ≤ 3` (`f = 0`, quorum 1) avancent. Ce n'est pas une panne à
-  signaler : c'est l'état du jalon, et ce document existe pour qu'il ne soit pas
-  découvert au démarrage.
 - **Une autorité absente est CONTOURNÉE par changement de vue** (J1-b2) : passé
   un délai (à backoff exponentiel), les autres passent à la vue suivante et la
   chaîne continue avec le producteur suivant. La panne d'un participant ne fige
@@ -136,7 +147,7 @@ découvrir au moment des faits.
 
 | Cause | Pourquoi elle impose une nouvelle chaîne |
 |---|---|
-| Changement de la liste d'autorités | elle est gravée dans l'identifiant de genèse |
+| Changement NON certifié de la liste d'autorités (hors quorum, ou liste vide) | il faut une nouvelle genèse ; un changement certifié par le quorum, lui, se fait sur la même chaîne (J1-c) |
 | Arrivée du mécanisme économique | la coinbase change les règles d'émission |
 | Changement de version de bloc ou d'algorithme | le format de fil devient incompatible |
 | Divergence irrécupérable | l'état est append-only : rien ne se répare |
