@@ -176,9 +176,10 @@ n'accepte pas ce prix n'a pas besoin d'Obscura — et le document doit le lui di
   diversité de pairs restent la seule défense, et le nœud servant l'historique
   apprend IP, cadence et position (cf. THREAT_MODEL).
 - **Les canaux auxiliaires** des implémentations sont hors périmètre (prototype).
-- **La gouvernance** : la chaîne est fédérée (autorités gravées en genèse), une
-  autorité absente fige la chaîne à son tour. Rien de tout cela n'est quantique,
-  et tout cela compte davantage pour un utilisateur réel, aujourd'hui.
+- **La gouvernance** : la chaîne est fédérée — le comité est **reconfigurable sur la
+  même chaîne** par quorum certifié (J1-c), et une **autorité absente est contournée
+  par changement de vue** (J1-b2). Rien de tout cela n'est quantique, et tout cela
+  compte davantage pour un utilisateur réel, aujourd'hui.
 - **En revanche, une limite du consensus EST quantique** : il n'existe aucune
   **agrégation de signatures post-quantique**. L'astuce qui rend les BFT modernes
   bon marché — l'agrégation BLS — repose sur des couplages sur courbes
