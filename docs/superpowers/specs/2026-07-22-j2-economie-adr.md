@@ -379,6 +379,20 @@ soldes.
    d'émission écrit ; c'est la seule chose qui sépare encore le point 6 d'un fait
    complet, et elle appartient à l'implémentation, derrière la porte A.
 
+   > ⚠️ **Cadrage du spike D-A1 (2026-07-24) — la majoration ×3 n'est pas
+   > gratuitement sûre.** Le masquage 3z-b1 ajoute `BLIND_ROWS = 56` lignes de
+   > trace. Sur le monolithe, elles se noient dans une trace énorme (surcoût
+   > faible) ; sur l'OUVERTURE — un petit gadget, trace ~16 lignes — elles
+   > **dominent** : la trace masquée monte à ~128 lignes (~8×). Le surcoût relatif y
+   > est donc bien plus grand qu'au monolithe sur lequel le ×3 était calqué. La
+   > taille de preuve ne croît pas linéairement (FRI est log), donc l'ouverture
+   > masquée atterrit vraisemblablement dans **~30–55 Kio** au consensus, mais la
+   > fourchette **n'est pas tranchée sans mesure réelle**. **La mesure exacte exige
+   > d'implémenter le blinding sur `SpongeAir`** (porter 3z-b1 à une trace
+   > différente, avec vérification de soundness) — **différé derrière la porte A**,
+   > comme cet ADR le prévoit déjà. La borne ×3 reste écrite en attendant, mais
+   > sachant qu'elle est une hypothèse à confirmer, pas un plafond acquis.
+
 2. **La note d'émission a une valeur publiquement connue**, donc marquée au
    moment de sa dépense ultérieure. Zcash et Monero vivent avec. Atténuation
    disponible ici : l'autorité peut la consolider (`Wallet::consolider`) avant de

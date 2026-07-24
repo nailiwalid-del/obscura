@@ -84,7 +84,16 @@ Chaque fiche porte, outre sa nature et son déclencheur, **quatre champs** :
 - **Engage irréversiblement :** ouvrir réellement le sealing sur un réseau de
   production — ce qui crée le risque de « valeur réelle » et déclenche D-A5.
 
-### D-A1 — Coinbase : mesure du masquage — CONCEPTION (spike, PAS intégration)
+### D-A1 — Coinbase : mesure du masquage — CONCEPTION (spike) — 🟡 **CADRÉ, mesure exacte différée (2026-07-24)**
+
+> **Spike de cadrage mené le 2026-07-24.** Constat : le masquage 3z-b1 ajoute
+> `BLIND_ROWS = 56` lignes, qui **dominent** la petite trace de l'ouverture (~16 →
+> ~128 lignes, ~8×) — contrairement au monolithe où elles se noient. **La majoration
+> ×3 d'ADR-002 n'est donc pas gratuitement sûre pour ce gadget** ; l'ouverture
+> masquée atterrit vraisemblablement en ~30–55 Kio, non tranché sans mesure réelle.
+> La mesure exacte exige d'implémenter le blinding sur `SpongeAir` (soundness
+> comprise) — **différée derrière la porte A**, comme ADR-002 le prévoit. Détail
+> dans le résidu 1 d'ADR-002.
 
 **Nature :** conception (un spike de mesure). **Prérequis :** ADR-002 livré ✅
 (mécanisme tranché ; `R(h)` non tranchée). **Déclencheur :** « proposer d'attribuer
