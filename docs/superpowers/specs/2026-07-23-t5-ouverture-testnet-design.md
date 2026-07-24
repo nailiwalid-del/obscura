@@ -22,7 +22,7 @@ Le gros de T5 est **déjà écrit ou outillé** — à ne pas re-spécifier :
   §1 limites connues, §2 procédure de reset, §3 réaction à la valeur, §4
   signalement. ✅
 - **Outillage de genèse** : `obscura-genese` refuse d'écraser, auto-vérifie,
-  imprime l'identifiant **complet** (32 o) ; `obscura-node --identite` ;
+  imprime l'identifiant **complet** (64 o) ; `obscura-node --identite` ;
   `--archiver` ; témoin de synchronisation. ✅
 - **Déploiement** : `deploiement/{Dockerfile, obscura-node.service}`,
   `docs/OPERATEUR.md`. ✅
@@ -107,7 +107,7 @@ pré-condition et son critère de vérification :
 2. **Gel de la genèse** : `obscura-genese` avec autorités et allocations décidées ;
    il auto-vérifie et imprime l'identifiant complet. La genèse est **consommable**
    (rappel : elle sera refaite ; c'est écrit dans `TESTNET.md`).
-3. **Publication de l'ancre** (chantier 3) : identifiant 32 o dans le dépôt + hors
+3. **Publication de l'ancre** (chantier 3) : identifiant 64 o dans le dépôt + hors
    bande.
 4. **Release signée** (chantier 1) : tag + checksums + signature minisign.
 5. **Annonce** : limites publiées **avant** l'ouverture (renvoi `TESTNET.md`), y
@@ -139,7 +139,7 @@ c'est précisément ce canal qu'il faut utiliser pour ancrer la genèse.
 
 ### Ce que la spec demande
 
-1. **L'identifiant complet (32 o) publié dans le dépôt** — dans `docs/TESTNET.md`
+1. **L'identifiant complet (64 o) publié dans le dépôt** — dans `docs/TESTNET.md`
    (ou un fichier `docs/GENESE.md` référencé) — accompagné de la **genèse signée**
    (chantier 1). C'est l'ancre qu'un opérateur compare avec ce qu'imprime son nœud
    au démarrage.
@@ -152,7 +152,7 @@ c'est précisément ce canal qu'il faut utiliser pour ancrer la genèse.
 
 ### Critère de franchissement
 
-L'identifiant 32 o de la genèse de *cette* chaîne est publié dans le dépôt **et**
+L'identifiant 64 o de la genèse de *cette* chaîne est publié dans le dépôt **et**
 signé ; un opérateur qui démarre `obscura-node --genese genese.bin` voit le même
 identifiant et peut le confronter à la valeur hors bande.
 
@@ -179,7 +179,7 @@ Trois tâches ; la 1 et la 3 avant la 2 (le runbook les référence) :
    rejeté.
 2. **Runbook** `docs/OUVERTURE.md` : séquence des 5 étapes + points de
    centralisation en tête.
-3. **Ancre** : identifiant 32 o publié + signé, référencé depuis le runbook.
+3. **Ancre** : identifiant 64 o publié + signé, référencé depuis le runbook.
 
 ⚠️ **Ce que le plan doit vérifier avant d'écrire.** Le format exact de sortie de
 `obscura-genese` (nom du fichier, forme de l'identifiant imprimé) et la présence

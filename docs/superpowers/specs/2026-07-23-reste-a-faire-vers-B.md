@@ -190,7 +190,7 @@ acceptée** est irréparable sur un ledger append-only.
 (`deploiement/signer-release.sh`/`verifier-release.sh` — manifeste de checksums,
 signature vérifiée avant les checksums, testé par altération d'artefact ET de
 manifeste), runbook `docs/OUVERTURE.md` (5 étapes, re-test PQ bloquant en tête), et
-gabarit `docs/GENESE.md` pour publier l'ancre 32 o.
+gabarit `docs/GENESE.md` pour publier l'ancre 64 o.
 
 ⚠️ **L'OUVERTURE elle-même n'est PAS faite, et c'est délibéré.** Aucune vraie genèse
 gelée, aucune vraie release signée, aucun identifiant réel publié — ce sont des
@@ -202,7 +202,7 @@ Le **gate hérité de D-final** — rejouer et consigner `BACKEND_PQ.md` avant
 <details><summary>État de l'outillage avant T5 (archive)</summary>
 
 **État vérifié.** Outillage complet : `obscura-genese` (refuse d'écraser,
-auto-vérifie, imprime l'id complet 32 o), `obscura-node --identite`, `--archiver`,
+auto-vérifie, imprime l'id complet 64 o), `obscura-node --identite`, `--archiver`,
 témoin de synchronisation, `deploiement/{Dockerfile,obscura-node.service}`,
 `docs/OPERATEUR.md`. **Documentation d'ouverture largement écrite** :
 `docs/TESTNET.md` couvre déjà §0 sur invitation, §1 limites connues, §2 procédure
@@ -374,7 +374,7 @@ la chaîne ouverte :
 
 1. Rejouer et **consigner** le re-test de la dette PQ (`BACKEND_PQ.md`, gate hérité
    de D-final) — étape 1 du runbook, **avant** tout `obscura-genese`.
-2. Geler la genèse (autorités + allocations décidées), publier l'ancre 32 o dans
+2. Geler la genèse (autorités + allocations décidées), publier l'ancre 64 o dans
    `docs/GENESE.md` **et** hors bande.
 3. Générer la vraie paire de clés de release (hors dépôt), signer la release,
    remplacer le placeholder `deploiement/release.pub`, publier l'empreinte hors bande.

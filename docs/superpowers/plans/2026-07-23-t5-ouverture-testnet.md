@@ -4,7 +4,7 @@
 
 **Goal:** Construire la MACHINERIE d'ouverture d'un testnet public sur invitation — outil de signature de release (minisign), runbook d'ouverture, et scaffolding de publication de l'ancre de genèse — sans exécuter les actes irréversibles eux-mêmes (gel de la vraie genèse, signature de la vraie release, publication du vrai identifiant), qui sont des gestes d'opérateur au moment de l'ouverture.
 
-**Architecture:** Trois livrables sans dépendance de consensus : (1) un script de signature + une clé publique au dépôt + une procédure de vérification, testables avec une clé JETABLE ; (2) un runbook `docs/OUVERTURE.md` qui SÉQUENCE des procédures déjà écrites ailleurs (il ne crée aucune règle) ; (3) un gabarit `docs/GENESE.md` pour publier l'ancre 32 o, référencé par le runbook. Aucun code Rust ne change.
+**Architecture:** Trois livrables sans dépendance de consensus : (1) un script de signature + une clé publique au dépôt + une procédure de vérification, testables avec une clé JETABLE ; (2) un runbook `docs/OUVERTURE.md` qui SÉQUENCE des procédures déjà écrites ailleurs (il ne crée aucune règle) ; (3) un gabarit `docs/GENESE.md` pour publier l'ancre 64 o, référencé par le runbook. Aucun code Rust ne change.
 
 **Tech Stack:** minisign (signify), Bash/PowerShell (scripts d'aide), Markdown (docs). Aucune dépendance Rust ajoutée.
 
@@ -246,10 +246,10 @@ de genèse »). Ne pas passer à l'étape 2 sans cette trace écrite, même « t
 
 ## Étape 2 — Gel de la genèse
 `obscura-genese` avec autorités (`--autorite-hex`) et allocations décidées. Il
-auto-vérifie et imprime l'identifiant COMPLET (32 o). Critère : l'identifiant imprimé.
+auto-vérifie et imprime l'identifiant COMPLET (64 o). Critère : l'identifiant imprimé.
 
 ## Étape 3 — Publication de l'ancre
-Renseigner `docs/GENESE.md` (identifiant 32 o) et publier la MÊME valeur hors bande.
+Renseigner `docs/GENESE.md` (identifiant 64 o) et publier la MÊME valeur hors bande.
 Voir `docs/GENESE.md`.
 
 ## Étape 4 — Release signée
@@ -294,7 +294,7 @@ EOF
 
 **Interfaces:**
 - Consumes: `obscura-node` imprime déjà l'identifiant complet au démarrage (correctif `2e9e4df`).
-- Produces: le gabarit où l'ancre 32 o est publiée + la procédure de comparaison.
+- Produces: le gabarit où l'ancre 64 o est publiée + la procédure de comparaison.
 
 - [ ] **Step 1 : Écrire le test de présence**
 
@@ -319,7 +319,7 @@ Expected: `ECHEC`.
 
 ## Chaîne courante
 
-- **Identifiant complet (32 o, hex)** : `<À RENSEIGNER AU GEL — sortie de obscura-genese>`
+- **Identifiant complet (64 o, hex)** : `<À RENSEIGNER AU GEL — sortie de obscura-genese>`
 - **Genèse signée** : voir la release (`deploiement/verifier-release.sh`).
 - **Valeur hors bande** : la même chaîne hex est publiée sur le canal d'invitation.
 
@@ -346,7 +346,7 @@ git add docs/GENESE.md docs/TESTNET.md
 git commit -m "$(cat <<'EOF'
 t5(ancre): gabarit docs/GENESE.md pour publier l'identifiant de genèse
 
-Ancre 32 o + valeur hors bande + procédure de comparaison au démarrage
+Ancre 64 o + valeur hors bande + procédure de comparaison au démarrage
 (obscura-node imprime l'identifiant complet). Référencé depuis TESTNET.md.
 Valeur réelle renseignée au gel.
 

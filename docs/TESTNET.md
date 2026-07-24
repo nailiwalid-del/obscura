@@ -150,9 +150,9 @@ de décisions écrites, et chacune renvoie à son document de référence.
   archive voit passer les demandes de tous les autres** (§1.3).
 - **La genèse n'est pas authentifiée par elle-même.** Rien dans le fichier
   n'atteste qui l'a écrite.
-  → **Vérification :** l'identifiant complet (32 octets) est publié dans le
+  → **Vérification :** l'identifiant complet (64 octets) est publié dans le
   README du dépôt, et les releases sont **signées**. Comparez-le avec celui
-  imprimé au démarrage de votre nœud. 32 octets, pas 8 — la forme courte est un
+  imprimé au démarrage de votre nœud. 64 octets, pas 8 — la forme courte est un
   diagnostic, pas une ancre. Le gabarit de publication de cette ancre, avec la
   procédure de comparaison, est dans [`GENESE.md`](GENESE.md).
 - **Le mempool n'est pas persisté** (sans gravité : les pairs réannoncent).
@@ -194,7 +194,7 @@ découvrir au moment des faits.
 
 1. **Annonce préalable** sur les canaux d'ouverture, avec la raison et la date.
 2. **Publication de la nouvelle genèse** et de son **identifiant complet**
-   (32 octets) hors bande.
+   (64 octets) hors bande.
 3. **Arrêt des nœuds de l'ancienne chaîne.** Un nœud ne sert pas les deux : son
    répertoire de données grave sa genèse et refuse l'autre.
 4. **Redémarrage** : chaque opérateur repart d'un répertoire de données **neuf**

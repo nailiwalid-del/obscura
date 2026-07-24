@@ -117,7 +117,7 @@ le travail réel qui est dessous.
 
 ### Constat 3 — l'ancre de genèse est tronquée là où elle sert
 
-`obscura-genese` imprime l'identifiant **complet** (32 o) *et* sa forme courte
+`obscura-genese` imprime l'identifiant **complet** (64 o) *et* sa forme courte
 (`crates/node/src/bin/obscura-genese.rs:242`). Mais `obscura-node` n'imprime que
 **8 octets** au démarrage (`crates/node/src/bin/obscura-node.rs:289`) —
 c'est-à-dire exactement au moment où un opérateur compare avec la valeur publiée
@@ -254,7 +254,7 @@ auto-vérifie, imprime l'identifiant complet), `obscura-node --identite`,
 
 | # | Élément | Pourquoi il ne peut pas être omis |
 |---|---|---|
-| 1 | **Identifiant complet (32 o) publié dans le dépôt + release SIGNÉE** ✅ *(décidé)* | `THREAT_MODEL.md:381` — rien n'atteste qui a écrit la genèse ; le dépôt Git est hors bande vis-à-vis du réseau P2P |
+| 1 | **Identifiant complet (64 o) publié dans le dépôt + release SIGNÉE** ✅ *(décidé)* | `THREAT_MODEL.md:381` — rien n'atteste qui a écrit la genèse ; le dépôt Git est hors bande vis-à-vis du réseau P2P |
 | 2 | ~~**`obscura-node` imprime l'identifiant COMPLET**~~ ✅ `2e9e4df` | constat 3 — 64 bits là où l'opérateur compare |
 | 3 | ~~**Bootnodes**~~ → **AUCUNE infra publique** ✅ *(décidé)* | réseau **sur invitation** : les participants sont les opérateurs, les fonds viennent des allocations de genèse, pas d'un faucet |
 | 4 | **Release taguée + checksums + signature** | sans quoi le binaire n'est pas plus authentifié que la genèse |
