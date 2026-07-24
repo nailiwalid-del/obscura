@@ -149,9 +149,8 @@ foreach ($binNom in 'obscura-wallet', 'obscura-genese', 'obscura-node') {
 
 Arreter-Tout
 if (Test-Path $Rep) { Remove-Item $Rep -Recurse -Force }
-New-Item -ItemType Directory -Path $Rep | Out-Null
-
 if ($Nettoyer) { Write-Host 'nettoyage demandé — sortie.'; return }
+New-Item -ItemType Directory -Path $Rep | Out-Null
 
 try {
     # --- Identités des 4 autorités (clé publique hex sur stdout). ---
