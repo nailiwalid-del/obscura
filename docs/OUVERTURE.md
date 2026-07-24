@@ -67,17 +67,17 @@ obscura-genese --sortie genese.bin \
   chiffrés.
 
 L'outil s'**auto-vérifie** (relecture après écriture) et imprime l'identifiant
-de genèse **COMPLET (32 octets)**, ainsi qu'une forme courte (8 octets) à seul
+de genèse **COMPLET (64 octets)**, ainsi qu'une forme courte (8 octets) à seul
 usage de comparaison visuelle rapide.
 
-**Critère de passage :** l'identifiant complet (32 octets) est imprimé et
+**Critère de passage :** l'identifiant complet (64 octets) est imprimé et
 recueilli. C'est lui, pas la forme courte, qui sert d'ancre à l'étape 3.
 
 ---
 
 ## Étape 3 — Publication de l'ancre (IRRÉVERSIBLE)
 
-**Pré-condition :** identifiant complet (32 octets) de l'étape 2 en main.
+**Pré-condition :** identifiant complet (64 octets) de l'étape 2 en main.
 
 Renseigner `docs/GENESE.md` avec cet identifiant, puis publier la **même
 valeur hors bande** (canal d'invitation, distinct du dépôt Git) : le dépôt
@@ -139,7 +139,7 @@ premier nœud externe ne rejoigne.
 | Étape | Critère |
 |---|---|
 | 1. Re-test PQ | Trace écrite du re-test, même négative |
-| 2. Gel de la genèse | Identifiant complet (32 o) imprimé et recueilli |
+| 2. Gel de la genèse | Identifiant complet (64 o) imprimé et recueilli |
 | 3. Publication de l'ancre | `docs/GENESE.md` et canal hors bande identiques |
 | 4. Release signée | `verifier-release.sh` exécuté par un tiers, release vérifiée |
 | 5. Annonce | Limites, reset et réaction à la valeur publiés avant ouverture |
