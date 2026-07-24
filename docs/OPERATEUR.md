@@ -264,6 +264,35 @@ Deux choses à savoir en exploitation :
   dès qu'il est à jour. Si vos `liens` tombent après une mise à jour, cette ligne
   est ce qui le dit.
 
+## Vérifier une release
+
+Chaque release publie un répertoire d'artefacts accompagné d'un manifeste de
+checksums SHA-256 signé avec [minisign](https://jedisct1.github.io/minisign/).
+Un tiers vérifie l'intégrité et l'authenticité **sans jamais voir la clé
+privée**, qui reste un secret d'opérateur et ne quitte jamais son détenteur :
+
+```sh
+bash deploiement/verifier-release.sh <repertoire-artefacts> deploiement/release.pub
+```
+
+La commande échoue (code de sortie non nul) si la signature du manifeste est
+invalide **ou** si un seul artefact ne correspond plus à son checksum — les
+deux contrôles sont nécessaires : le premier garantit que le manifeste vient
+bien de l'opérateur, le second que les fichiers livrés correspondent au
+manifeste.
+
+⚠️ **`deploiement/release.pub` est un placeholder tant qu'aucune release n'a
+été signée.** Avant de faire confiance à une vérification, confrontez la clé
+publique du dépôt (la ligne encodée en base64 de `deploiement/release.pub`) à
+celle publiée **hors bande** (canal d'invitation, autre canal que celui qui
+sert les artefacts) — pas seulement la première fois, mais à chaque mise à
+jour du dépôt : rien n'empêche un dépôt compromis de remplacer un binaire et
+sa clé de vérification du même coup, silencieusement.
+
+Si les deux valeurs divergent, ne faites confiance à rien : soit le dépôt est
+compromis, soit vous n'avez pas la bonne clé — dans les deux cas, arrêtez la
+vérification et signalez l'écart avant de continuer.
+
 ## Dépanner
 
 **Le nœud démarre puis ne fait rien.** Regardez `liens`. À 0, aucun pair n'est

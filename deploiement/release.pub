@@ -1,0 +1,6 @@
+# Clé publique minisign des releases Obscura testnet.
+# PLACEHOLDER — à remplacer par la vraie clé publique au moment de la première
+# release signée (générée hors dépôt : `minisign -G -p release.pub -s release.key`).
+# L'empreinte de cette clé DOIT aussi être publiée hors bande (canal d'invitation),
+# sinon un attaquant qui remplace le binaire remplace la clé du même coup.
+RWQPLACEHOLDER0000000000000000000000000000000000000000000
