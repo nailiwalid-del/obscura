@@ -37,8 +37,9 @@ cargo build --release
 ./target/release/obscura-node --identite --donnees noeud-a   # → 3970 caractères hex
 
 # 2. Geler la chaîne, en gravant les clés reçues. SANS --autorite, elle est
-#    OUVERTE (voir « Limites » ci-dessous). L'identifiant imprimé est à COMPARER
-#    entre opérateurs avant tout démarrage.
+#    OUVERTE (voir « Limites » ci-dessous). L'identifiant COMPLET (64 o, 128 hex)
+#    imprimé est l'ANCRE, à COMPARER entre opérateurs avant tout démarrage — la
+#    forme courte (8 o) n'est qu'un repère visuel (voir docs/GENESE.md, docs/OUVERTURE.md).
 ./target/release/obscura-genese --sortie genese.bin \
     --autorite-hex 02a1b2… --autorite-hex 02c3d4… \
     --allocation obs1abc…:1000
@@ -60,7 +61,7 @@ Au démarrage, le nœud dit s'il est autorité et à quel rang — le découvrir
 tour de scellement manqué serait un silence inexplicable :
 
 ```
-INFO   genèse b3200f256397c399 (0 émissions) — tête courante b3200f256397c399
+INFO   genèse b3200f256397c399…f7b0de15 (128 hex complet) (0 émissions) — tête courante b3200f256397c399
 INFO   chaîne à 2 autorités — cette identité est l'autorité n° 0
 INFO   élection par tour de rôle : ce nœud ne scelle qu'à son tour
 ```
@@ -69,9 +70,11 @@ Deux options méritent d'être comprises avant d'être tapées :
 
 - **`--sceller <ms>` est OFF par défaut.** Produire des blocs est une décision
   d'opérateur, pas un défaut. Sur une chaîne à autorités, un nœud qui n'en est pas une
-  refuse de sceller et le dit. ⚠️ **Gravez au plus 3 autorités pour l'instant** : au
-  delà, le quorum `2f+1` dépasse le seul vote du producteur, et les votes ne circulent
-  pas encore sur le fil (jalon J1-b) — la chaîne n'avancerait pas.
+  refuse de sceller et le dit. Le **protocole de vue est livré** (J1-b) : les votes
+  circulent sur le fil, une chaîne à `n ≥ 4` produit des blocs, et une autorité absente
+  est **contournée par changement de vue**. ⚠️ **Réduire le comité à `n ≤ 3` sacrifie la
+  tolérance aux fautes** (le quorum vaut alors `n`, aucune absence n'est tolérée) —
+  table de liveness dans [docs/TESTNET.md](docs/TESTNET.md) §1.2.
 - **`--noeud-synchro` doit être DIFFÉRENT de `--noeud`.** Se synchroniser puis payer
   depuis la même adresse relie les deux et désigne l'émetteur : un relais Dandelion++
   ne vient jamais de se synchroniser. Le CLI avertit quand ils coïncident.
@@ -127,11 +130,21 @@ la profondeur de consensus tournent une fois par semaine (`.github/workflows/lou
 5. ✅ Nœud, wallet CLI, testnet local multi-nœuds
 6. ✅ **Finalité** : bloc + application atomique + convergence entre nœuds ;
    synchronisation wallet ↔ nœud (le wallet REÇOIT) ; **élection du producteur**
-7. 🔶 **Consensus BFT** (ADR-001 accepté) : format `0x04` — vue dans l'identifiant,
-   **certificat de quorum `2f+1` vérifié avant tout STARK** (J1-a ✅) ; protocole de
-   vue, votes sur le fil et changement de vue (J1-b ⬜) ; changement d'ensemble
-   d'autorités (J1-c ⬜)
-8. ⬜ Ouverture d'une chaîne publique : gel de genèse, points de contrôle hors bande
+7. ✅ **Consensus BFT complet** (ADR-001 accepté) : format `0x05` — vue dans
+   l'identifiant, **certificat de quorum `2f+1` vérifié avant tout STARK** (J1-a) ;
+   protocole de vue, votes sur le fil, changement de vue (J1-b) ; **changement
+   d'ensemble d'autorités certifié**, effectif à `h+K`, sur la même chaîne (J1-c).
+   Une chaîne `n ≥ 4` produit des blocs ; une autorité absente est contournée.
+8. ✅ **Économie spécifiée** (ADR-002 accepté) : coinbase à valeur publique /
+   bénéficiaire caché, `extension` suffit (mesuré, 2,02 % du bloc) — implémentation
+   derrière A. **J3** : partitions, procédure de mise à jour, négociation de version
+   de fil.
+9. ✅ **Machinerie d'ouverture** (T5) : release signée (minisign), runbook
+   [docs/OUVERTURE.md](docs/OUVERTURE.md) éprouvé, gabarit d'ancre. L'ouverture
+   *réelle* d'une chaîne publique reste un geste d'opérateur.
+10. 🔶 **Décisions A** (post-B, en conception) : appartenance tranchée (ADR-003 —
+    fédéré en scellement, ouvert en usage, PoS public rejeté) ; coinbase et audit
+    rangés derrière « B a tourné ».
 
 > Phase 3 : intégrité prouvée (P1–P7, monolithe **m-in/n-out**, `1..=4`) ; depuis 3z-b1
 > la preuve de consensus est **witness-hiding (HVZK dans le modèle de l'oracle
@@ -160,15 +173,18 @@ Ce qui reste ouvert, en détail dans [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md
    **certificat de quorum `2f+1`** (`n = 3f+1`) vérifié après le chaînage et **avant
    tout STARK**. C'est ce qui donne la finalité : contredire un bloc certifié exigerait
    que `f+1` participants signent deux blocs à la même hauteur — une faute *prouvable*.
-   Mais cette liste est **figée dans l'identifiant de la chaîne** — en changer, c'est
-   changer de chaîne (J1-c le lèvera) — et une autorité absente **fige la chaîne à son
-   tour**. Une genèse SANS autorités donne une chaîne OUVERTE : l'ordre y est *convenu*
-   entre participants coopératifs, jamais *défendu*. C'est le défaut, et c'est bon pour
+   La liste initiale entre dans l'identifiant de la chaîne, mais elle est **désormais
+   reconfigurable sur la même chaîne** (J1-c) : le quorum de l'ancienne liste certifie
+   l'ajout, le retrait ou le remplacement d'un membre, effectif à `h+K`. En changer ne
+   refait plus la chaîne — ce qui est figé, c'est l'**ancre** et les **allocations**,
+   pas la composition du comité. Une genèse SANS autorités donne une chaîne OUVERTE :
+   l'ordre y est *convenu* entre participants coopératifs, jamais *défendu* — bon pour
    un testnet local, pas pour un réseau public.
-   ⚠️ **Le protocole de vue n'est pas livré (J1-b).** Les votes ne circulent pas encore
-   sur le fil, donc **une chaîne à `n ≥ 4` ne produit aujourd'hui aucun bloc** : le
-   producteur refuse le sien pour quorum insuffisant. Seules les chaînes à `n ≤ 3`
-   (`f = 0`, quorum 1) et les chaînes ouvertes avancent.
+   Le **protocole de vue est livré** (J1-b) : les votes circulent sur le fil, une chaîne
+   à `n ≥ 4` produit des blocs, et une **autorité absente est contournée par changement
+   de vue** (passé un délai à backoff, les autres passent à la vue suivante). La panne
+   d'un participant ne fige donc plus la chaîne. ⚠️ Réduire le comité à `n ≤ 3` sacrifie
+   la tolérance aux fautes (quorum = `n`).
    ⚠️ **Le certificat ne s'agrège pas** — aucune signature post-quantique ne l'offre :
    son coût est linéaire en la taille du comité (1,0 % du bloc à `n = 4`, 13,8 % à
    `n = 64`), qui se trouve donc **borné par le budget du bloc**, définitivement.

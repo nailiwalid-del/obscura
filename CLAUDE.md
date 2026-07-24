@@ -25,9 +25,13 @@ Ce fichier ne fait pas autorité (voir l'en-tête). La spécification vit dans
 
 ## État en une ligne
 
-Prototype Rust, phases 1-5 testées ; consensus BFT fédéré **J1 complet**
-(finalité, liveness, reconfiguration d'autorités). Prototype pédagogique non
-audité — ne pas utiliser en production.
+Prototype Rust, phases 1-5 testées ; **consensus BFT complet** (J1 : finalité,
+liveness, reconfiguration d'autorités certifiée) ; économie *spécifiée* (ADR-002,
+coinbase derrière A), J3 (partitions, mise à jour, négociation de version de fil) et
+**machinerie d'ouverture** (T5) livrés ; état B atteint côté dépôt (chaîne pas encore
+ouverte). Décisions A en conception : appartenance tranchée (ADR-003 — fédéré en
+scellement, ouvert en usage). Prototype pédagogique non audité — ne pas utiliser en
+production.
 
 ## Conventions
 
