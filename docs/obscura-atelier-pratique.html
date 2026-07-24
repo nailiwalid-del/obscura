@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="L'atelier pratique Obscura — la procédure d'exploitation, en vrai : générer un wallet, graver la genèse, lancer deux nœuds (scellement + témoin), synchroniser, payer avec une preuve STARK, voir revenir la monnaie rendue. Commandes et sorties réelles du prototype, rejouées dans un tableau de bord.">
+<title>L'atelier Obscura — la procédure, en vrai</title>
+<style>
+  /* Charte partagée avec obscura-atelier.html / obscura-overview.html */
+  :root{
+    --ink:#14161d; --paper:#f2f3f6; --surface:#ffffff; --surface-2:#e9ebf0;
+    --muted:#59616f; --line:#d8dce3; --accent:#0f9a82; --accent-ink:#0b6f5e;
+    --accent-soft:#d8f1eb; --secret:#a86f16; --secret-soft:#f4e9d3;
+    --done:#0f8f6c; --pending:#8b94a2; --danger:#c2483d; --danger-soft:#f7e2e0;
+    --code-bg:#eef1f5; --term-bg:#12151c; --term-ink:#d7dde8;
+    --shadow:0 1px 2px rgba(20,22,29,.06),0 8px 24px rgba(20,22,29,.05);
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --ink:#e7eaf1; --paper:#0c0e13; --surface:#14171f; --surface-2:#1b1f2a;
+      --muted:#98a2b2; --line:#272c38; --accent:#2fd0b0; --accent-ink:#54e0c4;
+      --accent-soft:#123029; --secret:#e2ac52; --secret-soft:#2b2415;
+      --done:#33c99a; --pending:#69727f; --danger:#e07a70; --danger-soft:#3a1f1c;
+      --code-bg:#161a22; --term-bg:#0a0d13; --term-ink:#c6cede;
+      --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"]{
+    --ink:#14161d; --paper:#f2f3f6; --surface:#ffffff; --surface-2:#e9ebf0;
+    --muted:#59616f; --line:#d8dce3; --accent:#0f9a82; --accent-ink:#0b6f5e;
+    --accent-soft:#d8f1eb; --secret:#a86f16; --secret-soft:#f4e9d3;
+    --done:#0f8f6c; --pending:#8b94a2; --danger:#c2483d; --danger-soft:#f7e2e0;
+    --code-bg:#eef1f5; --term-bg:#12151c; --term-ink:#d7dde8;
+    --shadow:0 1px 2px rgba(20,22,29,.06),0 8px 24px rgba(20,22,29,.05);
+  }
+  :root[data-theme="dark"]{
+    --ink:#e7eaf1; --paper:#0c0e13; --surface:#14171f; --surface-2:#1b1f2a;
+    --muted:#98a2b2; --line:#272c38; --accent:#2fd0b0; --accent-ink:#54e0c4;
+    --accent-soft:#123029; --secret:#e2ac52; --secret-soft:#2b2415;
+    --done:#33c99a; --pending:#69727f; --danger:#e07a70; --danger-soft:#3a1f1c;
+    --code-bg:#161a22; --term-bg:#0a0d13; --term-ink:#c6cede;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35);
+  }
+
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto} *{transition:none!important; animation:none!important}}
+  body{
+    margin:0; background:var(--paper); color:var(--ink); min-height:100vh;
+    font-family:-apple-system,system-ui,"Segoe UI",Roboto,sans-serif;
+    font-size:16.5px; line-height:1.6; -webkit-font-smoothing:antialiased;
+  }
+  .mono{font-family:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace}
+  .shell{max-width:1060px; margin:0 auto; padding:0 clamp(18px,4vw,40px)}
+  a{color:var(--accent-ink)}
+  code{font-family:ui-monospace,Menlo,monospace; font-size:.86em; background:var(--code-bg); padding:.1em .38em; border-radius:5px; border:1px solid var(--line)}
+  :focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:3px}
+
+  header.hero{border-bottom:1px solid var(--line);
+    background:radial-gradient(900px 340px at 80% -10%, color-mix(in srgb,var(--accent) 16%, transparent), transparent 60%), var(--paper)}
+  .hero .shell{padding:clamp(36px,7vw,64px) clamp(18px,4vw,40px) clamp(26px,4vw,40px)}
+  .eyebrow{font-family:ui-monospace,Menlo,monospace; font-size:12.5px; letter-spacing:.22em; text-transform:uppercase; color:var(--accent-ink); margin:0 0 16px; display:flex; align-items:center; gap:12px}
+  .eyebrow::before{content:""; width:26px; height:1px; background:var(--accent)}
+  h1{font-family:Georgia,serif; font-weight:700; letter-spacing:-.015em; font-size:clamp(1.9rem,5vw,3.1rem); line-height:1.06; margin:0}
+  h1 em{font-style:normal; color:var(--accent)}
+  .lede{color:var(--muted); max-width:66ch; margin:14px 0 0; font-size:clamp(1rem,1.9vw,1.15rem)}
+  .toy-badge{display:inline-flex; align-items:center; gap:8px; margin-top:18px; font-family:ui-monospace,Menlo,monospace; font-size:12px;
+    background:var(--accent-soft); color:var(--accent-ink); border:1px solid color-mix(in srgb,var(--accent) 35%,var(--line)); padding:6px 13px; border-radius:20px}
+
+  main{padding:26px 0 90px}
+
+  /* Tableau de bord collant : l'état vivant de la procédure. */
+  .dashboard{position:sticky; top:0; z-index:20; margin:0 0 26px;
+    background:color-mix(in srgb,var(--paper) 88%, transparent); backdrop-filter:blur(9px);
+    border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow);
+    padding:12px clamp(12px,2vw,18px)}
+  .dash-grid{display:grid; grid-template-columns:repeat(5,1fr); gap:10px}
+  @media (max-width:760px){.dash-grid{grid-template-columns:repeat(2,1fr)}}
+  .dcard{background:var(--surface); border:1px solid var(--line); border-radius:11px; padding:9px 12px; min-width:0}
+  .dcard .dl{font-family:ui-monospace,Menlo,monospace; font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); display:flex; align-items:center; gap:6px}
+  .dcard .dv{font-family:Georgia,serif; font-size:1.28rem; line-height:1.2; margin-top:2px; word-break:break-word}
+  .dcard .dsub{font-family:ui-monospace,Menlo,monospace; font-size:10.5px; color:var(--muted); margin-top:1px}
+  .dcard.flip{animation:flip .6s ease}
+  @keyframes flip{0%{background:var(--accent-soft)} 100%{background:var(--surface)}}
+  .dot{width:8px; height:8px; border-radius:50%; background:var(--pending); flex:none; box-shadow:0 0 0 3px color-mix(in srgb,var(--pending) 20%, transparent)}
+  .dot.on{background:var(--done); box-shadow:0 0 0 3px color-mix(in srgb,var(--done) 22%, transparent)}
+  .dot.seal{background:var(--secret); box-shadow:0 0 0 3px color-mix(in srgb,var(--secret) 22%, transparent)}
+
+  .step{background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:24px clamp(18px,3vw,30px); margin:22px 0; box-shadow:var(--shadow); transition:opacity .35s}
+  .step.locked{opacity:.42; pointer-events:none; user-select:none}
+  .step h2{font-family:Georgia,serif; font-size:1.35rem; margin:0 0 4px; display:flex; align-items:center; gap:12px; letter-spacing:-.01em}
+  .step h2 .n{flex:none; width:30px; height:30px; border-radius:50%; background:var(--accent-soft); color:var(--accent-ink); display:inline-flex; align-items:center; justify-content:center; font-family:ui-monospace,Menlo,monospace; font-size:14px; border:1px solid color-mix(in srgb,var(--accent) 35%,var(--line))}
+  .step.done h2 .n{background:var(--done); color:#fff; border-color:var(--done)}
+  .step .why{color:var(--muted); font-size:14.5px; margin:4px 0 14px; max-width:76ch}
+
+  button{font:inherit; cursor:pointer; border-radius:10px; border:1px solid var(--line); background:var(--surface-2); color:var(--ink); padding:9px 16px; transition:transform .08s, background .15s}
+  button:hover{background:color-mix(in srgb,var(--accent) 10%, var(--surface-2))}
+  button:active{transform:scale(.97)}
+  button.primary{background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600}
+  button.primary:hover{background:var(--accent-ink)}
+  button:disabled{opacity:.45; cursor:not-allowed; transform:none}
+  .btnrow{display:flex; flex-wrap:wrap; gap:10px; margin:8px 0}
+
+  /* Terminal simulé : la vraie commande, la vraie sortie. */
+  .term{background:var(--term-bg); border:1px solid color-mix(in srgb,#000 30%,var(--line)); border-radius:12px; margin:12px 0; overflow:hidden; box-shadow:var(--shadow)}
+  .term-head{display:flex; align-items:center; gap:7px; padding:9px 13px; background:color-mix(in srgb,#fff 5%,var(--term-bg)); border-bottom:1px solid rgba(255,255,255,.06)}
+  .term-head .td{width:11px; height:11px; border-radius:50%}
+  .term-head .td:nth-child(1){background:#ff5f57} .term-head .td:nth-child(2){background:#febc2e} .term-head .td:nth-child(3){background:#28c840}
+  .term-head .tt{margin-left:8px; font-family:ui-monospace,Menlo,monospace; font-size:11.5px; color:#8b93a3; letter-spacing:.04em}
+  .term-body{padding:13px 15px; font-family:ui-monospace,"Cascadia Code",Menlo,monospace; font-size:13px; line-height:1.55; color:var(--term-ink); white-space:pre-wrap; word-break:break-word; min-height:2.4em; max-height:340px; overflow-y:auto}
+  .term-body .ln{display:block}
+  .term-body .pr{color:#5bd6bd}
+  .term-body .cmd{color:#eef2f8}
+  .term-body .warn{color:#e2ac52}
+  .term-body .ok{color:#54e0c4}
+  .term-body .accent{color:#7fb8ff}
+  .term-body .info{color:#9aa4b5}
+  .term-body .hashln{color:#8ea0bb; word-break:break-all}
+  .term-body .cursor{display:inline-block; width:8px; height:1.05em; vertical-align:text-bottom; background:#5bd6bd; animation:blink 1s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+
+  .kv{display:grid; grid-template-columns:auto 1fr; gap:6px 14px; font-size:14.5px; margin:10px 0; align-items:baseline}
+  .kv .k{font-family:ui-monospace,Menlo,monospace; font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); white-space:nowrap}
+  .hash{font-family:ui-monospace,Menlo,monospace; font-size:13px; word-break:break-all}
+  .pill{display:inline-block; font-family:ui-monospace,Menlo,monospace; font-size:11px; padding:2px 9px; border-radius:20px; border:1px solid var(--line); background:var(--surface-2); color:var(--muted); letter-spacing:.05em; margin-left:8px; vertical-align:middle}
+
+  .chain{display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin:6px 0}
+  .bloc{background:var(--surface); border:1px solid var(--accent); border-radius:10px; padding:7px 12px; font-family:ui-monospace,Menlo,monospace; font-size:12px; box-shadow:var(--shadow)}
+  .bloc .bh{display:block; font-size:9.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--accent-ink)}
+  .bloc.genese{border-color:var(--line); color:var(--muted)}
+  .bloc.fresh{animation:pop .5s ease}
+  @keyframes pop{0%{transform:scale(.85); opacity:0} 100%{transform:scale(1); opacity:1}}
+  .chainlink{color:var(--accent); font-weight:700}
+
+  .verdict{font-family:ui-monospace,Menlo,monospace; font-size:13.5px; border-radius:10px; padding:11px 14px; margin:10px 0 0; display:none}
+  .verdict.show{display:block}
+  .verdict.ok{background:var(--accent-soft); color:var(--accent-ink); border:1px solid color-mix(in srgb,var(--accent) 40%,var(--line))}
+
+  .callout{border:1px solid var(--line); border-left:3px solid var(--accent); background:var(--surface); border-radius:10px; padding:14px 18px; margin:18px 0; box-shadow:var(--shadow); font-size:15px}
+  .callout.warnk{border-left-color:var(--secret)}
+  .callout .lab{font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--accent-ink); display:block; margin-bottom:5px}
+  .callout.warnk .lab{color:var(--secret)}
+
+  .divider{font-family:ui-monospace,Menlo,monospace; font-size:12px; letter-spacing:.18em; text-transform:uppercase; color:var(--muted); text-align:center; margin:40px 0 6px; display:flex; align-items:center; gap:14px}
+  .divider::before,.divider::after{content:""; height:1px; background:var(--line); flex:1}
+
+  .footer{border-top:1px solid var(--line); margin-top:50px; padding:24px 0 60px; color:var(--muted); font-size:14px}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="shell">
+    <p class="eyebrow">L'atelier Obscura · la procédure</p>
+    <h1>La procédure, <em>en vrai</em></h1>
+    <p class="lede">L'<a href="obscura-atelier.html">atelier conceptuel</a> montre <em>pourquoi</em> ça marche. Celui-ci montre <em>comment on s'en sert</em> : générer un wallet, graver la genèse, lancer deux nœuds, synchroniser, payer avec une preuve — les vraies commandes du prototype, leurs vraies sorties, dans un tableau de bord qui se met à jour à chaque étape.</p>
+    <span class="toy-badge">✓ Commandes et sorties RÉELLES, capturées sur le prototype (build --release, Windows) puis rejouées ici</span>
+  </div>
+</header>
+
+<main>
+<div class="shell">
+
+  <!-- TABLEAU DE BORD -->
+  <div class="dashboard" aria-label="État de la procédure">
+    <div class="dash-grid">
+      <div class="dcard" id="d-alice">
+        <div class="dl">👛 Alice <span class="pill" style="margin:0">payeur</span></div>
+        <div class="dv" id="dv-alice">—</div>
+        <div class="dsub" id="ds-alice">wallet non créé</div>
+      </div>
+      <div class="dcard" id="d-bob">
+        <div class="dl">👛 Bob <span class="pill" style="margin:0">bénéf.</span></div>
+        <div class="dv" id="dv-bob">—</div>
+        <div class="dsub" id="ds-bob">wallet non créé</div>
+      </div>
+      <div class="dcard" id="d-a">
+        <div class="dl"><span class="dot" id="dot-a"></span> Nœud A</div>
+        <div class="dv" id="dv-a">hors ligne</div>
+        <div class="dsub" id="ds-a">scelle + archive</div>
+      </div>
+      <div class="dcard" id="d-b">
+        <div class="dl"><span class="dot" id="dot-b"></span> Nœud B</div>
+        <div class="dv" id="dv-b">hors ligne</div>
+        <div class="dsub" id="ds-b">archive + témoin</div>
+      </div>
+      <div class="dcard" id="d-chain">
+        <div class="dl">⛓ Chaîne</div>
+        <div class="dv" id="dv-chain">—</div>
+        <div class="dsub" id="ds-chain">aucune genèse</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ÉTAPE 1 -->
+  <section class="step" id="s1">
+    <h2><span class="n">1</span> Générer un wallet</h2>
+    <p class="why">Un wallet neuf, c'est un secret tiré au hasard d'où découlent votre <strong>owner</strong> (qui identifie vos notes) et votre clé de réception post-quantique. La commande imprime l'<strong>adresse <code>obs1…</code></strong> à communiquer au payeur. Le fichier contient l'<strong>autorité de dépense</strong> : ici en clair (jetable), en vrai chiffré sous une phrase de passe. On en crée deux : Alice (qui paiera) et Bob (qui recevra).</p>
+    <div class="btnrow"><button class="primary" data-run="1">▶ Lancer <code>obscura-wallet creer</code></button></div>
+    <div class="term" id="t1"><div class="term-head"><span class="td"></span><span class="td"></span><span class="td"></span><span class="tt">obscura-wallet — creer</span></div><div class="term-body" id="t1b"></div></div>
+  </section>
+
+  <!-- ÉTAPE 2 -->
+  <section class="step locked" id="s2">
+    <h2><span class="n">2</span> Graver la genèse</h2>
+    <p class="why">La monnaie n'existe QUE par la genèse — le bloc 0. On y grave une <strong>allocation de 1 000 000</strong> vers Alice, chaîne <strong>ouverte</strong> (aucune autorité : tout nœud avec <code>--sceller</code> peut produire des blocs — ordre convenu, testnet local). L'<strong>identifiant</strong> est l'identité de la chaîne : deux nœuds sur des genèses différentes se refusent tous leurs blocs.</p>
+    <div class="btnrow"><button class="primary" data-run="2">▶ Lancer <code>obscura-genese</code></button></div>
+    <div class="term" id="t2"><div class="term-head"><span class="td"></span><span class="td"></span><span class="td"></span><span class="tt">obscura-genese</span></div><div class="term-body" id="t2b"></div></div>
+  </section>
+
+  <!-- ÉTAPE 3 -->
+  <section class="step locked" id="s3">
+    <h2><span class="n">3</span> Lancer deux nœuds</h2>
+    <p class="why"><strong>A</strong> scelle et archive (le producteur). <strong>B</strong> archive aussi et sert de <strong>témoin</strong> — relié à A par <code>--pair</code>, il recevra les blocs scellés par diffusion. Deux archivistes, c'est ce qui donnera un sens au <code>--temoin</code> de l'étape suivante. Un nœud ne scelle pas de bloc <em>vide</em> : la hauteur restera 0 jusqu'au paiement.</p>
+    <div class="btnrow"><button class="primary" data-run="3">▶ Démarrer A puis B</button></div>
+    <div class="term" id="t3"><div class="term-head"><span class="td"></span><span class="td"></span><span class="td"></span><span class="tt">obscura-node × 2</span></div><div class="term-body" id="t3b"></div></div>
+  </section>
+
+  <!-- ÉTAPE 4 -->
+  <section class="step locked" id="s4">
+    <h2><span class="n">4</span> Synchroniser — corroboré par le témoin</h2>
+    <p class="why">Un wallet ne reçoit rien « de force » : il <strong>rejoue l'historique</strong> servi par A et tente de déchiffrer chaque sortie. Alice y retrouve son allocation. Le <code>--temoin B</code> redemande chaque hauteur à B et compare la racine : sans lui, A pourrait <strong>taire un paiement</strong> en servant un historique parfaitement cohérent.</p>
+    <div class="btnrow"><button class="primary" data-run="4">▶ Lancer <code>synchroniser --temoin</code></button></div>
+    <div class="term" id="t4"><div class="term-head"><span class="td"></span><span class="td"></span><span class="td"></span><span class="tt">obscura-wallet — synchroniser</span></div><div class="term-body" id="t4b"></div></div>
+    <div class="verdict ok" id="v4"></div>
+  </section>
+
+  <!-- ÉTAPE 5 -->
+  <section class="step locked" id="s5">
+    <h2><span class="n">5</span> Payer Bob — une preuve, pas un aveu</h2>
+    <p class="why">Alice paie 300 à Bob. Son wallet construit une <strong>preuve STARK</strong> (quelques secondes) : la transaction publie un <strong>nullifier</strong> et deux sorties chiffrées — le paiement, et la <strong>monnaie rendue</strong> vers Alice. <code>--noeud A</code> soumet ; <code>--noeud-synchro B</code> distinct évite de révéler à A « je me synchronise puis j'émets ». A scelle alors le <strong>bloc 1</strong> et le diffuse à B. Le solde d'Alice tombe à 0 : la monnaie rendue reviendra à la resynchronisation.</p>
+    <div class="btnrow"><button class="primary" data-run="5">▶ Lancer <code>envoyer --montant 300</code></button></div>
+    <div class="term" id="t5"><div class="term-head"><span class="td"></span><span class="td"></span><span class="td"></span><span class="tt">obscura-wallet — envoyer</span></div><div class="term-body" id="t5b"></div></div>
+  </section>
+
+  <!-- ÉTAPE 6 -->
+  <section class="step locked" id="s6">
+    <h2><span class="n">6</span> Resynchroniser — le cycle se ferme</h2>
+    <p class="why">Alice et Bob rejouent le bloc 1. La <strong>monnaie rendue</strong> revient à Alice (999 700), le <strong>paiement</strong> apparaît chez Bob (300) — tous deux le découvrent par scan, chiffrés vers eux. Chaque bloc reste corroboré par le témoin. Et la masse se conserve, sous des montants qui restent cachés sur la chaîne.</p>
+    <div class="btnrow"><button class="primary" data-run="6">▶ Resynchroniser Alice &amp; Bob</button></div>
+    <div class="term" id="t6"><div class="term-head"><span class="td"></span><span class="td"></span><span class="td"></span><span class="tt">obscura-wallet — synchroniser × 2</span></div><div class="term-body" id="t6b"></div></div>
+    <div class="verdict ok" id="v6"></div>
+    <div class="chain" id="chain6" style="margin-top:14px"></div>
+  </section>
+
+  <div class="divider">Ce qu'il faut retenir</div>
+
+  <div class="callout"><span class="lab">Le témoin, et pourquoi il compte</span>Sans <code>--temoin</code>, la sortie dit « à jour <strong>SELON CE NŒUD</strong> » : un archiviste unique peut mentir par omission. Avec un second archiviste <strong>indépendant</strong>, chaque racine de fin de bloc est corroborée. Ici les deux nœuds sont sur la même machine — pédagogique ; la vraie valeur suppose un second opérateur, voir <a href="THREAT_MODEL.md"><code>docs/THREAT_MODEL.md</code></a>.</div>
+
+  <div class="callout warnk"><span class="lab">Un détail d'exploitation — « désaccords 1 » sur A</span>Après le premier bloc, le statut du nœud scelleur peut passer en <strong>AVERT</strong> avec <code>désaccords 1</code>. Ce n'est pas une divergence : B a appliqué le bloc scellé par A <em>puis le lui a relayé</em>, et A le reçoit en <strong>doublon</strong> qu'il ne peut pas rechaîner. Preuve que c'est inoffensif : la corroboration témoin réussit à chaque bloc, et les deux nœuds sont à la même hauteur.</div>
+
+  <div class="callout warnk"><span class="lab">Sécurité — ne pas sauter</span>Les wallets de cette procédure sont <strong>en clair</strong> (jetables). En vrai : une phrase de passe (<code>OBSCURA_WALLET_PHRASE</code>), jamais transmise à un tiers. La chaîne est <strong>sans valeur et consommable</strong> (<a href="TESTNET.md"><code>docs/TESTNET.md</code></a>). Prototype <strong>non audité</strong>.</div>
+
+  <div class="btnrow" style="margin-top:24px"><button data-run="reset">↺ Recommencer la procédure</button></div>
+
+</div>
+</main>
+
+<footer class="footer">
+  <div class="shell">
+    <p>L'atelier Obscura — procédure d'exploitation. Les commandes rejouées ici sont celles de <code>atelier/</code> (scripts PowerShell + guide), validées de bout en bout par <code>atelier/00-tout.ps1</code>. Voir aussi l'<a href="obscura-atelier.html">atelier conceptuel</a>, la <a href="obscura-overview.html">note de conception</a>, <code>docs/OPERATEUR.md</code> et <code>docs/TESTNET.md</code>. Prototype non audité, chaîne sans valeur.</p>
+  </div>
+</footer>
+
+<script>
+"use strict";
+/* ============================================================
+   L'atelier Obscura — la procédure, en vrai.
+   Rejoue les VRAIES commandes du prototype (obscura-wallet /
+   -genese / -node) et leurs VRAIES sorties, en pilotant un
+   tableau de bord. Montants fixes (1 000 000 / 300 / 999 700) ;
+   adresses et identifiants tirés au hasard par session, comme
+   un vrai wallet neuf.
+   ============================================================ */
+
+const $ = id => document.getElementById(id);
+const reduce = matchMedia("(prefers-reduced-motion:reduce)").matches;
+const attendre = ms => new Promise(r => setTimeout(r, reduce ? 0 : ms));
+
+// --- Hex aléatoire (adresses, identifiants) : cosmétique, tiré par session.
+function hex(n){ let s = ""; const c = "0123456789abcdef"; for (let i = 0; i < n; i++) s += c[Math.floor(Math.random()*16)]; return s; }
+function adresse(){ return "obs1" + hex(60) + "…"; }        // tronquée (≈1,4 Kio en vrai)
+const S = {
+  alice:{ addr:null, solde:null, notes:0 },
+  bob:{ addr:null, solde:null, notes:0 },
+  genese:{ id:null, court:null, racine:null },
+  A:{ up:false, h:0 }, B:{ up:false, h:0 },
+  chain:[],            // ['genèse', '#1', …]
+  occupe:false, fait:{},
+};
+
+// --- Tableau de bord.
+function flip(cardId){ const c = $(cardId); c.classList.remove("flip"); void c.offsetWidth; c.classList.add("flip"); }
+function fmt(n){ return n === null ? "—" : n.toLocaleString("fr-FR"); }
+function majDash(){
+  $("dv-alice").textContent = S.alice.solde === null ? (S.alice.addr ? "?" : "—") : fmt(S.alice.solde);
+  $("ds-alice").textContent = S.alice.addr ? (S.alice.solde === null ? "créé — non synchronisé" : S.alice.notes + " note(s)") : "wallet non créé";
+  $("dv-bob").textContent   = S.bob.solde === null ? (S.bob.addr ? "?" : "—") : fmt(S.bob.solde);
+  $("ds-bob").textContent   = S.bob.addr ? (S.bob.solde === null ? "créé — non synchronisé" : S.bob.notes + " note(s)") : "wallet non créé";
+  $("dot-a").className = "dot" + (S.A.up ? " seal" : "");
+  $("dv-a").textContent = S.A.up ? "hauteur " + S.A.h : "hors ligne";
+  $("dot-b").className = "dot" + (S.B.up ? " on" : "");
+  $("dv-b").textContent = S.B.up ? "hauteur " + S.B.h : "hors ligne";
+  $("dv-chain").textContent = S.genese.id ? (S.chain.length ? S.chain[S.chain.length-1] : "genèse") : "—";
+  $("ds-chain").textContent = S.genese.id ? ("genèse " + S.genese.court + "…") : "aucune genèse";
+}
+
+// --- Terminal : tape la commande, puis fait défiler la sortie.
+async function tape(body, prompt, cmd){
+  const line = document.createElement("div"); line.className = "ln";
+  const p = document.createElement("span"); p.className = "pr"; p.textContent = prompt + " ";
+  const c = document.createElement("span"); c.className = "cmd";
+  const cur = document.createElement("span"); cur.className = "cursor";
+  line.append(p, c, cur); body.appendChild(line);
+  if (reduce){ c.textContent = cmd; }
+  else for (const ch of cmd){ c.textContent += ch; body.scrollTop = body.scrollHeight; await attendre(9); }
+  await attendre(reduce ? 0 : 260); cur.remove();
+  body.scrollTop = body.scrollHeight;
+}
+async function sortie(body, lignes){
+  for (const l of lignes){
+    const d = document.createElement("div");
+    d.className = "ln " + (l.c || "");
+    d.textContent = l.t;
+    body.appendChild(d); body.scrollTop = body.scrollHeight;
+    await attendre(l.d ?? 130);
+  }
+}
+function deverrouiller(id){ $(id).classList.remove("locked"); }
+function marquerFait(id){ $(id).classList.add("done"); }
+
+// --- Les six étapes.
+const etapes = {
+  async "1"(){
+    S.alice.addr = adresse(); S.bob.addr = adresse();
+    const b = $("t1b");
+    await tape(b, "PS>", 'obscura-wallet creer --fichier alice.wallet');
+    await sortie(b, [
+      { t:"⚠️  wallet NON chiffré au repos (OBSCURA_WALLET_SANS_CHIFFREMENT=1)", c:"warn" },
+      { t:"wallet créé : alice.wallet", c:"ok" },
+      { t:"" },
+      { t:"adresse à communiquer au payeur :" },
+      { t:S.alice.addr, c:"hashln" },
+      { t:"⚠️  Ce fichier contient l'autorité de dépense, EN CLAIR et non chiffrée.", c:"warn", d:220 },
+    ]);
+    flip("d-alice"); majDash();
+    await tape(b, "PS>", 'obscura-wallet creer --fichier bob.wallet');
+    await sortie(b, [
+      { t:"wallet créé : bob.wallet", c:"ok" },
+      { t:"adresse : " + S.bob.addr, c:"hashln" },
+    ]);
+    flip("d-bob"); majDash();
+    marquerFait("s1"); deverrouiller("s2");
+  },
+
+  async "2"(){
+    S.genese.id = hex(128); S.genese.court = S.genese.id.slice(0,16); S.genese.racine = hex(64);
+    const b = $("t2b");
+    await tape(b, "PS>", 'obscura-genese --sortie genese.bin --allocation "$ALICE:1000000"');
+    await sortie(b, [
+      { t:"genèse écrite : genese.bin (1438 octets)", c:"ok" },
+      { t:"" },
+      { t:"  identifiant : " + S.genese.id, c:"hashln" },
+      { t:"  court       : " + S.genese.court, c:"hashln" },
+      { t:"  allocations : 1" },
+      { t:"  autorités   : 0" },
+      { t:"  racine      : " + S.genese.racine, c:"hashln" },
+      { t:"⚠️  Chaîne OUVERTE : aucune autorité. Ordre convenu, pas défendu.", c:"warn", d:200 },
+    ]);
+    S.chain = []; flip("d-chain"); majDash();
+    marquerFait("s2"); deverrouiller("s3");
+  },
+
+  async "3"(){
+    const b = $("t3b");
+    await tape(b, "PS>", 'obscura-node --ecoute 127.0.0.1:9333 --genese genese.bin --archiver --sceller 3000 --donnees donnees-A');
+    await sortie(b, [
+      { t:"[0.003s] INFO   archivage ACTIVÉ — 1 sorties conservées (≈1 Kio)" },
+      { t:"[0.003s] INFO   chaîne à la hauteur 0 (1 notes)" },
+      { t:"[0.003s] INFO   genèse " + S.genese.court + "… (1 émissions)", c:"hashln" },
+      { t:"[0.003s] INFO   scellement ACTIVÉ toutes les 3000 ms" },
+      { t:"[0.005s] INFO   écoute sur 127.0.0.1:9333", c:"ok" },
+    ]);
+    S.A.up = true; flip("d-a"); majDash();
+    await tape(b, "PS>", 'obscura-node --ecoute 127.0.0.1:9334 --genese genese.bin --archiver --pair 127.0.0.1:9333 --donnees donnees-B');
+    await sortie(b, [
+      { t:"[0.001s] INFO   archivage ACTIVÉ — 1 sorties conservées (≈1 Kio)" },
+      { t:"[0.003s] INFO   écoute sur 127.0.0.1:9334", c:"ok" },
+      { t:"[0.016s] INFO   connecté à 127.0.0.1:9333", c:"ok" },
+    ]);
+    S.B.up = true; flip("d-b"); majDash();
+    marquerFait("s3"); deverrouiller("s4");
+  },
+
+  async "4"(){
+    const b = $("t4b");
+    await tape(b, "PS>", 'obscura-wallet synchroniser --fichier alice.wallet --noeud 127.0.0.1:9333 --temoin 127.0.0.1:9334');
+    await sortie(b, [
+      { t:"synchronisation depuis la hauteur 0 auprès de 127.0.0.1:9333…" },
+      { t:"corroboration auprès du témoin 127.0.0.1:9334", c:"accent" },
+      { t:"  bloc 0 : 1 sorties, 1 pour vous — solde 1000000", d:400 },
+      { t:"" },
+      { t:"à jour — chaque bloc corroboré par le témoin.", c:"ok", d:250 },
+    ]);
+    S.alice.solde = 1000000; S.alice.notes = 1; flip("d-alice"); majDash();
+    const v = $("v4"); v.classList.add("show");
+    v.textContent = "✓ Alice a découvert son allocation par SCAN — et chaque bloc a été corroboré par un second archiviste. Solde : 1 000 000.";
+    marquerFait("s4"); deverrouiller("s5");
+  },
+
+  async "5"(){
+    const b = $("t5b");
+    await tape(b, "PS>", 'obscura-wallet envoyer --fichier alice.wallet --a $BOB --montant 300 --frais 0 --noeud 127.0.0.1:9333 --noeud-synchro 127.0.0.1:9334');
+    await sortie(b, [
+      { t:"synchronisation préalable auprès de 127.0.0.1:9334…" },
+      { t:"construction de la preuve (plusieurs secondes)…", d:1100 },
+      { t:"preuve générée en 0.7 s (87.6 Kio) — forme 1-in/2-out", c:"ok" },
+      { t:"transaction soumise à 127.0.0.1:9333", c:"ok" },
+      { t:"1 notes retirées de la réserve — solde connu : 0" },
+      { t:"ℹ️  La monnaie rendue reviendra à la prochaine synchronisation.", c:"info", d:200 },
+    ]);
+    S.alice.solde = 0; S.alice.notes = 0; flip("d-alice"); majDash();
+    await sortie(b, [
+      { t:"", d:250 },
+      { t:"[nœud A] bloc " + hex(16) + " scellé à la hauteur 1 (1 transactions)", c:"accent", d:300 },
+      { t:"[nœud B] bloc 1 reçu et appliqué (hauteur 1)", c:"accent" },
+    ]);
+    S.A.h = 1; S.B.h = 1; S.chain = ["#1"]; flip("d-a"); flip("d-b"); flip("d-chain"); majDash();
+    marquerFait("s5"); deverrouiller("s6");
+  },
+
+  async "6"(){
+    const b = $("t6b");
+    await tape(b, "PS>", 'obscura-wallet synchroniser --fichier alice.wallet --noeud 127.0.0.1:9333 --temoin 127.0.0.1:9334');
+    await sortie(b, [
+      { t:"synchronisation depuis la hauteur 1 auprès de 127.0.0.1:9333…" },
+      { t:"corroboration auprès du témoin 127.0.0.1:9334", c:"accent" },
+      { t:"  bloc 1 : 2 sorties, 1 pour vous — solde 999700", d:400 },
+      { t:"à jour — chaque bloc corroboré par le témoin.", c:"ok" },
+    ]);
+    S.alice.solde = 999700; S.alice.notes = 1; flip("d-alice"); majDash();
+    await tape(b, "PS>", 'obscura-wallet synchroniser --fichier bob.wallet --noeud 127.0.0.1:9333 --temoin 127.0.0.1:9334');
+    await sortie(b, [
+      { t:"  bloc 0 : 1 sorties, 0 pour vous — solde 0" },
+      { t:"  bloc 1 : 2 sorties, 1 pour vous — solde 300", c:"ok", d:400 },
+      { t:"à jour — chaque bloc corroboré par le témoin.", c:"ok" },
+    ]);
+    S.bob.solde = 300; S.bob.notes = 1; flip("d-bob"); majDash();
+    // Chaîne visuelle.
+    const ch = $("chain6"); ch.innerHTML = "";
+    const g = document.createElement("div"); g.className = "bloc genese";
+    g.innerHTML = '<span class="bh">genèse · 1 alloc</span>' + S.genese.court.slice(0,8);
+    ch.appendChild(g);
+    const fl = document.createElement("span"); fl.className = "chainlink"; fl.textContent = "←"; ch.appendChild(fl);
+    const d = document.createElement("div"); d.className = "bloc fresh";
+    d.innerHTML = '<span class="bh">bloc #1 · 1 tx</span>' + hex(8);
+    ch.appendChild(d);
+    const v = $("v6"); v.classList.add("show");
+    v.innerHTML = "✓ Cycle fermé : payer → sceller → recevoir. Bilan — <strong>999 700 (Alice) + 300 (Bob) = 1 000 000</strong>. La masse se conserve, sous des montants cachés.";
+    marquerFait("s6");
+  },
+};
+
+// --- Câblage des boutons.
+document.querySelectorAll("[data-run]").forEach(btn => {
+  btn.onclick = async () => {
+    const k = btn.dataset.run;
+    if (k === "reset"){ location.reload(); return; }
+    if (S.occupe || S.fait[k]) return;
+    S.occupe = true; S.fait[k] = true;
+    document.querySelectorAll("[data-run]").forEach(x => x.disabled = true);
+    try { await etapes[k](); } finally {
+      S.occupe = false;
+      document.querySelectorAll("[data-run]").forEach(x => { if (!S.fait[x.dataset.run]) x.disabled = false; });
+    }
+  };
+});
+
+majDash();
+</script>
+
+</body>
+</html>
