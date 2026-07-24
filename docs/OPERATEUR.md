@@ -83,9 +83,11 @@ obscura-genese --sortie genese.bin     --autorite-hex <clé publique de l'autori
 L'outil **relit et réamorce** ce qu'il vient d'écrire avant de vous le rendre : un
 artefact que son auteur ne sait pas relire ne doit jamais atteindre un opérateur.
 
-Il imprime ensuite l'**identifiant court**. **Comparez-le entre opérateurs avant
-de démarrer quoi que ce soit** — c'est le seul contrôle qui détecte une chaîne
-divergente *avant* qu'elle ne diverge.
+Il imprime l'**identifiant COMPLET (64 o, 128 hex)** et une forme courte (8 o) de
+commodité. **Comparez l'identifiant COMPLET entre opérateurs avant de démarrer quoi
+que ce soit** — c'est le seul contrôle qui détecte une chaîne divergente *avant*
+qu'elle ne diverge. La forme courte n'est qu'un repère visuel rapide, **jamais
+l'ancre** : un écart doit se juger sur les 128 caractères hex (voir `docs/GENESE.md`).
 
 Sans `--autorite`, la chaîne est **ouverte** : n'importe quel nœud avec
 `--sceller` produit des blocs. Testnet local uniquement.

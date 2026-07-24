@@ -189,12 +189,12 @@
   <div class="shell">
     <p class="eyebrow">Note de conception &middot; Prototype de recherche Rust &middot; 2026</p>
     <h1 class="title serif">Obscura — une monnaie numérique <em>post-quantique</em>, conçue pour la <em>confidentialité</em></h1>
-    <span class="status-badge mono">● État actuel : cycle complet <b>payer → sceller → recevoir</b> validé sur testnet local — prototype non audité</span>
+    <span class="status-badge mono">● État actuel : consensus BFT fédéré <b>complet</b> (finalité, liveness, reconfiguration d'autorités) — les cinq cycles vers l'<b>état B</b> clos côté dépôt — prototype non audité</span>
     <p class="lede">Un prototype qui vise deux objectifs : payer sans être surveillé, avec une sécurité qui tiendrait face à un ordinateur quantique. Ce document explique le projet pour tous, puis en détaille l'architecture — en distinguant soigneusement ce qui est <strong>déjà prouvé</strong> de ce qui reste <strong>à venir</strong>.</p>
     <div class="stat-row">
       <div class="stat"><b>7</b><span>crates Rust</span></div>
-      <div class="stat"><b>35&nbsp;677</b><span>lignes de code</span></div>
-      <div class="stat"><b>515</b><span>tests</span></div>
+      <div class="stat"><b>41&nbsp;340</b><span>lignes de code</span></div>
+      <div class="stat"><b>597</b><span>tests</span></div>
       <div class="stat"><b>P1–P7</b><span>prouvés en circuit</span></div>
       <div class="stat"><b>≈97<small> Kio</small></b><span>preuve d'une tx</span></div>
     </div>
@@ -275,10 +275,10 @@
 
   <div class="col">
   <h3 id="etat">3. Où en est le prototype, en une phrase</h3>
-  <p>Le circuit sait aujourd'hui <strong>vérifier qu'une transaction est valide</strong> (elle existe, m'appartient, est équilibrée, sans double-dépense), il gouverne un vrai registre, et la preuve de consensus <strong>masque ses témoins</strong> (witness-hiding par lignes de blinding, 3z-b1 — HVZK en ROM, vérifieur honnête). Depuis les phases 4–5, cette transaction prouvée <strong>voyage entre de vrais nœuds</strong> : liens chiffrés post-quantiques, origine protégée par Dandelion++, admission anti-DoS — testnet local validé, y compris à travers un intermédiaire, avec identité et état qui survivent aux redémarrages. Et depuis la <strong>finalité</strong>, le cycle se ferme : les transactions sont scellées en <strong>blocs ordonnés et chaînés</strong> (deux nœuds qui scellent le même mempool produisent le même bloc et convergent), et le wallet <strong>reçoit</strong> — il rejoue les blocs servis par un nœud, monnaie rendue comprise, puis redépense. Les réserves restantes : pas de zero-knowledge à vérifieur malicieux revendiqué, argument non formalisé au niveau publication, prototype non audité.</p>
+  <p>Le circuit sait aujourd'hui <strong>vérifier qu'une transaction est valide</strong> (elle existe, m'appartient, est équilibrée, sans double-dépense), il gouverne un vrai registre, et la preuve de consensus <strong>masque ses témoins</strong> (witness-hiding par lignes de blinding, 3z-b1 — HVZK en ROM, vérifieur honnête). Depuis les phases 4–5, cette transaction prouvée <strong>voyage entre de vrais nœuds</strong> : liens chiffrés post-quantiques, origine protégée par Dandelion++, admission anti-DoS — testnet local validé, y compris à travers un intermédiaire, avec identité et état qui survivent aux redémarrages. Et depuis la <strong>finalité</strong>, le cycle se ferme : les transactions sont scellées en <strong>blocs ordonnés et chaînés</strong> (deux nœuds qui scellent le même mempool produisent le même bloc et convergent), et le wallet <strong>reçoit</strong> — il rejoue les blocs servis par un nœud, monnaie rendue comprise, puis redépense. Depuis, le <strong>consensus BFT fédéré est complet</strong> : les votes circulent réellement sur le fil, la vue avance par délai à backoff (liveness fermée — une chaîne à <code>n ≥ 4</code> produit des blocs et une autorité absente est contournée), et le comité se <strong>reconfigure</strong> sans refaire la genèse (bloc <code>0x05</code>). Le réseau <strong>survit à une partition</strong> (la minorité s'arrête sans forker, converge à la guérison) et se met à jour sans fork non intentionnel. Côté dépôt, les <strong>cinq cycles vers l'état B sont clos</strong> — il ne reste que des gestes d'opérateur irréversibles (gel de genèse, release signée, annonce), outillés et guidés par <code>docs/OUVERTURE.md</code>. Les réserves restantes : pas de zero-knowledge à vérifieur malicieux revendiqué, argument non formalisé au niveau publication, prototype non audité.</p>
   </div>
 
-  <div class="callout"><span class="lab">Les trous de complétude, dits franchement</span><p>Une transaction devient désormais <strong>définitive</strong> : elle entre dans un <em>bloc</em> — un lot de transactions dans un ordre écrit, chaîné à son parent, <em>borné en octets</em> pour rester diffusable — qui s'applique en tout-ou-rien, et deux nœuds acceptant la même chaîne convergent vers le même arbre (vérifié sur de vraies sockets). Et le wallet <strong>reçoit</strong> : il rejoue l'historique des sorties servi par un nœud archiviste. Et <strong>qui a autorité pour sceller est désormais une règle</strong>, plus une convention&nbsp;: la genèse grave une liste d'autorités, le producteur d'une hauteur est celui du tour, et son bloc n'est valide que muni d'un <strong>certificat de quorum</strong> — <code>2f+1</code> signatures sur <code>n = 3f+1</code> autorités. Restent deux manques, nommés plutôt que tus&nbsp;: <strong>(1) le protocole qui fait circuler ces votes n'est pas écrit</strong> (jalon J1-b) — le format et sa vérification le sont, mais tant que les votes ne voyagent pas, une chaîne à quatre autorités ou plus <em>ne produit aucun bloc</em>, et une autorité absente fige la chaîne à son tour&nbsp;; <strong>(2) le nœud qui sert l'historique apprend l'IP, la cadence et la position du wallet, et peut mentir par omission</strong> — servir est un rôle d'archiviste optionnel et coûteux. À savoir aussi&nbsp;: l'état étant <em>append-only</em> de bout en bout, <strong>aucune réorganisation de chaîne n'est possible</strong> — avec une finalité par quorum, cette limite devient la conséquence assumée du modèle (un bloc certifié n'a rien à réorganiser) plutôt qu'un manque, mais elle reste absolue : une divergence ne se répare pas.</p></div>
+  <div class="callout"><span class="lab">Les trous de complétude, dits franchement</span><p>Une transaction devient <strong>définitive</strong> : elle entre dans un <em>bloc</em> — un lot de transactions dans un ordre écrit, chaîné à son parent, <em>borné en octets</em> pour rester diffusable — qui s'applique en tout-ou-rien, et deux nœuds acceptant la même chaîne convergent vers le même arbre (vérifié sur de vraies sockets). Et le wallet <strong>reçoit</strong> : il rejoue l'historique des sorties servi par un nœud archiviste. Et <strong>qui a autorité pour sceller est une règle</strong>, plus une convention&nbsp;: la genèse grave une liste d'autorités, le producteur d'une hauteur est celui du tour, et son bloc n'est valide que muni d'un <strong>certificat de quorum</strong> — <code>2f+1</code> signatures sur <code>n = 3f+1</code> autorités. <strong>Le protocole qui fait circuler ces votes est désormais livré</strong> (jalons J1-b1/J1-b2)&nbsp;: les votes voyagent sur le fil, la vue change par délai à backoff, et la liveness est fermée — une chaîne à quatre autorités ou plus <em>produit des blocs</em>, et une autorité absente est contournée au lieu de figer la chaîne. Restent des manques, nommés plutôt que tus&nbsp;: <strong>(1) le nœud qui sert l'historique apprend l'IP, la cadence et la position du wallet, et peut mentir par omission</strong> — servir est un rôle d'archiviste optionnel et coûteux&nbsp;; <strong>(2) la fixture de conformité n'a qu'un seul votant</strong> (<code>n = 1</code>, donc <code>f = 0</code>) et ne couvre aucune transaction. À savoir aussi&nbsp;: l'état étant <em>append-only</em> de bout en bout, <strong>aucune réorganisation de chaîne n'est possible</strong> — avec une finalité par quorum, cette limite devient la conséquence assumée du modèle (un bloc certifié n'a rien à réorganiser) plutôt qu'un manque, mais elle reste absolue : une divergence ne se répare pas.</p></div>
 
   <div class="col">
   <h3 id="briques">4. Comment ça marche, en clair</h3>
@@ -511,7 +511,7 @@
 
   <div class="callout"><span class="lab">Ce que ça coûte, chiffré</span><p>Le certificat pèse <code>2f+1 × 3374</code> octets : <strong>1,0 % du bloc à 4 autorités</strong>, 2,3 % à 10, <strong>13,8 % à 64</strong> — où il vaut l'équivalent d'une transaction et demie. La <strong>taille du comité est donc bornée par le budget du bloc</strong>, définitivement, et le point de fonctionnement recommandé est <code>n = 4</code> : le premier qui tolère réellement la panne d'un participant.</p></div>
 
-  <div class="callout secret"><span class="lab">État : le format oui, le protocole pas encore</span><p>Ce qui est livré, c'est le <strong>format et sa vérification</strong> — un bloc sans quorum valide est refusé. Ce qui ne l'est pas, c'est le <strong>protocole</strong> qui fait circuler les votes et change de vue quand un producteur se tait (jalon J1-b). Conséquence immédiate et volontairement dite : <strong>une chaîne à quatre autorités ou plus ne produit aujourd'hui aucun bloc</strong> — le producteur ne rassemble que son propre vote et refuse son propre bloc. Seules les chaînes à trois autorités ou moins avancent. C'est aussi pourquoi la <em>liveness</em> reste une limite ouverte : une autorité absente fige encore la chaîne à son tour.</p></div>
+  <div class="callout secret"><span class="lab">État : le format ET le protocole, livrés</span><p>Le <strong>format et sa vérification</strong> (un bloc sans quorum valide est refusé) et le <strong>protocole</strong> qui fait circuler les votes et change de vue quand un producteur se tait sont désormais tous deux livrés (jalons J1-b1/J1-b2). Conséquence, volontairement dite : <strong>une chaîne à quatre autorités ou plus produit désormais des blocs</strong>, le certificat est assemblé à partir des votes reçus sur le fil, et la <em>liveness</em> est fermée — une autorité absente est <strong>contournée par changement de vue</strong> au lieu de figer la chaîne à son tour. La reconfiguration du comité (bloc <code>0x05</code>, J1-c) suit le même chemin.</p></div>
   </div>
 
   <div class="col">
@@ -566,7 +566,7 @@
   <section class="part-divider big" id="p6">
     <div class="k">Partie VI</div>
     <h2 class="serif">État du projet &amp; feuille de route</h2>
-    <p class="sub">Ce qui est fait, ce qui reste. Les phases 1–5 sont prototypées : le circuit masque, le ledger obéit à la preuve, un testnet local fait circuler des transactions prouvées entre nœuds réels, un bloc les rend définitives, et le wallet reçoit en rejouant les blocs — le cycle payer → sceller → recevoir → redépenser est fermé. Le consensus a désormais son modèle tranché (BFT à comité borné) et son <em>format</em> livré ; ce qui manque est le <em>protocole</em> qui fait circuler les votes.</p>
+    <p class="sub">Ce qui est fait, ce qui reste. Les phases 1–5 sont prototypées : le circuit masque, le ledger obéit à la preuve, un testnet local fait circuler des transactions prouvées entre nœuds réels, un bloc les rend définitives, et le wallet reçoit en rejouant les blocs — le cycle payer → sceller → recevoir → redépenser est fermé. Le <strong>consensus BFT fédéré est complet</strong> : modèle tranché, format, protocole de vote, liveness fermée et reconfiguration d'autorités (J1), économie tranchée (J2, ADR-002), partitions et mise à jour (J3). Côté dépôt, les <strong>cinq cycles vers l'état B sont clos</strong> ; ce qui reste sont des gestes d'opérateur irréversibles et l'audit externe.</p>
   </section>
 
   <div class="board" id="board">
@@ -607,19 +607,21 @@
       <div class="item"><span class="dot done"></span><span class="t">Wallet chiffré au repos</span></div>
     </div>
     <div class="lane">
-      <h4>Consensus (ADR-001)</h4>
+      <h4>Consensus &amp; état B (J1–J3, T5)</h4>
       <div class="item"><span class="dot done"></span><span class="t">Modèle tranché : BFT borné</span></div>
-      <div class="item"><span class="dot done"></span><span class="t">Élection de producteur</span></div>
-      <div class="item"><span class="dot done"></span><span class="t">Bloc 0x04 : vue + certificat</span></div>
+      <div class="item"><span class="dot done"></span><span class="t">Bloc 0x04 : vue + certificat (J1-a)</span></div>
       <div class="item"><span class="dot done"></span><span class="t">Quorum 2f+1 vérifié (J1-a)</span></div>
-      <div class="item todo"><span class="dot todo"></span><span class="t">Votes sur le fil (J1-b)</span></div>
-      <div class="item todo"><span class="dot todo"></span><span class="t">Changement de vue (J1-b)</span></div>
-      <div class="item todo"><span class="dot todo"></span><span class="t">Changement d'autorités (J1-c)</span></div>
+      <div class="item"><span class="dot done"></span><span class="t">Votes sur le fil (J1-b1)</span></div>
+      <div class="item"><span class="dot done"></span><span class="t">Changement de vue · liveness (J1-b2)</span></div>
+      <div class="item"><span class="dot done"></span><span class="t">Bloc 0x05 : changement d'autorités (J1-c)</span></div>
+      <div class="item"><span class="dot done"></span><span class="t">Économie : ADR-002 accepté (J2)</span></div>
+      <div class="item"><span class="dot done"></span><span class="t">Partition · mise à jour · version (J3)</span></div>
+      <div class="item"><span class="dot done"></span><span class="t">Machinerie d'ouverture testnet (T5)</span></div>
     </div>
     <div class="lane">
       <h4>À venir</h4>
-      <div class="item todo"><span class="dot todo"></span><span class="t">Gel de genèse publique</span></div>
-      <div class="item todo"><span class="dot todo"></span><span class="t">Mempool persistant</span></div>
+      <div class="item todo"><span class="dot todo"></span><span class="t">Gestes d'opérateur : gel de genèse, release signée, annonce</span></div>
+      <div class="item todo"><span class="dot todo"></span><span class="t">Décision écrite B → norme A</span></div>
       <div class="item todo"><span class="dot todo"></span><span class="t">Sortie du backend PQ non maintenu</span></div>
       <div class="item todo"><span class="dot todo"></span><span class="t">Audit externe</span></div>
     </div>
@@ -627,32 +629,33 @@
 
   <div class="col">
   <h3 id="roadmap">21. Feuille de route</h3>
-  <p>Les <strong>phases 1 à 5 sont prototypées</strong> — primitives hybrides, circuit witness-hiding qui gouverne l'état, réseau post-quantique câblé dans un nœud réel, blocs scellés et chaînés, wallet CLI qui paie, se synchronise et reçoit : le <strong>cycle complet de la monnaie</strong> est exercé sur testnet local. Le chantier ouvert est le <strong>consensus</strong>, et il est découpé en trois&nbsp;:</p>
+  <p>Les <strong>phases 1 à 5 sont prototypées</strong> — primitives hybrides, circuit witness-hiding qui gouverne l'état, réseau post-quantique câblé dans un nœud réel, blocs scellés et chaînés, wallet CLI qui paie, se synchronise et reçoit : le <strong>cycle complet de la monnaie</strong> est exercé sur testnet local. Le chantier du <strong>consensus fédéré est clos</strong> — les <strong>cinq cycles vers l'état B</strong> le sont côté dépôt&nbsp;:</p>
   <ul>
-    <li><strong>J1-a — livré.</strong> Le <em>format</em> : un bloc porte sa vue et son certificat de quorum, et un bloc sans <code>2f+1</code> votes valides est refusé, après le chaînage et avant toute vérification de preuve.</li>
-    <li><strong>J1-b — suivant, et c'est le vrai morceau.</strong> Le <em>protocole</em> : faire circuler les votes, poser des délais, changer de vue quand le producteur du tour se tait. C'est la seule chose qui ferme la <em>liveness</em> — et c'est aussi l'endroit où les BFT ont historiquement leurs bugs. Tant qu'elle manque, une chaîne à quatre autorités ou plus ne produit aucun bloc.</li>
-    <li><strong>J1-c.</strong> Changer la liste d'autorités sans changer de chaîne, en faisant certifier la nouvelle liste par le quorum de l'ancienne.</li>
+    <li><strong>J1 — livré.</strong> Le <em>format</em> (J1-a : vue + certificat, quorum <code>2f+1</code> vérifié avant tout STARK), le <em>protocole</em> (J1-b1 : les votes circulent ; J1-b2 : délais, changement de vue, <strong>liveness fermée</strong>), et la <em>reconfiguration</em> (J1-c : bloc <code>0x05</code>, changer la liste d'autorités sans refaire la genèse, certifiée par le quorum de l'ancienne).</li>
+    <li><strong>J2 — livré.</strong> Le mécanisme économique est tranché : <strong>ADR-002 accepté</strong>. L'ouverture d'émission mesurée aux paramètres de consensus pèse 2,02 % du bloc — aucun nouveau <code>VERSION_BLOC</code> attendu. La <em>politique</em> d'émission reste hors périmètre B.</li>
+    <li><strong>J3 — livré.</strong> Partitions (la minorité s'arrête sans forker, converge à la guérison), procédure de mise à jour, et négociation de version de fil — le réseau survit à une partition et se met à jour sans fork non intentionnel.</li>
+    <li><strong>T5 — machinerie livrée.</strong> Signature de release minisign, runbook <code>docs/OUVERTURE.md</code>, gabarit <code>docs/GENESE.md</code>. L'<em>ouverture elle-même</em> reste un geste d'opérateur irréversible, délibérément non exécuté.</li>
   </ul>
-  <p>Puis le gel d'une genèse publique, et — prérequis à tout usage réel — un audit externe.</p>
+  <p>Il ne reste, côté dépôt, que les gestes d'opérateur (gel de genèse, release signée, annonce) puis la <strong>décision écrite B → norme A</strong>, et — prérequis à tout usage réel — un <strong>audit externe</strong>.</p>
   </div>
 
   <figure class="fig" aria-label="Feuille de route">
     <div class="flow">
-      <div class="node accent"><span class="h">✅ Fait</span><span class="m">Primitives FIPS · Circuit WH à forme variable (3z-c2) · Ledger + blocs · Réseau PQ · Nœud &amp; wallet CLI chiffré · cycle payer→sceller→recevoir · élection de producteur · quorum 2f+1 vérifié</span></div>
+      <div class="node accent"><span class="h">✅ Fait — état B côté dépôt</span><span class="m">Primitives FIPS · Circuit WH à forme variable (3z-c2) · Ledger + blocs · Réseau PQ · Nœud &amp; wallet CLI chiffré · cycle payer→sceller→recevoir · consensus J1 (format · votes · liveness · reconfiguration) · J2 (ADR-002) · J3 (partition · MAJ · version)</span></div>
       <div class="arrow" aria-hidden="true">→</div>
-      <div class="node"><span class="h">J1-b · protocole de vue</span><span class="m">votes sur le fil · délais · changement de vue — c'est ce qui ferme la liveness</span></div>
+      <div class="node"><span class="h">Gestes d'opérateur</span><span class="m">re-test PQ · gel de genèse · release signée · annonce — guidés par docs/OUVERTURE.md</span></div>
       <div class="arrow" aria-hidden="true">→</div>
-      <div class="node"><span class="h">Chaîne publique</span><span class="m">gel de genèse · testnet sur invitation</span></div>
+      <div class="node"><span class="h">Décision B → A</span><span class="m">décision écrite, puis conception sous la norme A</span></div>
       <div class="arrow" aria-hidden="true">→</div>
       <div class="node secret"><span class="h">Audit</span><span class="m">prérequis à tout usage réel</span></div>
     </div>
-    <figcaption>Jalons — du cycle complet local à l'audit</figcaption>
+    <figcaption>Jalons — de l'état B atteint à l'audit</figcaption>
   </figure>
 
   <footer class="footer">
-    <p><span class="tag ok">Phases 1–5 · prototypées</span> &nbsp; <span class="tag ok">Cycle payer→sceller→recevoir · validé</span> &nbsp; <span class="tag ok">3z-c2 forme variable · livrée</span> &nbsp; <span class="tag ok">Bloc 0x04 · quorum 2f+1 vérifié</span> &nbsp; <span class="tag wip">Protocole de vue (J1-b) · à venir</span></p>
+    <p><span class="tag ok">Phases 1–5 · prototypées</span> &nbsp; <span class="tag ok">Cycle payer→sceller→recevoir · validé</span> &nbsp; <span class="tag ok">3z-c2 forme variable · livrée</span> &nbsp; <span class="tag ok">Consensus J1 · complet (liveness fermée)</span> &nbsp; <span class="tag ok">J2 ADR-002 · accepté</span> &nbsp; <span class="tag ok">J3 · livré</span> &nbsp; <span class="tag ok">État B · atteint côté dépôt</span> &nbsp; <span class="tag wip">Ouverture réelle · geste d'opérateur</span></p>
     <p class="mono">Obscura — prototype de recherche · Rust · dépôt privé <code>nailiwalid-del/obscura</code><br>Défense en profondeur · post-quantique · STARK witness-hiding (HVZK en ROM) sur le chemin de consensus (winterfell / Goldilocks / Rescue-Prime) · réseau chiffré PQ avec Dandelion++.</p>
-    <p style="font-size:13px">Document de synthèse — 22 juillet 2026, au jalon <code>J1-a</code>. Chiffres reproductibles : <code>find crates -name '*.rs' -exec cat {} + | wc -l</code> → 35&nbsp;677 lignes (dont 494 pour le banc <code>zk-spike</code>) ; <code>grep -rn '#[test]' crates</code> → 515 marqueurs ; performances via <code>cargo run --release --example tx_bench -p circuit</code> (une mesure, machine de développement) ; coût du certificat de quorum via <code>cargo run -p node --example dimensionner-quorum --release</code>. Ce prototype n'est pas audité et ne doit pas être utilisé en production.</p>
+    <p style="font-size:13px">Document de synthèse — 24 juillet 2026, à l'<strong>état B</strong> (les cinq cycles clos côté dépôt). Chiffres reproductibles : <code>find crates -name '*.rs' -exec cat {} + | wc -l</code> → 41&nbsp;340 lignes (dont 494 pour le banc <code>zk-spike</code>) ; <code>grep -rn '#[test]' crates</code> → 597 marqueurs ; performances via <code>cargo run --release --example tx_bench -p circuit</code> (une mesure, machine de développement) ; coût du certificat de quorum via <code>cargo run -p node --example dimensionner-quorum --release</code>. Ce prototype n'est pas audité et ne doit pas être utilisé en production.</p>
   </footer>
 
   </main>

@@ -22,8 +22,13 @@ Conséquences, toutes assumées :
 - **Les fonds viennent des allocations de genèse**, pas d'un robinet. Pour
   rejoindre, un participant transmet son adresse `obs1…` (`obscura-wallet
   adresse`) et, s'il doit sceller, l'empreinte de son identité de nœud
-  (`obscura-node --identite`). Elles sont gravées dans la genèse par
-  `obscura-genese` — donc **rejoindre après le gel exige une nouvelle chaîne**.
+  (`obscura-node --identite`). Les **allocations** et l'entrée initiale sont
+  gravées dans la genèse par `obscura-genese` — donc **obtenir des fonds après le
+  gel exige une nouvelle chaîne**. En revanche, la **liste des autorités est
+  reconfigurable sur la même chaîne** (J1-c, voir §1.2) : le quorum de l'ancienne
+  liste peut certifier l'ajout, le retrait ou le remplacement d'un membre sans
+  refaire la genèse. Ce qui est figé, c'est l'**ancre** et les **allocations**,
+  pas la composition du comité.
 - **`--temoin` n'a de valeur que si au moins deux participants archivent.** Sur
   une source unique, un nœud peut mentir par omission sans qu'aucun contrôle
   local ne le démente (§1.3). À une seule archive, la synchronisation est un
