@@ -58,7 +58,13 @@ Chaque fiche porte, outre sa nature et son déclencheur, **quatre champs** :
 **choix par défaut** · **critère qui le renverse** · **sans regret maintenant** ·
 **engage irréversiblement**.
 
-### D-A3 — Ouverture de l'appartenance + anti-Sybil — CONCEPTION (profonde) — *à attaquer en premier*
+### D-A3 — Ouverture de l'appartenance + anti-Sybil — ✅ **TRANCHÉE (ADR-003, 2026-07-24)**
+
+> **Décidée** par `2026-07-24-appartenance-anti-sybil-adr.md` (ACCEPTÉ) : ouvert en
+> usage (réseau + rôles utiles), fédéré reconfigurable en scellement ; admission par
+> reconfiguration certifiée (J1-c), PAS par enjeu ; PoS public rejeté ; chemin
+> d'ouverture futur agnostique derrière un critère de renversement (percée PQ). La
+> fiche ci-dessous reste comme trace de l'arbitrage.
 
 **Nature :** conception (ADR-003). **Prérequis :** J1 ✅ et J3 ✅.
 **Déclencheur d'origine :** « quelqu'un propose d'attribuer une valeur ».

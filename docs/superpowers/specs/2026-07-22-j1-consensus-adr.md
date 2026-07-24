@@ -205,6 +205,17 @@ sera alors une **borne de conception**, pas une objection au modèle.
    caution (`stake`), ce qui suppose le mécanisme économique de J2 — donc
    l'ordre J1 → J2 → J3 de la carte est confirmé, et l'anti-Sybil reste derrière
    la porte A.
+
+   > ⚠️ **SUPERSÉÉ par ADR-002 (J2) puis ADR-003 (D-A3, 2026-07-24).** Deux
+   > affirmations de ce point sont caduques :
+   > - « la liste reste gravée en genèse pour B » : **faux depuis J1-c** — la liste
+   >   est reconfigurable sur la même chaîne, en B comme en A.
+   > - « l'admission se fera par caution (`stake`), ce qui suppose J2 » : **rejeté.**
+   >   ADR-002 a établi que J2 *rémunère* un comité sans en *ouvrir* l'appartenance ;
+   >   ADR-003 a établi que le `stake` PUBLIC est incompatible avec la thèse
+   >   (soldes attribuables) et l'a REJETÉ. L'admission se fait par **reconfiguration
+   >   certifiée du quorum** (J1-c), pas par enjeu. Voir
+   >   `2026-07-24-appartenance-anti-sybil-adr.md`.
 7. **Mise à jour de la liste sans nouvelle genèse.** Prévoir dès `0x04` un
    **changement d'ensemble** : un bloc peut porter une nouvelle liste d'autorités,
    qui prend effet à `h + k` (`k` fixe, connu), et **doit être certifiée par le

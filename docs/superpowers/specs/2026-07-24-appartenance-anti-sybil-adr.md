@@ -1,7 +1,11 @@
 # ADR-003 (D-A3) : l'appartenance et l'anti-Sybil d'Obscura
 
-**Statut :** **PROPOSÉ** le 2026-07-24.
+**Statut :** **ACCEPTÉ** le 2026-07-24 (proposé le même jour).
 **Décideur :** l'auteur du projet.
+**Ce qui a permis l'acceptation :** la décision ne dépend d'aucune mesure ni d'aucun
+code — le mécanisme d'admission existe déjà (J1-c). Elle tranche une POSITION, et la
+position par défaut (« pas de permissionless sealing ») ne coûte rien à tenir, tout en
+laissant sa porte de renversement écrite.
 **Décision A :** D-A3 de `2026-07-24-decisions-A-carte.md`.
 **Portée :** tranche la POSITION d'appartenance (qui peut faire quoi, et à quelles
 conditions le comité de scellement peut évoluer). Ne contient aucun code : le
@@ -212,8 +216,11 @@ bande), pas cryptographique.
 
 ## Actions
 
-1. [ ] **Accepter ou amender cet ADR.**
-2. [ ] Corriger `2026-07-22-j1-consensus-adr.md` (ou l'annoter) : le point 6
+1. [x] **Accepter ou amender cet ADR.** — **ACCEPTÉ le 2026-07-24.** La position
+   « ouvert en usage, fédéré en scellement » est tranchée ; l'admission au comité est
+   par reconfiguration certifiée (J1-c), le PoS public est rejeté, le chemin
+   d'ouverture futur reste agnostique derrière le critère de renversement.
+2. [x] Corriger `2026-07-22-j1-consensus-adr.md` (ou l'annoter) : le point 6
    (« admission par `stake` », « liste gravée en genèse pour B ») est superséé —
    admission par reconfiguration certifiée (J1-c), PoS public rejeté.
 3. [ ] Vérifier que `docs/TESTNET.md` §1.2 et la carte des décisions A restent
