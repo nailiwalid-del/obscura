@@ -54,9 +54,11 @@ fn usage() -> ! {
     eprintln!("    sceller. Ordre CONVENU entre participants coopératifs, jamais");
     eprintln!("    DÉFENDU contre un adversaire — testnet local uniquement.");
     eprintln!();
-    eprintln!("⚠️  AVEC --autorite, la liste est FIGÉE dans l'identifiant de la chaîne :");
-    eprintln!("    en changer = nouvelle genèse = nouvelle chaîne. C'est une fédération,");
-    eprintln!("    et une autorité absente FIGE la chaîne à son tour (liveness A).");
+    eprintln!("⚠️  AVEC --autorite, la liste INITIALE entre dans l'identifiant de la chaîne");
+    eprintln!("    (l'ancre de genèse ne change jamais). Mais la liste reste");
+    eprintln!("    RECONFIGURABLE sur la MÊME chaîne (J1-c : ajout/retrait/remplacement");
+    eprintln!("    certifié par le quorum de l'ANCIENNE liste). Et une autorité absente");
+    eprintln!("    est CONTOURNÉE par changement de vue (J1-b2) : la chaîne continue.");
     eprintln!();
     eprintln!("⚠️  Le NOMBRE d'allocations est public à jamais. Les montants et les");
     eprintln!("    bénéficiaires ne le sont pas — mais une allocation unique désigne");
@@ -258,10 +260,12 @@ fn main() {
             println!("  n° {rang} — {}", hex::encode(&empreinte[..8]));
         }
         println!();
-        println!("⚠️  Une autorité absente FIGE la chaîne à son tour (liveness, option A).");
+        println!("⚠️  Une autorité absente est CONTOURNÉE par changement de vue (J1-b2) :");
+        println!("    passé un délai, les autres passent à la vue suivante, la chaîne continue.");
     }
     println!();
-    println!("COMPAREZ l'identifiant court entre opérateurs AVANT de démarrer.");
+    println!("COMPAREZ l'identifiant COMPLET (128 hex) entre opérateurs AVANT de démarrer.");
+    println!("(La forme courte ci-dessus n'est qu'un repère visuel rapide, jamais l'ancre.)");
     println!("Deux nœuds amorcés sur des genèses différentes se refusent tous leurs");
     println!("blocs, et rien dans les messages d'erreur ne désigne la cause.");
 }
