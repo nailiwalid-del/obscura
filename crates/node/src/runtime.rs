@@ -144,7 +144,15 @@ impl Runtime {
     const ECHEANCE: std::time::Duration = std::time::Duration::from_secs(20);
 
     fn poser_echeances(flux: &TcpStream) -> Result<(), NetError> {
-        flux.set_read_timeout(Some(Self::ECHEANCE))
+        // BLOQUANT d'abord : une socket ACCEPTÉE hérite du mode non bloquant de son
+        // listener (comportement de Windows ; pas de Linux). Or `obscura-node` met son
+        // listener en non bloquant pour ne pas figer sa boucle. Le handshake PQ qui suit
+        // fait des lectures BLOQUANTES : sur une socket non bloquante, `read_exact`
+        // rendrait `WouldBlock` d'emblée et le lien serait avorté. On rétablit donc le
+        // mode bloquant AVANT de poser les échéances — c'est le contrat de cette fonction
+        // (« bloquant borné par une échéance »), partagé par `accepter` et `connecter`.
+        flux.set_nonblocking(false)
+            .and_then(|_| flux.set_read_timeout(Some(Self::ECHEANCE)))
             .and_then(|_| flux.set_write_timeout(Some(Self::ECHEANCE)))
             .map_err(|e| NetError::Io(e.kind()))
     }
