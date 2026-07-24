@@ -353,7 +353,25 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let mut rt = Runtime::new(Noeud::new(identite_noeud, etat, secret_dandelion));
+    // Registre de votes : CHARGÉ avant tout (un nœud relancé doit se souvenir de
+    // ses votes, sinon il pourrait équivoquer au redémarrage) et BRANCHÉ sur le
+    // dépôt via `avec_donnees` (sans quoi `PersisterVotes` échoue et le nœud ne
+    // vote JAMAIS — une chaîne à autorités reste alors calée à la hauteur 0, le
+    // scellement local n'atteignant jamais le quorum). Même câblage que le voteur
+    // de `crates/node/tests/quorum_sockets.rs`, qu'un nœud de production omettait.
+    let registre_votes = match stockage.charger_ou_creer_votes() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("registre de votes illisible ou corrompu : {e}");
+            eprintln!(
+                "    le nœud REFUSE de démarrer — repartir de zéro autoriserait l'équivocation."
+            );
+            std::process::exit(1);
+        }
+    };
+    let mut noeud = Noeud::new(identite_noeud, etat, secret_dandelion);
+    noeud.adopter_votes(registre_votes);
+    let mut rt = Runtime::new(noeud).avec_donnees(stockage.clone());
 
     let listener = match TcpListener::bind(adresse_ecoute) {
         Ok(l) => l,

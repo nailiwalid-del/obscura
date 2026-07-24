@@ -120,6 +120,13 @@ pub fn charger_genese(chemin: impl AsRef<Path>) -> Result<Bloc, PersistanceError
 }
 
 /// Répertoire de données d'un nœud.
+///
+/// `Clone` : un nœud a besoin de DEUX propriétaires du même répertoire — le
+/// runtime (qui écrit `votes.bin` via `PersisterVotes`) et la boucle principale
+/// (qui écrit `etat.bin` via `enregistrer_etat`). Les deux écrivent des fichiers
+/// DISJOINTS, atomiquement ; `tranches_persistees` (compteur d'`enregistrer_etat`)
+/// n'est touché que par la seconde, donc dupliquer sa valeur est sans effet.
+#[derive(Clone)]
 pub struct Donnees {
     racine: PathBuf,
     /// Tranches d'historique déjà PERSISTÉES dans le journal.
