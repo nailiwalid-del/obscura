@@ -129,6 +129,31 @@ ACVP complets — et supprimerait le trou nommé en porte AUD (aujourd'hui seuls
 `crates/crypto/tests/acvp_mlkem768.rs` et `acvp_mldsa65.rs`). Son apparition
 **déclenche** une ré-évaluation du backend.
 
+### Journal des re-tests
+
+> ⚠️ **Un re-test n'est valable qu'à sa date.** Ceux ci-dessous ont été menés HORS
+> d'une ouverture réelle (dry-run de validation du gate). **Au moment réel du
+> `obscura-genese` de production, le re-test DOIT être rejoué** — les faits vérifiés
+> ici auront vieilli.
+
+**Re-test du 2026-07-24 — résultat : « toujours non » (ne pas migrer).** Les quatre
+critères de déclenchement ré-évalués contre les données courantes :
+
+| # | Critère | Source vérifiée | Résultat |
+|---|---|---|---|
+| 1 | Vraie vulnérabilité (≠ « unmaintained ») sur `pqcrypto-mlkem`/`pqcrypto-mldsa` | RUSTSEC-2026-0161 et RUSTSEC-2026-0166 | **NON** — les deux restent des avis « unmaintained » (PQClean archivé), aucun CVSS, aucune faille connue |
+| 2 | RustCrypto `ml-dsa` atteint 1.0 ou publie un audit | crates.io | **NON** — toujours **0.1.1** (release du 2026-06-05, inchangée) |
+| 3 | aws-lc-rs stabilise ML-DSA hors du module `unstable` | docs.rs + aws/aws-lc-rs#964 | **NON** — ML-DSA reste dans `aws_lc_rs::unstable::signature`, sans garantie semver |
+| 4 | libcrux passe en ≥ 0.1 avec tableau de vérification par algorithme | crates.io | **NON** — `libcrux-ml-dsa` toujours **0.0.10** (2026-07-15), pré-release |
+
+**Critère ACVP** : aucun backend à injection d'aléa officiel n'est apparu ; le trou
+`keyGen`/`encap`/`sigGen` reste ouvert et nommé (couverture inchangée : `decap`/`sigVer`).
+
+**Conclusion inchangée depuis le 2026-07-22 :** aucun candidat n'est meilleur que le
+statu quo sur le critère qui compte (risque de maintenance future contre risque non
+borné sur le composant le moins remplaçable). La dette PQ reste **documentée, bornée,
+sans faille connue** — et re-confirmée à cette date.
+
 ## Ce qu'il faudra vérifier au moment de migrer (et pas avant)
 
 Ces points ne sont **pas vérifiés** dans ce document — les mesurer sur un candidat
