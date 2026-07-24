@@ -141,7 +141,9 @@ gelée **et** budget. **Déclencheur :** budget **et** spec stable **≥ 3 mois*
   La spec s'est stabilisée le **2026-07-24** ; le compteur ne peut donc pas expirer avant
   **~fin octobre 2026**, et seulement si rien de la liste ci-dessus ne bouge d'ici là.
 - **Sans regret maintenant :** tenir un journal des changements touchant cette liste
-  (le premier remet le compteur à zéro).
+  (le premier remet le compteur à zéro). ✅ **FAIT :** `docs/STABILITE.md` — horloge
+  démarrée le 2026-07-24 (dernier changement de surface : format de fil J3),
+  éligibilité au plus tôt le 2026-10-24.
 - **Engage irréversiblement :** passer commande — dépense externe, interdite avant B
   stable.
 
