@@ -153,7 +153,8 @@ de décisions écrites, et chacune renvoie à son document de référence.
   → **Vérification :** l'identifiant complet (32 octets) est publié dans le
   README du dépôt, et les releases sont **signées**. Comparez-le avec celui
   imprimé au démarrage de votre nœud. 32 octets, pas 8 — la forme courte est un
-  diagnostic, pas une ancre.
+  diagnostic, pas une ancre. Le gabarit de publication de cette ancre, avec la
+  procédure de comparaison, est dans [`GENESE.md`](GENESE.md).
 - **Le mempool n'est pas persisté** (sans gravité : les pairs réannoncent).
 - **Une synchronisation de wallet peut être interrompue par un nœud très actif.**
   `obscura-wallet synchroniser` tolère les messages diffusés (annonces, blocs,
