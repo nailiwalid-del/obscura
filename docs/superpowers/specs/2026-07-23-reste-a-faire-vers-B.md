@@ -184,7 +184,22 @@ de consensus), non par majoration seule.
 aucun champ `emissions` valable à toute hauteur — une émission diffusée **et
 acceptée** est irréparable sur un ledger append-only.
 
-### Cycle 4 — T5, ouverture du testnet *(voie irréversible, première irréversibilité réelle)* — **taille M**
+### Cycle 4 — T5, ouverture du testnet — ✅ **MACHINERIE LIVRÉE le 2026-07-24** (PR #29)
+
+**Livré — la MACHINERIE, pas l'ouverture.** Signature de release minisign
+(`deploiement/signer-release.sh`/`verifier-release.sh` — manifeste de checksums,
+signature vérifiée avant les checksums, testé par altération d'artefact ET de
+manifeste), runbook `docs/OUVERTURE.md` (5 étapes, re-test PQ bloquant en tête), et
+gabarit `docs/GENESE.md` pour publier l'ancre 32 o.
+
+⚠️ **L'OUVERTURE elle-même n'est PAS faite, et c'est délibéré.** Aucune vraie genèse
+gelée, aucune vraie release signée, aucun identifiant réel publié — ce sont des
+gestes d'opérateur, guidés par le runbook, au moment choisi. La clé publique
+(`deploiement/release.pub`) et l'ancre (`docs/GENESE.md`) sont des placeholders.
+Le **gate hérité de D-final** — rejouer et consigner `BACKEND_PQ.md` avant
+`obscura-genese` — est l'étape 1 du runbook, à honorer au moment réel.
+
+<details><summary>État de l'outillage avant T5 (archive)</summary>
 
 **État vérifié.** Outillage complet : `obscura-genese` (refuse d'écraser,
 auto-vérifie, imprime l'id complet 32 o), `obscura-node --identite`, `--archiver`,
@@ -216,6 +231,13 @@ faucet, aucun explorateur) ; temps d'ingénierie pour la release signée.
 implémentée. `extension` est réservée et entre dans l'`id`, donc le format ne sera
 pas refondu — mais la chaîne, elle, sera refaite. Fonctionnement normal d'un
 testnet, **à condition que ce soit écrit d'avance** (c'est fait dans `TESTNET.md`).
+
+</details>
+
+**Critère de franchissement :** ⚠️ **la MACHINERIE est en place ; le critère
+lui-même — « un tiers monte un nœud depuis la release signée et vérifie l'ancre » —
+ne peut être ATTEINT qu'à l'ouverture réelle**, qui reste un geste d'opérateur. La
+partie livrable en dépôt (les outils, le runbook, le gabarit) est complète.
 
 ### Cycle 5 — J3, consensus périmètre B — ✅ **CLOS le 2026-07-24** (PR #27)
 
@@ -340,24 +362,27 @@ fichiers en cours ont été commités puis migrés ; la spec combinée « clôtu
 voie sans regret » a été écrite, planifiée, **exécutée et fusionnée** (PR #25) ; et
 le loose end J1-c s'est réglé du même geste. **Cycles 1, 2 et 3 clos.**
 
-**Mise à jour du 2026-07-24 — le cycle 5 (J3) est CLOS** (PR #27), déviation
-net→node validée et exécutée. **Quatre cycles sur cinq sont fermés.**
+**Mise à jour du 2026-07-24 — LES CINQ CYCLES SONT CLOS.** AUD-final, D-final (#25),
+J2 (#26), J3 (#27), T5 (#29). La partie **livrable en dépôt** de l'état B est
+complète : `docs/` est l'unique source normative, le consensus survit aux partitions
+et négocie sa version, l'économie est tranchée (ADR-002 accepté), et la machinerie
+d'ouverture est prête et testée.
 
-**Il ne reste qu'un chantier avant l'état B :**
+**Ce qui sépare encore d'un état B PLEINEMENT réalisé n'est plus de l'ingénierie, ce
+sont des GESTES d'opérateur**, guidés par `docs/OUVERTURE.md` et irréversibles pour
+la chaîne ouverte :
 
-1. **Cycle 4 — T5 (ouverture).** Spec et plan écrits
-   (`plans/2026-07-23-t5-ouverture-testnet.md`), non exécutés. **Prérequis
-   BLOQUANT : `minisign` n'est pas installé** sur la machine de développement — le
-   plan en dépend de bout en bout (le test de la Tâche 1 signe avec une clé jetable
-   et vérifie qu'un octet altéré est rejeté). C'est la première irréversibilité
-   réelle du projet : elle gèle une genèse.
-2. Après T5, **l'état B est atteint**, et il ne reste que la décision écrite
-   B → A.
+1. Rejouer et **consigner** le re-test de la dette PQ (`BACKEND_PQ.md`, gate hérité
+   de D-final) — étape 1 du runbook, **avant** tout `obscura-genese`.
+2. Geler la genèse (autorités + allocations décidées), publier l'ancre 32 o dans
+   `docs/GENESE.md` **et** hors bande.
+3. Générer la vraie paire de clés de release (hors dépôt), signer la release,
+   remplacer le placeholder `deploiement/release.pub`, publier l'empreinte hors bande.
+4. Annoncer, avec les limites de `docs/TESTNET.md` publiées d'avance.
 
-⚠️ **Rappel du gate hérité de D-final** : avant d'exécuter `obscura-genese` en
-production, rejouer et CONSIGNER les critères de `BACKEND_PQ.md`, même si la réponse
-reste « toujours non ». C'est l'étape 1 du runbook `docs/OUVERTURE.md` que T5 doit
-produire.
+Une fois ces gestes faits, **l'état B est pleinement atteint** ; il ne reste alors que
+la décision écrite B → A (implémentation de la coinbase, ouverture de l'appartenance
++ anti-Sybil — dont ADR-002 a établi que **J2 ne les livre pas**).
 
 ## Ce que ce document ne fait pas
 
