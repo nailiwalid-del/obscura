@@ -44,7 +44,10 @@ tests unitaires de `crates/crypto`.
 
 ## 2. Consensus
 
-Fixture rejouable : [`docs/fixtures/conformite-v3/`](fixtures/conformite-v3/README.md).
+Deux fixtures rejouables, à deux rôles distincts.
+
+**Contrôle minimal, sans `--release`** :
+[`docs/fixtures/conformite-v3/`](fixtures/conformite-v3/README.md).
 
 ```bash
 cargo test -p node --test conformite
@@ -53,9 +56,24 @@ cargo test -p node --test conformite
 Couvre : décodage de bloc **`0x05`** (J1-c : le changement d'ensemble
 d'autorités entre dans l'identifiant), identifiant de genèse (autorités
 comprises), amorçage d'état, chaînage, élection de producteur, vérification de
-scellement, **certificat de quorum**, avancée de la tête. **Ne couvre aucune
-transaction ni preuve STARK**, et son quorum n'a qu'**un seul votant** (`n = 1`,
-donc `f = 0`) — voir le README de la fixture, qui dit aussi pourquoi.
+scellement, certificat de quorum à **un seul votant** (`n = 1`, donc `f = 0`),
+avancée de la tête. Délibérément minimal : ni transaction, ni preuve STARK, ni
+quorum à plusieurs votants — voir le README de la fixture, qui dit pourquoi.
+
+**Preuve profonde, réservée à `--release`** :
+[`docs/fixtures/conformite-etendue/`](fixtures/conformite-etendue/README.md).
+
+```bash
+cargo test -p node --test conformite_etendue --release
+```
+
+Ferme les deux réserves laissées par `conformite-v3` : un quorum à `n = 4`
+autorités avec **trois votants distincts** (masque `0x07`, quorum requis 3),
+et une **transaction confidentielle** dont la preuve STARK est vérifiée sur le
+chemin de consensus réel (`appliquer_bloc`). Démontre en outre le refus d'un
+bloc identique sous-quorum (deux votes) et le recouvrement du paiement par son
+destinataire. `--release` est requis : les preuves STARK sont gatées dessus
+dans tout le dépôt, et les tests de rejeu sont ignorés en build de debug.
 
 ## 3. Suite complète
 
@@ -92,15 +110,14 @@ raison**, et la divergence est un défaut à signaler.
 - **Aucun audit externe n'a eu lieu.**
 - `keyGen`, `encap`, `sigGen` et le contexte ML-DSA ne sont pas couverts par
   vecteurs officiels (§1).
-- La fixture de consensus ne couvre aucune transaction (§2), ni un quorum à
-  plusieurs votants.
 - **Le protocole de vue est livré** (jalons J1-b1/J1-b2) : les votes circulent
   réellement sur le fil, la vue avance par délai à backoff exponentiel, et un
   nœud ne vote qu'une fois par hauteur. La liveness qu'ouvrait J1-a est fermée :
   une chaîne à `n ≥ 4` produit désormais des blocs
-  ([`PROTOCOL.md`](PROTOCOL.md), « Finalité : le bloc »). Ce que la fixture
-  ci-dessus ne couvre pas reste vrai (quorum à un seul votant, aucune
-  transaction) ; ce n'est plus une limite du protocole de vue lui-même.
+  ([`PROTOCOL.md`](PROTOCOL.md), « Finalité : le bloc »). Que `conformite-v3`
+  seule n'exerce ni quorum pluriel ni transaction n'a jamais été une limite de
+  ce protocole de vue — c'était une limite volontaire de cette fixture
+  précise, désormais complétée par `conformite-etendue`.
 - Le backend PQ est marqué `unmaintained` en amont — dette ouverte, assumée et
   datée ([`BACKEND_PQ.md`](BACKEND_PQ.md)).
 - Les limites connues du réseau sont listées dans

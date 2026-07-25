@@ -64,6 +64,15 @@ circulent, donc J1-b.
 l'identifiant qu'il fixe, pas l'activation à `h + k` elle-même, qui vit dans
 les tests unitaires de `ledger::bloc` et `ledger::proved_state`.
 
+## Pour une couverture plus profonde
+
+Cette fixture reste le smoke-check minimal : genèse à une autorité, bloc vide,
+aucune preuve, exécutable **sans** `--release`. Pour une transaction
+confidentielle à preuve STARK vérifiée, un quorum à plusieurs votants et son
+refus sous quorum, et le recouvrement d'un paiement par son destinataire, voir
+[`docs/fixtures/conformite-etendue/`](../conformite-etendue/README.md)
+(nécessite `--release`).
+
 ## Régénérer
 
 ```bash
