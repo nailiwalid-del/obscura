@@ -310,6 +310,22 @@ fn le_beneficiaire_recouvre_son_paiement() {
         "le wallet publié est à l'état PRÉ-scan : c'est le tiers qui doit trouver la note, \
          pas la fixture qui la lui donne déjà trouvée"
     );
+    // GARDE : le solde à 0 ne suffit pas à démontrer l'état PRÉ-scan — un wallet déjà
+    // synchronisé et intégralement dépensé afficherait le même solde. Sans ce contrôle
+    // sur la position de synchronisation elle-même, un `beneficiaire.wallet` un jour
+    // republié à `prochaine_hauteur = 1` ferait renvoyer au lot de genèse
+    // `Ok(Statut::DejaApplique)` (voir `wallet::synchro::Wallet::synchroniser`) au lieu
+    // d'une erreur : `rejouer_dans` réussirait quand même, silencieusement, et ce test
+    // resterait vert sans avoir démontré un recouvrement DEPUIS ZÉRO.
+    assert_eq!(
+        beneficiaire.prochaine_hauteur(),
+        0,
+        "le wallet publié doit être à l'état PRÉ-scan : position de synchronisation à zéro"
+    );
+    assert!(
+        beneficiaire.notes().is_empty(),
+        "le wallet publié doit être à l'état PRÉ-scan : aucune note déjà connue"
+    );
 
     rejouer_dans(&mut beneficiaire, &genese, &bloc1);
 
