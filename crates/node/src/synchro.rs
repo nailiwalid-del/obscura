@@ -149,6 +149,12 @@ pub enum ReponseDecodeError {
     DigestNonCanonique,
 }
 
+impl From<crypto::decode::Tronque> for ReponseDecodeError {
+    fn from(_: crypto::decode::Tronque) -> Self {
+        ReponseDecodeError::Tronque
+    }
+}
+
 /// UN MORCEAU de l'historique d'UN bloc.
 ///
 /// Ni `Debug` ni `PartialEq` : elle porte des `Sortie`, donc des `EncNote`. Les tests
@@ -280,29 +286,8 @@ impl ReponseHistorique {
     /// reçus ; sans le second, il suffirait d'annoncer la borne pour faire réserver
     /// 1 Mio à chaque message.
     pub fn from_bytes(b: &[u8]) -> Result<Self, ReponseDecodeError> {
+        use crypto::decode::{lire_u32 as u32_de, lire_u64 as u64_de, prendre, tableau};
         let mut pos = 0usize;
-        fn prendre<'a>(
-            b: &'a [u8],
-            pos: &mut usize,
-            n: usize,
-        ) -> Result<&'a [u8], ReponseDecodeError> {
-            let fin = pos.checked_add(n).ok_or(ReponseDecodeError::Tronque)?;
-            let s = b.get(*pos..fin).ok_or(ReponseDecodeError::Tronque)?;
-            *pos = fin;
-            Ok(s)
-        }
-        fn u64_de(b: &[u8], pos: &mut usize) -> Result<u64, ReponseDecodeError> {
-            let o: [u8; 8] = prendre(b, pos, 8)?
-                .try_into()
-                .map_err(|_| ReponseDecodeError::Tronque)?;
-            Ok(u64::from_le_bytes(o))
-        }
-        fn u32_de(b: &[u8], pos: &mut usize) -> Result<u32, ReponseDecodeError> {
-            let o: [u8; 4] = prendre(b, pos, 4)?
-                .try_into()
-                .map_err(|_| ReponseDecodeError::Tronque)?;
-            Ok(u32::from_le_bytes(o))
-        }
 
         let version = prendre(b, &mut pos, 1)?[0];
         if version != VERSION_SYNCHRO {
@@ -311,9 +296,7 @@ impl ReponseHistorique {
         let hauteur = u64_de(b, &mut pos)?;
         let debut = u64_de(b, &mut pos)?;
         let fin = u64_de(b, &mut pos)?;
-        let racine: [u8; DIGEST_BYTES] = prendre(b, &mut pos, DIGEST_BYTES)?
-            .try_into()
-            .map_err(|_| ReponseDecodeError::Tronque)?;
+        let racine: [u8; DIGEST_BYTES] = tableau(b, &mut pos)?;
         let racine_apres =
             Digest::from_bytes(&racine).map_err(|_| ReponseDecodeError::DigestNonCanonique)?;
         let hauteur_tete = u64_de(b, &mut pos)?;
@@ -367,9 +350,7 @@ impl ReponseHistorique {
 
         let mut sorties: Vec<Sortie> = Vec::with_capacity(n);
         for j in 0..n {
-            let cm: [u8; DIGEST_BYTES] = prendre(b, &mut pos, DIGEST_BYTES)?
-                .try_into()
-                .map_err(|_| ReponseDecodeError::Tronque)?;
+            let cm: [u8; DIGEST_BYTES] = tableau(b, &mut pos)?;
             let commitment = Digest::from_bytes(&cm)
                 .map_err(|_| ReponseDecodeError::SortieInvalide(j as u64))?;
 

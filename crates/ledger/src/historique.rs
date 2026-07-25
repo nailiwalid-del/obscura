@@ -176,6 +176,12 @@ pub enum HistoriqueDecodeError {
     CouvertureIncoherente { couvert: u64, presentes: u64 },
 }
 
+impl From<crypto::decode::Tronque> for HistoriqueDecodeError {
+    fn from(_: crypto::decode::Tronque) -> Self {
+        HistoriqueDecodeError::Tronque
+    }
+}
+
 /// Erreur de chargement depuis un fichier.
 #[derive(Debug, thiserror::Error)]
 pub enum HistoriqueLoadError {
@@ -381,28 +387,16 @@ impl HistoriqueSorties {
     /// confronté aux octets réellement présents — `N × TAILLE_MIN > restant` est refusé
     /// avant toute réservation. Un en-tête annonçant 10⁹ entrées ne coûte donc rien.
     pub fn from_bytes(b: &[u8]) -> Result<Self, HistoriqueDecodeError> {
+        use crypto::decode::{lire_u32, lire_u64, prendre, tableau};
         let mut pos = 0usize;
-        fn prendre<'a>(
-            b: &'a [u8],
-            pos: &mut usize,
-            n: usize,
-        ) -> Result<&'a [u8], HistoriqueDecodeError> {
-            let fin = pos.checked_add(n).ok_or(HistoriqueDecodeError::Tronque)?;
-            if fin > b.len() {
-                return Err(HistoriqueDecodeError::Tronque);
-            }
-            let s = &b[*pos..fin];
-            *pos = fin;
-            Ok(s)
-        }
 
         let version = prendre(b, &mut pos, 1)?[0];
         if version != VERSION_HISTORIQUE {
             return Err(HistoriqueDecodeError::VersionInconnue(version));
         }
-        let debut = u64::from_le_bytes(prendre(b, &mut pos, 8)?.try_into().unwrap());
+        let debut = lire_u64(b, &mut pos)?;
 
-        let t = u64::from_le_bytes(prendre(b, &mut pos, 8)?.try_into().unwrap());
+        let t = lire_u64(b, &mut pos)?;
         let t = usize::try_from(t).map_err(|_| HistoriqueDecodeError::Tronque)?;
         // BORNE AVANT ALLOCATION : le compteur est confronté aux octets présents.
         if t.saturating_mul(TAILLE_TRANCHE) > b.len().saturating_sub(pos) {
@@ -410,12 +404,10 @@ impl HistoriqueSorties {
         }
         let mut tranches: Vec<TrancheBloc> = Vec::with_capacity(t);
         for i in 0..t {
-            let hauteur = u64::from_le_bytes(prendre(b, &mut pos, 8)?.try_into().unwrap());
-            let d = u64::from_le_bytes(prendre(b, &mut pos, 8)?.try_into().unwrap());
-            let f = u64::from_le_bytes(prendre(b, &mut pos, 8)?.try_into().unwrap());
-            let r: [u8; DIGEST_BYTES] = prendre(b, &mut pos, DIGEST_BYTES)?
-                .try_into()
-                .map_err(|_| HistoriqueDecodeError::Tronque)?;
+            let hauteur = lire_u64(b, &mut pos)?;
+            let d = lire_u64(b, &mut pos)?;
+            let f = lire_u64(b, &mut pos)?;
+            let r: [u8; DIGEST_BYTES] = tableau(b, &mut pos)?;
             // Racine CANONIQUE : des felts hors du corps seraient acceptés puis
             // compareraient faux contre l'arbre sans qu'on sache pourquoi.
             let racine_apres = Digest::from_bytes(&r)
@@ -436,26 +428,24 @@ impl HistoriqueSorties {
             });
         }
 
-        let s = u64::from_le_bytes(prendre(b, &mut pos, 8)?.try_into().unwrap());
+        let s = lire_u64(b, &mut pos)?;
         let s = usize::try_from(s).map_err(|_| HistoriqueDecodeError::Tronque)?;
         if s.saturating_mul(TAILLE_SORTIE_MIN) > b.len().saturating_sub(pos) {
             return Err(HistoriqueDecodeError::Tronque);
         }
         let mut sorties: Vec<Sortie> = Vec::with_capacity(s);
         for j in 0..s {
-            let cm: [u8; DIGEST_BYTES] = prendre(b, &mut pos, DIGEST_BYTES)?
-                .try_into()
-                .map_err(|_| HistoriqueDecodeError::Tronque)?;
+            let cm: [u8; DIGEST_BYTES] = tableau(b, &mut pos)?;
             let commitment = Digest::from_bytes(&cm)
                 .map_err(|_| HistoriqueDecodeError::SortieInvalide(j as u64))?;
 
-            let lk = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap()) as usize;
+            let lk = lire_u32(b, &mut pos)? as usize;
             if lk != KEM_CT_LEN {
                 return Err(HistoriqueDecodeError::SortieInvalide(j as u64));
             }
             let kem_ct = prendre(b, &mut pos, lk)?.to_vec();
 
-            let le = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap()) as usize;
+            let le = lire_u32(b, &mut pos)? as usize;
             if le > MAX_ENC_NOTE_LEN {
                 return Err(HistoriqueDecodeError::SortieInvalide(j as u64));
             }

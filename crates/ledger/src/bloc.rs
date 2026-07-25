@@ -273,6 +273,12 @@ pub enum BlocDecodeError {
     ChangementDoublon,
 }
 
+impl From<crypto::decode::Tronque> for BlocDecodeError {
+    fn from(_: crypto::decode::Tronque) -> Self {
+        BlocDecodeError::Tronque
+    }
+}
+
 /// Erreur de CONSTRUCTION d'un bloc de genèse. Distincte du décodage : elle protège
 /// celui qui fabrique l'artefact, là où `BlocDecodeError` protège celui qui le reçoit.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -765,20 +771,8 @@ impl Bloc {
 
     /// Décode un bloc reçu du réseau. Borné et validant : jamais de panique.
     pub fn from_bytes(b: &[u8]) -> Result<Self, BlocDecodeError> {
+        use crypto::decode::{lire_u32, lire_u64, prendre, tableau};
         let mut pos = 0usize;
-        fn prendre<'a>(
-            b: &'a [u8],
-            pos: &mut usize,
-            n: usize,
-        ) -> Result<&'a [u8], BlocDecodeError> {
-            let fin = pos.checked_add(n).ok_or(BlocDecodeError::Tronque)?;
-            if fin > b.len() {
-                return Err(BlocDecodeError::Tronque);
-            }
-            let s = &b[*pos..fin];
-            *pos = fin;
-            Ok(s)
-        }
 
         let version = prendre(b, &mut pos, 1)?[0];
         if version == VERSION_BLOC_PERIMEE {
@@ -787,13 +781,11 @@ impl Bloc {
         if version != VERSION_BLOC {
             return Err(BlocDecodeError::VersionInconnue(version));
         }
-        let parent: [u8; TAILLE_ID] = prendre(b, &mut pos, TAILLE_ID)?
-            .try_into()
-            .map_err(|_| BlocDecodeError::Tronque)?;
-        let hauteur = u64::from_le_bytes(prendre(b, &mut pos, 8)?.try_into().unwrap());
-        let vue = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap());
+        let parent: [u8; TAILLE_ID] = tableau(b, &mut pos)?;
+        let hauteur = lire_u64(b, &mut pos)?;
+        let vue = lire_u32(b, &mut pos)?;
 
-        let n = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap()) as usize;
+        let n = lire_u32(b, &mut pos)? as usize;
         // Borne AVANT allocation : un en-tête annonçant 10⁶ transactions ne doit rien
         // coûter à qui le reçoit.
         if n > MAX_TX_PAR_BLOC {
@@ -801,29 +793,27 @@ impl Bloc {
         }
         let mut transactions = Vec::with_capacity(n);
         for i in 0..n {
-            let taille = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap()) as usize;
+            let taille = lire_u32(b, &mut pos)? as usize;
             let octets = prendre(b, &mut pos, taille)?;
             transactions.push(
                 ProvedTx::from_bytes(octets)
                     .map_err(|_| BlocDecodeError::TransactionInvalide(i))?,
             );
         }
-        let m = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap()) as usize;
+        let m = lire_u32(b, &mut pos)? as usize;
         // Borne AVANT allocation, comme pour les transactions.
         if m > MAX_EMISSIONS_PAR_BLOC {
             return Err(BlocDecodeError::TropDEmissions);
         }
         let mut emissions = Vec::with_capacity(m);
         for j in 0..m {
-            let cm: [u8; DIGEST_BYTES] = prendre(b, &mut pos, DIGEST_BYTES)?
-                .try_into()
-                .map_err(|_| BlocDecodeError::Tronque)?;
+            let cm: [u8; DIGEST_BYTES] = tableau(b, &mut pos)?;
             // Digest CANONIQUE : des felts hors du corps seraient acceptés puis
             // feraient diverger le hachage prouvé, ou paniqueraient plus loin.
             let commitment =
                 Digest::from_bytes(&cm).map_err(|_| BlocDecodeError::EmissionInvalide(j))?;
 
-            let lk = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap()) as usize;
+            let lk = lire_u32(b, &mut pos)? as usize;
             // Bornes AVANT allocation : `prendre` refuserait déjà une longueur
             // délirante, mais on veut le refus AVANT toute réservation et avec une
             // erreur qui désigne l'émission fautive.
@@ -832,7 +822,7 @@ impl Bloc {
             }
             let kem_ct = prendre(b, &mut pos, lk)?.to_vec();
 
-            let le = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap()) as usize;
+            let le = lire_u32(b, &mut pos)? as usize;
             if le > MAX_ENC_NOTE_LEN {
                 return Err(BlocDecodeError::EmissionInvalide(j));
             }
@@ -844,14 +834,14 @@ impl Bloc {
             });
         }
 
-        let a = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap()) as usize;
+        let a = lire_u32(b, &mut pos)? as usize;
         // Borne AVANT allocation, comme partout ailleurs dans ce décodeur.
         if a > MAX_AUTORITES {
             return Err(BlocDecodeError::TropDAutorites);
         }
         let mut autorites = Vec::with_capacity(a);
         for k in 0..a {
-            let lp = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap()) as usize;
+            let lp = lire_u32(b, &mut pos)? as usize;
             if lp > TAILLE_AUTORITE_MAX {
                 return Err(BlocDecodeError::AutoriteInvalide(k));
             }
@@ -869,7 +859,7 @@ impl Bloc {
         // CHANGEMENT D'AUTORITÉS (J1-c). `0 = absent`. Bornes AVANT allocation, comme
         // partout dans ce décodeur, et doublons refusés (une clé à deux index voterait
         // deux fois).
-        let nc = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap()) as usize;
+        let nc = lire_u32(b, &mut pos)? as usize;
         let changement_autorites = if nc == 0 {
             None
         } else {
@@ -878,7 +868,7 @@ impl Bloc {
             }
             let mut liste = Vec::with_capacity(nc);
             for k in 0..nc {
-                let lp = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap()) as usize;
+                let lp = lire_u32(b, &mut pos)? as usize;
                 if lp > TAILLE_AUTORITE_MAX {
                     return Err(BlocDecodeError::ChangementAutoriteInvalide(k));
                 }
@@ -894,12 +884,12 @@ impl Bloc {
 
         // En-tête extensible : RÉSERVÉ, donc verrouillé VIDE — aucun contenu n'est
         // défini en 0x03, le moindre octet est refusé (fail-closed, avant allocation).
-        let lx = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap()) as usize;
+        let lx = lire_u32(b, &mut pos)? as usize;
         if lx != 0 {
             return Err(BlocDecodeError::ExtensionInconnue);
         }
 
-        let ls = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap()) as usize;
+        let ls = lire_u32(b, &mut pos)? as usize;
         let scellement = if ls == 0 {
             None
         } else {
@@ -912,7 +902,7 @@ impl Bloc {
             )
         };
 
-        let lc = u32::from_le_bytes(prendre(b, &mut pos, 4)?.try_into().unwrap()) as usize;
+        let lc = lire_u32(b, &mut pos)? as usize;
         let certificat = if lc == 0 {
             None
         } else {

@@ -178,6 +178,12 @@ pub enum WalletFichierError {
     IndexHorsArbre { index: u64, feuilles: usize },
 }
 
+impl From<crypto::decode::Tronque> for WalletFichierError {
+    fn from(_: crypto::decode::Tronque) -> Self {
+        WalletFichierError::Tronque
+    }
+}
+
 impl Wallet {
     /// Sérialise le wallet, **clés secrètes comprises**.
     ///
@@ -228,26 +234,12 @@ impl Wallet {
             return Err(WalletFichierError::EmpreinteIncorrecte);
         }
 
-        let mut pos = 0usize;
         // Curseur BORNÉ : chaque prise vérifie ce qui reste. Le fichier est local et
         // trusté, mais un disque abîmé ne doit pas faire paniquer un wallet.
-        fn prendre<'a>(
-            b: &'a [u8],
-            pos: &mut usize,
-            n: usize,
-        ) -> Result<&'a [u8], WalletFichierError> {
-            let fin = pos.checked_add(n).ok_or(WalletFichierError::Tronque)?;
-            if fin > b.len() {
-                return Err(WalletFichierError::Tronque);
-            }
-            let s = &b[*pos..fin];
-            *pos = fin;
-            Ok(s)
-        }
+        use crypto::decode::{lire_u32, lire_u64, prendre, tableau};
+        let mut pos = 0usize;
         fn digest(b: &[u8], pos: &mut usize) -> Result<Digest, WalletFichierError> {
-            let a: [u8; DIGEST_BYTES] = prendre(b, pos, DIGEST_BYTES)?
-                .try_into()
-                .map_err(|_| WalletFichierError::Tronque)?;
+            let a: [u8; DIGEST_BYTES] = crypto::decode::tableau(b, pos)?;
             Digest::from_bytes(&a).map_err(|_| WalletFichierError::ChampInvalide)
         }
 
@@ -262,21 +254,18 @@ impl Wallet {
             return Err(WalletFichierError::VersionInconnue(version));
         }
 
-        let s: [u8; DIGEST_BYTES] = prendre(corps, &mut pos, DIGEST_BYTES)?
-            .try_into()
-            .map_err(|_| WalletFichierError::Tronque)?;
+        let s: [u8; DIGEST_BYTES] = tableau(corps, &mut pos)?;
         let secret =
             ShieldedSecret::from_bytes(&s).map_err(|_| WalletFichierError::ChampInvalide)?;
 
-        let prochaine_hauteur =
-            u64::from_le_bytes(prendre(corps, &mut pos, 8)?.try_into().unwrap());
-        let feuilles_ancrees = u64::from_le_bytes(prendre(corps, &mut pos, 8)?.try_into().unwrap());
+        let prochaine_hauteur = lire_u64(corps, &mut pos)?;
+        let feuilles_ancrees = lire_u64(corps, &mut pos)?;
 
-        let n_kem = u32::from_le_bytes(prendre(corps, &mut pos, 4)?.try_into().unwrap()) as usize;
+        let n_kem = lire_u32(corps, &mut pos)? as usize;
         let reception = KemKeypair::from_bytes_secret(prendre(corps, &mut pos, n_kem)?)
             .map_err(|_| WalletFichierError::KemInvalide)?;
 
-        let n_notes = u32::from_le_bytes(prendre(corps, &mut pos, 4)?.try_into().unwrap()) as usize;
+        let n_notes = lire_u32(corps, &mut pos)? as usize;
         // Borne AVANT allocation : l'en-tête ne doit pas pouvoir réserver plus que ce
         // que le fichier peut réellement contenir.
         if corps.len().saturating_sub(pos) < n_notes.saturating_mul(TAILLE_NOTE) {
@@ -284,11 +273,11 @@ impl Wallet {
         }
         let mut notes = Vec::with_capacity(n_notes);
         for _ in 0..n_notes {
-            let value = u64::from_le_bytes(prendre(corps, &mut pos, 8)?.try_into().unwrap());
+            let value = lire_u64(corps, &mut pos)?;
             let owner = digest(corps, &mut pos)?;
             let rho = digest(corps, &mut pos)?;
             let r = digest(corps, &mut pos)?;
-            let index = u64::from_le_bytes(prendre(corps, &mut pos, 8)?.try_into().unwrap());
+            let index = lire_u64(corps, &mut pos)?;
             notes.push(NoteDetenue {
                 note: SpendNote {
                     value,
@@ -300,7 +289,7 @@ impl Wallet {
             });
         }
 
-        let n_arbre = u64::from_le_bytes(prendre(corps, &mut pos, 8)?.try_into().unwrap());
+        let n_arbre = lire_u64(corps, &mut pos)?;
         let n_arbre = usize::try_from(n_arbre).map_err(|_| WalletFichierError::Tronque)?;
         let arbre = ProvedMerkleTree::from_bytes(prendre(corps, &mut pos, n_arbre)?)
             .map_err(|_| WalletFichierError::ArbreInvalide)?;

@@ -4,6 +4,7 @@
 //! mathématiques indépendantes — la sécurité tient si AU MOINS UNE tient.
 
 pub mod aead;
+pub mod decode;
 pub mod hash;
 pub mod kem;
 pub mod sig;
