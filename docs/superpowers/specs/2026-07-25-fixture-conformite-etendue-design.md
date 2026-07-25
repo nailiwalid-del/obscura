@@ -1,83 +1,102 @@
-# Design — Fixture de conformité étendue (quorum multi-votant + transaction STARK)
+# Design — Fixture de conformité étendue (quorum multi-votant + transaction STARK + recouvrement)
 
 **Date :** 2026-07-25
-**Statut :** design approuvé, prêt pour le plan d'implémentation.
+**Statut :** design révisé après revue (10 points), prêt pour le plan d'implémentation.
 **Objet :** ajouter un **artefact rejouable par un tiers** qui ferme les deux
-réserves nommées par `docs/CONFORMITE.md` §2 — « aucune transaction ni preuve
-STARK » et « quorum à un seul votant » — sans toucher au format ni à la fixture
-`conformite-v3` existante.
-**Portée :** ce document conçoit une fixture de test et sa mise à jour
-documentaire. Il ne change **aucun** format de consensus, aucun invariant, aucune
+réserves nommées par `docs/CONFORMITE.md` §2 **et** §5 — « aucune transaction ni
+preuve STARK » et « quorum à un seul votant » — et qui démontre en outre le
+**recouvrement d'un paiement confidentiel** par son destinataire, sans toucher au
+format ni à la fixture `conformite-v3` existante.
+**Portée :** ce document conçoit une fixture de test et ses mises à jour
+documentaires. Il ne change **aucun** format de consensus, aucun invariant, aucune
 règle. Il n'ajoute que de la **couverture de vérification tierce**.
 
 ---
 
-## Contexte, vérifié dans le code
-
-Trois faits contraignent le design. Ils sont lus dans le dépôt au 2026-07-25.
+## Contexte, vérifié dans le code (2026-07-25)
 
 1. **La fixture de conformité est l'artefact déterministe rejouable.**
    `crates/node/tests/conformite.rs` + `docs/fixtures/conformite-v3/` : genèse +
-   bloc-1 + hachages attendus, versionnés. Elle est **délibérément** `n=1`, sans
-   transaction ni STARK, pour rester petite, rapide et testable sans `--release`.
-   Elle exerce décodage `0x05`, chaînage, élection de producteur, scellement,
-   certificat de quorum (à un votant), avancée de la tête.
+   bloc-1 + hachages attendus, versionnés. Délibérément `n=1`, sans transaction ni
+   STARK, pour rester petite, rapide, testable **sans `--release`**.
 
 2. **Le consensus multi-votant AVEC transaction STARK est déjà testé — mais pas
-   comme un artefact rejouable.** `crates/node/tests/quorum_sockets.rs` prouve
-   `n=4, f=1, quorum 3` avec une vraie transaction confidentielle et convergence
-   de tête/racine sur les quatre nœuds. C'est un test **dynamique**, à clés
-   aléatoires, sur sockets vivantes : il valide le comportement, mais ne produit
-   **aucun fichier qu'un tiers rejoue** depuis `docs/`.
+   comme artefact rejouable.** `crates/node/tests/quorum_sockets.rs` prouve
+   `n=4, f=1, quorum 3` avec une transaction confidentielle sur sockets vivantes,
+   à clés **aléatoires** : il valide le comportement, ne produit aucun fichier
+   qu'un tiers rejoue depuis `docs/`.
 
-3. **La lacune est donc précise :** porter le quorum multi-votant et la
-   transaction confidentielle dans **l'artefact statique** que lit un auditeur —
-   pas ré-implémenter un consensus déjà couvert.
+3. **La lacune est donc de porter le quorum multi-votant et la transaction
+   confidentielle dans l'artefact statique** que lit un auditeur — pas de
+   ré-implémenter un consensus déjà couvert.
 
-**Conséquence de cadrage.** Ce qui manque n'est pas une capacité, c'est une
-*preuve rejouable*. Le design se limite à assembler et figer cette preuve.
+### Faits d'API confirmés (déterminent le design)
+
+- `CONSENSUS_DEPTH = 32` (`crates/ledger/src/merkle.rs:13`) ; `depuis_genese`
+  amorce à cette profondeur (`MerkleFrontier::consensus()`). La fixture N'UTILISE
+  PAS `depuis_genese_depth(…, 4)`, réservé aux tests rapides.
+- `Bloc` expose publiquement `parent, hauteur, vue, transactions: Vec<ProvedTx>,
+  emissions: Vec<Emission>, autorites: Vec<SigPublicKey>, changement_autorites:
+  Option<…>, certificat: Option<Certificat>`.
+- `Certificat` expose `pub masque: u64` ; `votants()` et `nombre_de_votants()` en
+  dérivent. Le **certificat n'entre pas dans l'`id`** du bloc.
+- `quorum_requis()` = `quorum_pour(n)` ; pour `n=4`, vaut `3` (`⌊2·4/3⌋+1`).
+- `appliquer_bloc` refuse un quorum trop faible par
+  `QuorumInsuffisant { obtenu, requis }`.
+- **`Wallet::depuis_secret` tire la clé KEM de réception d'`OsRng`**
+  (`crates/wallet/src/lib.rs:177`, `reception: KemKeypair::generate()`) :
+  l'adresse n'est donc **pas** déterministe à partir du seul secret. Un tiers ne
+  peut recouvrer un paiement que si le matériel wallet est publié.
+- `Wallet::to_bytes_secret()` / `from_bytes_secret()` sérialisent le wallet en
+  clair, clés comprises, **sans Protection** — ce qui permet de publier un wallet
+  bénéficiaire jetable. `solde()`, `notes()`, `scanner()`, `synchroniser()`
+  existent.
 
 ---
 
 ## Décision
 
-**Ajouter une fixture `conformite-etendue`, à côté de `conformite-v3` (qui reste
-intacte), qui démontre en une exécution rejouable :**
+**Ajouter une fixture `conformite-etendue`, à côté de `conformite-v3` (intacte),
+qui démontre en un rejeu :**
 
 1. une **genèse à 4 autorités** portant une émission confidentielle vers un
    wallet payeur ;
 2. un **bloc-1 contenant une transaction confidentielle** (payeur → bénéficiaire,
-   300 sur 1000, frais 0), dont la **preuve STARK est vérifiée au rejeu** ;
-3. ce bloc-1 **certifié par un quorum de ≥ 3 votants distincts** (`n=4, f=1`) ;
-4. l'avancée de la racine d'état **exactement** comme publié.
+   300 sur 1000, frais 0), dont la **preuve STARK est vérifiée** au rejeu, sur le
+   chemin de consensus réel (`appliquer_bloc`) ;
+3. ce bloc-1 **certifié par un quorum de 3 votants distincts** (indices 0, 1, 2 ;
+   `masque = 0x0000000000000007`) ;
+4. l'avancée de la racine d'état **exactement** comme publié ;
+5. le **recouvrement du paiement** : le bénéficiaire, rechargé depuis son matériel
+   wallet **jetable publié**, synchronise sur les blocs et retrouve `solde == 300`;
+6. la **morsure de la frontière de quorum** : le même bloc réduit à 2 votes est
+   **refusé** par `QuorumInsuffisant { obtenu: 2, requis: 3 }`.
 
-La fixture est **gatée `--release`** (génération et vérification de preuve STARK),
-via l'idiome déjà en place :
-`#[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]`.
+La fixture est **ignorée en debug et exécutée en `--release`** (génération et
+vérification de preuve STARK), via l'idiome déjà en place :
+`#[cfg_attr(debug_assertions, ignore = "preuves gardées par --release")]`.
 
 ### Pourquoi une nouvelle fixture plutôt que remplacer v3
-
-`conformite-v3` a une valeur propre : c'est le **contrôle minimal**, déterministe,
-rapide, **sans `--release`**, qui exerce le squelette (décode/chaînage/scellement/
-forme du certificat) en profil debug. La remplacer forcerait `--release` pour tout
-contrôle de conformité et perdrait ce smoke-check. Deux artefacts, deux rôles :
 
 | | `conformite-v3` | `conformite-etendue` |
 |---|---|---|
 | Rôle | smoke-check permanent | preuve profonde tierce |
 | Autorités | 1 (`n=1`, quorum 1) | 4 (`n=4`, quorum 3) |
-| Transaction | aucune | 1 transfert confidentiel |
+| Transaction | aucune | 1 transfert confidentiel + recouvrement |
 | Preuve STARK | aucune | vérifiée au rejeu |
-| `--release` | non requis | **requis** |
+| Debug (`cargo test`) | s'exécute | **ignorée** |
+| `--release` | s'exécute aussi | **requis** |
+
+Remplacer v3 forcerait `--release` pour tout contrôle de conformité et perdrait le
+smoke-check debug. Deux artefacts, deux rôles.
 
 ### Pourquoi `conformite-etendue` et non `conformite-v4`
 
-Les numéros de version de fixture tracent les **bumps de format de bloc**
-(v1→v2 : `0x04` ; v2→v3 : `0x05`), pas les ajouts de couverture. La fixture
-étendue est au **même format `0x05`** que v3. La nommer « v4 » suggérerait à tort
-un changement de format. Le README documentera la relation : si le format bumpe
-plus tard, **les deux** fixtures cassent ensemble (par construction, comme v1/v2/v3)
-et sont re-datées, jamais écrasées.
+Les numéros de version tracent les **bumps de format de bloc** (v1→v2 : `0x04` ;
+v2→v3 : `0x05`), pas les ajouts de couverture. La fixture étendue est au **même
+format `0x05`**. Si le format bumpe plus tard, **les deux** fixtures cassent
+ensemble (par construction, comme v1/v2/v3) et sont re-datées, jamais écrasées — le
+README le dira.
 
 ---
 
@@ -90,140 +109,194 @@ Nouveau répertoire `docs/fixtures/conformite-etendue/` :
 ```
 docs/fixtures/conformite-etendue/
   autorite-0.cle … autorite-3.cle   # 4 clés d'autorité JETABLES, publiées
+  beneficiaire.wallet               # matériel wallet JETABLE (to_bytes_secret), état PRÉ-scan
   genese.bin                        # 4 autorités + émission vers le payeur
-  bloc-1.bin                        # transaction confidentielle + certificat 3 votants
-  attendu.txt                       # valeurs attendues (voir plus bas)
-  README.md                         # rôle, rejeu, --release, clés jetables, relation v3
+  bloc-1.bin                        # transaction confidentielle + certificat 3 votants (masque 0x07)
+  bloc-1-sous-quorum.bin            # MÊME bloc, certificat réduit à 2 votes (masque 0x03)
+  attendu.txt                       # valeurs attendues (format ci-dessous)
+  README.md                         # rôle, rejeu, --release, clés/wallet jetables, relation v3
 ```
 
-Les clés d'autorité sont **jetables et publiées** avec la fixture, exactement
-comme `autorite.cle` de v3 : elles n'existent que pour rendre genèse et bloc
-reproductibles, et ne servent nulle part ailleurs. Le README le dira mot pour mot.
+Les clés d'autorité **et** le wallet bénéficiaire sont **jetables et publiés** :
+ils n'existent que pour rendre l'artefact reproductible et rejouable, et ne servent
+nulle part ailleurs. Le README le dira mot pour mot (le wallet publié donne
+l'autorité de dépense sur des fonds sans aucune valeur, sur une chaîne jetable).
+
+`bloc-1-sous-quorum.bin` partage le **même `bloc1_id`** que `bloc-1.bin` (le
+certificat n'entre pas dans l'`id`) : le test négatif le vérifie, ce qui démontre
+au passage cette propriété.
 
 ### `attendu.txt`
 
-Format `clé=valeur_hex`, `#` en commentaire (même parseur que v3) :
+Format `clé=valeur`, `#` en commentaire (parseur de `conformite.rs`). **Convention
+de type explicite**, écrite en tête du fichier :
 
 ```
-genese_id=<hex>
+# Identifiants et racines : HEX. Compteurs et montants : DÉCIMAL. Masque : HEX (u64).
+genese_id=<hex, 32 o>
 racine_apres_genese=<hex>
 bloc1_id=<hex>
 racine_apres_bloc1=<hex>
 quorum_requis=3
-nombre_de_votants=<n ≥ 3>
+masque_certificat=0x0000000000000007
+nombre_de_votants=3
+solde_beneficiaire=300
 ```
 
-### Fichier de test
+La liste `votants = {0,1,2}` n'est pas dupliquée dans `attendu.txt` (elle est
+l'exacte dérivation de `masque_certificat`) : le test l'affirme directement en
+code (`cert.votants().collect::<Vec<_>>() == vec![0, 1, 2]`).
 
-Nouveau `crates/node/tests/conformite_etendue.rs`, calqué sur `conformite.rs`,
-deux fonctions :
+### Fichiers de test
 
-- **`la_fixture_etendue_se_rejoue`** — le rejeu tiers, gaté `--release`.
-- **`generer_la_fixture_etendue`** (`#[ignore]`) — régénère les artefacts à la
-  main, versionnés ensuite.
-
+Nouveau `crates/node/tests/conformite_etendue.rs`, calqué sur `conformite.rs`.
 Les helpers `attendus()`/`lire()`/`racine_fixture()` sont **dupliqués localement**
-dans le nouveau fichier (adaptés au répertoire `conformite-etendue`), pas extraits
-dans un module partagé : ils sont courts, et `conformite.rs` reste ainsi
-auto-suffisant et lisible d'un bloc — cohérent avec le style du dépôt (chaque test
-porte sa propre plomberie).
+(adaptés au répertoire `conformite-etendue`), pas extraits dans un module partagé :
+ils sont courts et `conformite.rs` reste auto-suffisant — cohérent avec le style du
+dépôt. Fonctions :
+
+- `la_fixture_etendue_se_rejoue` — le rejeu tiers (positif).
+- `le_beneficiaire_recouvre_son_paiement` — le scan/solde.
+- `un_quorum_de_deux_est_refuse` — le test négatif.
+- `generer_la_fixture_etendue` (`#[ignore]`) — régénère les artefacts à la main.
+
+Les trois premières portent
+`#[cfg_attr(debug_assertions, ignore = "preuves gardées par --release")]`.
 
 ---
 
 ## Générateur (`generer_la_fixture_etendue`)
 
-Assemble tout **sans sockets** — contrairement à `quorum_sockets.rs`, qui fait
-circuler les votes sur le réseau : pour un artefact statique, on assemble le
-certificat directement.
+Assemble tout **sans sockets** (assemblage direct du certificat) :
 
-1. Générer 4 clés d'autorité `cles[0..4]` ; les écrire (`autorite-i.cle`).
-2. Dériver les wallets payeur et bénéficiaire de graines fixes (comme
-   `secret(graine)` dans `quorum_sockets.rs`).
-3. Genèse à 4 autorités portant une émission vers le payeur (motif `genese_pour`
+1. Générer 4 clés `cles[0..4]` ; écrire `autorite-i.cle`
+   (`SigKeypair::to_bytes_secret`).
+2. Wallets payeur et bénéficiaire par `Wallet::depuis_secret(secret(graine),
+   CONSENSUS_DEPTH)` — profondeur **consensus (32)**, pas 4.
+3. **Écrire `beneficiaire.wallet` = `beneficiaire.to_bytes_secret()` dès ici**,
+   à l'état PRÉ-scan (aucune note, arbre vide profondeur 32) : c'est cet état que
+   le tiers rechargera pour scanner lui-même.
+4. Genèse à 4 autorités portant une émission vers le payeur (motif `genese_pour`
    de `quorum_sockets.rs`) ; écrire `genese.bin`.
-4. Amorcer l'état ; le payeur se synchronise sur la genèse
-   (`MorceauHistorique::bloc_entier`) puis `construire(&bénéficiaire.adresse(),
-   300, 0)` → `tx`.
-5. `Bloc::sceller(&genese.id(), 1, vec![tx])`, `signer_scellement(&cles[0])`,
-   puis `signer_vote(i, &cles[i])` pour `i ∈ {0, 1, 2}` → certificat à **3
-   votants distincts** ; écrire `bloc-1.bin`.
-6. Appliquer le bloc, relever les racines, écrire `attendu.txt`.
+5. Amorcer l'état par `depuis_genese` (profondeur consensus) ; le payeur
+   synchronise sur la genèse, puis `construire(&beneficiaire.adresse(), 300, 0)`
+   → `tx`.
+6. `Bloc::sceller(&genese.id(), 1, vec![tx])` ;
+   `signer_scellement(&cles[0])` (producteur du tour = `autorites[0]`, à confirmer
+   par `producteur_attendu(1, 0)`) ; `signer_vote(i, &cles[i])` pour
+   `i ∈ {0,1,2}` → certificat `masque = 0x07`. Écrire `bloc-1.bin`.
+7. Reconstruire un second bloc identique mais avec seulement
+   `signer_vote(i, …)` pour `i ∈ {0,1}` → certificat `masque = 0x03`. Écrire
+   `bloc-1-sous-quorum.bin`.
+8. Appliquer `bloc-1` sur une copie ; relever les racines. Synchroniser une copie
+   du bénéficiaire sur genèse + bloc-1 pour relever `solde_beneficiaire` (sanity).
+   Écrire `attendu.txt`.
 
 **Déterminisme par commit, pas par régénération.** Les octets sont figés une fois
-et le rejeu les *vérifie* ; il ne les régénère pas. Les signatures hedgées et les
-tailles de preuve STARK variables (le dépôt lit une taille de preuve « comme une
-bande, jamais comme une égalité ») ne cassent donc rien : c'est le contrat déjà
-tenu par v3. Re-lancer le générateur produit un artefact **différent mais valide**;
-seuls les octets commités font foi.
-
-> Note d'implémentation : le producteur du tour à hauteur 1, vue 0, est
-> `autorites[(1 − 1 + 0) mod 4] = autorites[0]`. Le scellement doit donc être
-> signé par `cles[0]`. À confirmer dans le plan via `producteur_attendu(1, 0)`.
+et le rejeu les *vérifie* ; il ne les régénère pas. Signatures hedgées et tailles
+de preuve STARK variables (« une taille de preuve se lit comme une bande ») ne
+cassent donc rien : c'est le contrat déjà tenu par v3. Re-lancer le générateur
+produit un artefact **différent mais valide** ; seuls les octets commités font foi.
 
 ---
 
-## Ce que le rejeu affirme (`la_fixture_etendue_se_rejoue`)
+## Ce que le rejeu affirme
 
-Dans l'ordre, chaque assertion falsifiable :
+### `la_fixture_etendue_se_rejoue` (positif)
 
-1. `genese.bin` décode ; `genese.id()` == `attendu[genese_id]`.
-2. Amorçage → `tree.root()` == `attendu[racine_apres_genese]` ; tête == genèse.
-3. `bloc-1.bin` décode ; `bloc1.id()` == `attendu[bloc1_id]` ; `bloc1.vue == 0`.
-4. Scellement vérifié contre `producteur_attendu(1, 0)`.
-5. `etat.quorum_requis() == 3` ; le certificat existe et porte **≥ 3 votants
-   distincts** (`nombre_de_votants() >= 3`, indices distincts) — repris de la
-   discipline de `quorum_sockets.rs`.
-6. `etat.appliquer_bloc(&bloc1)` réussit — **ce qui vérifie la preuve STARK de la
-   transaction sur le chemin de consensus réel** — et fait avancer tête + racine
-   vers `bloc1_id` / `racine_apres_bloc1` publiés.
+Assertions **structurelles explicites** d'abord, puis **valeurs exactes** :
 
-Le point 6 est le cœur du gain : la vérification STARK **dans** le chemin de
-consensus (`appliquer_bloc`), pas un appel isolé — donc ce qu'un nœud fait
-vraiment. C'est ce que la fixture v3 ne couvrait pas.
+1. `genese.bin` décode ; `genese.autorites.len() == 4` ;
+   `genese.emissions.len() == 1` ; `genese.id() == attendu[genese_id]`.
+2. Amorçage par `depuis_genese` → `tree.root() == attendu[racine_apres_genese]` ;
+   tête == genèse.
+3. **Clés publiées ↔ genèse** : pour `i ∈ 0..4`, charger `autorite-i.cle`, dériver
+   la clé publique, vérifier `== genese.autorites[i]`. L'artefact est ainsi
+   auto-cohérent.
+4. `bloc-1.bin` décode ; `bloc1.hauteur == 1` ; `bloc1.vue == 0` ;
+   `bloc1.transactions.len() == 1` ; `bloc1.emissions.is_empty()` ;
+   `bloc1.changement_autorites.is_none()` ; `bloc1.id() == attendu[bloc1_id]`.
+5. Scellement vérifié contre `producteur_attendu(1, 0)`.
+6. Quorum, valeurs **exactes** : `etat.quorum_requis() == 3` ; le certificat
+   existe ; `cert.masque == 0x0000000000000007` ;
+   `cert.votants().collect::<Vec<_>>() == vec![0, 1, 2]` ;
+   `cert.nombre_de_votants() == 3`.
+7. `etat.appliquer_bloc(&bloc1)` réussit — **ce qui vérifie la preuve STARK de la
+   transaction sur le chemin de consensus** — et fait avancer tête + racine vers
+   `bloc1_id` / `racine_apres_bloc1` publiés.
 
-### Décision : pas d'assertion supplémentaire sur le transfert
+### `le_beneficiaire_recouvre_son_paiement` (recouvrement, point 4→b)
 
-On n'ajoute **pas** d'assertion isolée sur le nullifieur dépensé ni sur le
-commitment du bénéficiaire. Raison : l'avancée de `racine_apres_bloc1` (point 6)
-est déjà la conséquence intégrale et falsifiable de l'application de la
-transaction — un nullifieur non dépensé ou un commitment absent donnerait une
-racine différente et ferait échouer le point 6. Ajouter des assertions internes
-dupliquerait cette garantie en couplant le test à la structure interne de l'arbre.
-YAGNI.
+1. Charger le bénéficiaire par `Wallet::from_bytes_secret(lire("beneficiaire.wallet"))`
+   — état pré-scan.
+2. Le synchroniser sur genèse (h=0) puis bloc-1 (h=1), dans l'ordre, via
+   `MorceauHistorique` construits à partir des `.bin` publiés.
+3. Affirmer `beneficiaire.solde() == attendu[solde_beneficiaire]` (= 300).
+
+Ce test est la démonstration bout-en-bout de la confidentialité : le **détenteur
+de la clé** recouvre sa note ; le montant n'est visible que pour lui. Il assume,
+et le README le dit, que publier le wallet revient à publier l'autorité de dépense
+— acceptable sur une chaîne jetable sans valeur.
+
+### `un_quorum_de_deux_est_refuse` (négatif, point 5)
+
+1. Amorcer un état **frais** depuis `genese.bin`.
+2. Décoder `bloc-1-sous-quorum.bin` ; vérifier `bloc.id() == attendu[bloc1_id]`
+   (même id que le bloc plein — le certificat n'entre pas dans l'`id`) et
+   `cert.masque == 0x03`.
+3. `etat.appliquer_bloc(&sous_quorum)` renvoie
+   `Err(QuorumInsuffisant { obtenu: 2, requis: 3 })`.
+
+Ce test prouve que la fixture ne constate pas seulement un bloc accepté : elle
+**mord** sur la frontière `2 < 3`.
+
+### Décision : pas d'assertion interne sur nullifieur/commitment
+
+Au-delà des assertions structurelles (point 3 de la revue), on n'ajoute pas
+d'assertion sur le nullifieur dépensé ni le commitment du bénéficiaire :
+l'avancée de `racine_apres_bloc1` (rejeu positif) et `solde == 300` (recouvrement)
+sont déjà les conséquences falsifiables complètes. YAGNI.
 
 ---
 
 ## Documentation à mettre à jour
 
-- **`docs/CONFORMITE.md` §2** — aujourd'hui : « Ne couvre aucune transaction ni
-  preuve STARK, et son quorum n'a qu'un seul votant ». Après : v3 reste le
-  contrôle minimal ; **`conformite-etendue` ferme les deux réserves** (quorum
-  `n=4` à 3 votants, transaction confidentielle dont la preuve STARK est vérifiée
-  au rejeu). C'est la mise à jour qui porte la valeur pour la thèse « un tiers
-  vérifie sans nous croire ».
-- **`docs/fixtures/conformite-etendue/README.md`** — rôle, commande de rejeu,
-  `--release` requis, clés jetables, relation avec v3 et le versioning de format.
+- **`docs/CONFORMITE.md` §2** — v3 reste le contrôle minimal ; `conformite-etendue`
+  ferme les deux réserves (quorum `n=4` à 3 votants, transaction confidentielle à
+  preuve STARK vérifiée) et démontre le recouvrement.
+- **`docs/CONFORMITE.md` §5 (« Ce qui n'est pas démontré »)** — retirer / requalifier
+  la ligne « La fixture de consensus ne couvre aucune transaction (§2), ni un
+  quorum à plusieurs votants » : c'est désormais couvert par `conformite-etendue`.
+  §5 doit rester exact, pas seulement §2. **(Point 7 de la revue.)**
+- **`docs/fixtures/conformite-v3/README.md`** — ajouter un renvoi : « la couverture
+  profonde (quorum multi-votant, transaction STARK, recouvrement) vit dans
+  `conformite-etendue` ; cette fixture-ci reste le smoke-check minimal sans
+  `--release`. » **(Point 8.)**
+- **`docs/fixtures/conformite-etendue/README.md`** (nouveau) — rôle, commande de
+  rejeu, `--release` requis, clés/wallet jetables, convention de types
+  d'`attendu.txt`, relation avec v3 et le versioning de format.
 
 **Hors périmètre, délibérément :** `THREAT_MODEL.md`, `ARCHITECTURE.md`,
 `PROTOCOL.md` ne changent pas — aucun format, invariant ni menace n'est touché.
-`CLAUDE.md`/`AGENTS.md` ne font pas autorité et n'ont pas à être modifiés.
+`CLAUDE.md`/`AGENTS.md` ne font pas autorité.
 
 ---
 
 ## Tests et CI
 
-- Le rejeu **est** le test. Il est gaté `--release` ; le job de conformité CI
-  (`cargo test --all-features --release`, `CONFORMITE.md` §3) l'exerce déjà —
-  **rien à ajouter au workflow**.
-- Le chemin debug rapide reste inchangé : v3 continue de tourner sans `--release`.
-- Le générateur (`#[ignore]`) n'est jamais lancé en CI ; son résultat est
-  versionné.
+- Les rejeus **sont** les tests. Ignorés en debug, exécutés en `--release` ; le job
+  de conformité CI (`cargo test --all-features --release`, `CONFORMITE.md` §3) les
+  exerce déjà — **rien à ajouter au workflow**.
+- Le chemin debug rapide reste inchangé : v3 continue sans `--release`.
+- Le générateur (`#[ignore]`) n'est jamais lancé en CI ; son résultat est versionné.
 
 **Critère de franchissement.** `cargo test -p node --test conformite_etendue
---release` passe ; il décode la genèse à 4 autorités et le bloc portant une
-transaction confidentielle, vérifie un certificat de ≥ 3 votants distincts,
-vérifie la preuve STARK via `appliquer_bloc`, et retrouve les racines publiées —
-le tout à partir des seuls fichiers de `docs/fixtures/conformite-etendue/`.
+--release` passe : décodage de la genèse à 4 autorités et du bloc portant une
+transaction confidentielle, cohérence clés↔genèse, certificat exact
+(`masque 0x07`, votants {0,1,2}), vérification STARK via `appliquer_bloc`, racines
+publiées retrouvées, `solde == 300` recouvré par le bénéficiaire, et refus
+`QuorumInsuffisant` à 2 votes — le tout depuis les seuls fichiers de
+`docs/fixtures/conformite-etendue/`.
 
 ---
 
@@ -231,11 +304,9 @@ le tout à partir des seuls fichiers de `docs/fixtures/conformite-etendue/`.
 
 - Il **ne change aucun format** de bloc, de fil ou de preuve.
 - Il **ne modifie pas** `conformite-v3` ni `conformite.rs`.
-- Il **n'implémente pas** l'économie (coinbase, `R(h)`) — hors périmètre, derrière
-  la porte A.
-- Il **ne teste pas** de partition ni de changement de vue : `quorum_sockets.rs`,
-  `partition.rs` et `vue_sockets.rs` couvrent déjà ces dynamiques. La fixture est
-  un artefact **statique** de vérification tierce, pas un test de comportement
-  réseau.
+- Il **n'implémente pas** l'économie (coinbase, `R(h)`) — hors périmètre, porte A.
+- Il **ne teste pas** partition ni changement de vue : `quorum_sockets.rs`,
+  `partition.rs`, `vue_sockets.rs` couvrent déjà ces dynamiques. La fixture est un
+  artefact **statique** de vérification tierce.
 - Il **n'introduit aucun `--release` sur le chemin de conformité rapide** — v3 le
   préserve.
