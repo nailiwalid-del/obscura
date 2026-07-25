@@ -1,0 +1,12 @@
+# Identifiants et racines : HEX. Compteurs et montants : DÉCIMAL. Masque : HEX (u64).
+# Valeurs attendues — fixture de conformité ÉTENDUE (quorum n=4, transaction STARK).
+# Produites par : cargo test -p node --test conformite_etendue --release -- --ignored generer_la_fixture_etendue
+# Vérifiées par : cargo test -p node --test conformite_etendue --release
+genese_id=a034c39ba8ebac055daf562ecab7d1b3a56805a6bb9420135103289ad7f178b7ff7a962c2d68ea27f66e29c70850a823607d26609d59db5bf8d6daef84b832c9
+racine_apres_genese=5e97858da0069d56d4790d690ab0b6b5ebf5e25f172b44fe68ca6cf3079a0193
+bloc1_id=01e57a0231a8018827f60f77dc285f0120ac285905eb08a0b57f470c3de609c2ec61cf39cada4059f2385f8d12f489fbe12e3e4c60454173f6f5b28b4e7c2520
+racine_apres_bloc1=e62c315e9512489df7e4677344319f4641ee5ade67ee3f877b3d65eed8fa3e9b
+quorum_requis=3
+masque_certificat=0x0000000000000007
+nombre_de_votants=3
+solde_beneficiaire=300
