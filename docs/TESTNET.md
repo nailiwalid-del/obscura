@@ -155,11 +155,17 @@ de décisions écrites, et chacune renvoie à son document de référence.
   archive voit passer les demandes de tous les autres** (§1.3).
 - **La genèse n'est pas authentifiée par elle-même.** Rien dans le fichier
   n'atteste qui l'a écrite.
-  → **Vérification :** l'identifiant complet (64 octets) est publié dans le
-  README du dépôt, et les releases sont **signées**. Comparez-le avec celui
-  imprimé au démarrage de votre nœud. 64 octets, pas 8 — la forme courte est un
-  diagnostic, pas une ancre. Le gabarit de publication de cette ancre, avec la
+  → **Vérification, à l'ouverture :** l'identifiant complet (64 octets) sera
+  publié dans [`GENESE.md`](GENESE.md) **et hors bande** (canal d'invitation,
+  distinct du dépôt), et la release sera signée — étapes 3 et 4 de
+  [`OUVERTURE.md`](OUVERTURE.md). Comparez cette valeur avec celle imprimée au
+  démarrage de votre nœud. 64 octets, pas 8 — la forme courte est un
+  diagnostic, pas une ancre. Le gabarit de publication de l'ancre, avec la
   procédure de comparaison, est dans [`GENESE.md`](GENESE.md).
+  ⚠️ **Ni l'une ni l'autre n'a encore eu lieu** : `GENESE.md` ne porte qu'un
+  gabarit (`<À RENSEIGNER AU GEL>`) et `deploiement/release.pub` est un
+  **placeholder** littéral — aucune release n'est signée à ce jour. Tant que ces
+  deux valeurs ne sont pas renseignées, il n'y a rien à confronter.
 - **Le mempool n'est pas persisté** (sans gravité : les pairs réannoncent).
 - **Une synchronisation de wallet peut être interrompue par un nœud très actif.**
   `obscura-wallet synchroniser` tolère les messages diffusés (annonces, blocs,

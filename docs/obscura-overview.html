@@ -193,8 +193,8 @@
     <p class="lede">Un prototype qui vise deux objectifs : payer sans être surveillé, avec une sécurité qui tiendrait face à un ordinateur quantique. Ce document explique le projet pour tous, puis en détaille l'architecture — en distinguant soigneusement ce qui est <strong>déjà prouvé</strong> de ce qui reste <strong>à venir</strong>.</p>
     <div class="stat-row">
       <div class="stat"><b>7</b><span>crates Rust</span></div>
-      <div class="stat"><b>41&nbsp;340</b><span>lignes de code</span></div>
-      <div class="stat"><b>597</b><span>tests</span></div>
+      <div class="stat"><b>42&nbsp;061</b><span>lignes de code</span></div>
+      <div class="stat"><b>609</b><span>tests</span></div>
       <div class="stat"><b>P1–P7</b><span>prouvés en circuit</span></div>
       <div class="stat"><b>≈97<small> Kio</small></b><span>preuve d'une tx</span></div>
     </div>
@@ -655,7 +655,7 @@
   <footer class="footer">
     <p><span class="tag ok">Phases 1–5 · prototypées</span> &nbsp; <span class="tag ok">Cycle payer→sceller→recevoir · validé</span> &nbsp; <span class="tag ok">3z-c2 forme variable · livrée</span> &nbsp; <span class="tag ok">Consensus J1 · complet (liveness fermée)</span> &nbsp; <span class="tag ok">J2 ADR-002 · accepté</span> &nbsp; <span class="tag ok">J3 · livré</span> &nbsp; <span class="tag ok">État B · atteint côté dépôt</span> &nbsp; <span class="tag wip">Ouverture réelle · geste d'opérateur</span></p>
     <p class="mono">Obscura — prototype de recherche · Rust · dépôt privé <code>nailiwalid-del/obscura</code><br>Défense en profondeur · post-quantique · STARK witness-hiding (HVZK en ROM) sur le chemin de consensus (winterfell / Goldilocks / Rescue-Prime) · réseau chiffré PQ avec Dandelion++.</p>
-    <p style="font-size:13px">Document de synthèse — 24 juillet 2026, à l'<strong>état B</strong> (les cinq cycles clos côté dépôt) ; métriques rafraîchies le 25 juillet 2026 après une passe d'hygiène (curseur de décodage partagé <code>crypto::decode</code>, <code>zk-spike</code>/<code>fuzz</code> hors workspace, <code>forbid(unsafe_code)</code>, actions CI épinglées par SHA). Chiffres reproductibles : <code>find crates -name '*.rs' -exec cat {} + | wc -l</code> → 41&nbsp;493 lignes (dont 494 pour le banc <code>zk-spike</code>) ; <code>grep -rn '#[test]' crates</code> → 605 marqueurs ; performances via <code>cargo run --release --example tx_bench -p circuit</code> (une mesure, machine de développement) ; coût du certificat de quorum via <code>cargo run -p node --example dimensionner-quorum --release</code>. Ce prototype n'est pas audité et ne doit pas être utilisé en production.</p>
+    <p style="font-size:13px">Document de synthèse — 24 juillet 2026, à l'<strong>état B</strong> (les cinq cycles clos côté dépôt) ; métriques rafraîchies le 25 juillet 2026 après une passe d'hygiène (curseur de décodage partagé <code>crypto::decode</code>, <code>zk-spike</code>/<code>fuzz</code> hors workspace, <code>forbid(unsafe_code)</code>, actions CI épinglées par SHA). Chiffres reproductibles : <code>find crates -name '*.rs' -exec cat {} + | wc -l</code> → 42&nbsp;061 lignes (dont 494 pour le banc <code>zk-spike</code>, hors workspace Cargo mais physiquement sous <code>crates/</code>) ; <code>grep -rn '#\[test\]' crates</code> → 609 marqueurs ; performances via <code>cargo run --release --example tx_bench -p circuit</code> (une mesure, machine de développement) ; coût du certificat de quorum via <code>cargo run -p node --example dimensionner-quorum --release</code>. Ce prototype n'est pas audité et ne doit pas être utilisé en production.</p>
   </footer>
 
   </main>

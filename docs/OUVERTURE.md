@@ -78,6 +78,13 @@ fin. On rejoue le jour J en miniature, sur un répertoire temporaire.
    `obscura-wallet synchroniser --temoin` contre l'un, l'autre comme témoin :
    la synchronisation aboutit et les racines corroborent.
 
+**Automatisé (Windows/PowerShell) :** `.\atelier\repetition-generale.ps1` déroule
+les points **1, 3, 4 et 5** sur une chaîne jetable à 4 autorités (dossier
+`atelier/repetition/`, ports 9340-9343 distincts de l'atelier ; `-Nettoyer`
+efface), et rend un bilan critère par critère — un échec nomme le journal à lire
+et conclut « NE PAS geler la vraie genèse ». Le point **2** (fausse release
+minisign) reste manuel. Sur une autre plateforme, dérouler les points à la main.
+
 **Critère de passage :** les points 3, 4 et 5 sont observés en vrai. Un runbook
 non répété n'est pas prêt.
 
