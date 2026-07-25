@@ -1,0 +1,23 @@
+# Maintien des ACTIONS GitHub épinglées par SHA.
+#
+# Épingler par SHA (cf. workflows) ferme la surface « un tag mobile est
+# redéplacé sous nos pieds », mais fige aussi le code de l'action : sans
+# rappel, un correctif de sécurité en amont n'arriverait jamais. Dependabot
+# rouvre une PR quand un SHA épinglé a une version plus récente — la revue
+# humaine reste le point de contrôle, le tag mobile n'est jamais réintroduit.
+#
+# UNIQUEMENT les actions. Les dépendances Cargo sont tenues par `cargo update`
+# + `cargo-deny` (cf. deny.toml) ; on ne veut pas ici le bruit d'un second
+# gestionnaire sur le même Cargo.lock.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      # Hebdomadaire, comme lourd.yml : ces mises à jour cherchent des
+      # correctifs rares, pas le dernier commit du jour.
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"

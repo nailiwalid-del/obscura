@@ -17,8 +17,10 @@
 //! deviennent des blocs presque valides, c'est-à-dire exactement la forme d'entrée
 //! qu'un adversaire fabriquerait.
 //!
-//! Le corpus est VERSIONNÉ : un fuzzing qui repart de zéro à chaque exécution ne
-//! capitalise rien, et deux exécutions ne se valent pas.
+//! Le corpus est GÉNÉRÉ, pas versionné : `fuzz/corpus/` est git-ignoré (il
+//! accumule aussi les entrées trouvées par le fuzzing). Chaque environnement —
+//! poste local comme runner CI — sème donc le sien en rejouant cet exemple, de
+//! façon déterministe. La CI l'exécute avant le fuzzing (`.github/workflows/lourd.yml`).
 //!
 //! ⚠️ Les graines n'incluent aucune transaction : à ~68 Kio pièce, elles
 //! gonfleraient le dépôt pour un gain nul — le décodage d'une `ProvedTx` a sa
