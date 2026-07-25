@@ -19,3 +19,6 @@ winter-math = { workspace = true }
 proved-hash = { path = "../proved-hash" }
 crypto = { path = "../crypto" }
 rand = "0.8"
+
+[lints.rust]
+unsafe_code = "forbid"

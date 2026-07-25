@@ -9,3 +9,6 @@ publish = false
 [dependencies]
 crypto = { path = "../crypto" }
 thiserror.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"

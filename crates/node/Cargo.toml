@@ -31,3 +31,6 @@ dev-circuits = ["circuit/dev-circuits"]
 [[example]]
 name = "dimensionner-ouverture"
 required-features = ["dev-circuits"]
+
+[lints.rust]
+unsafe_code = "forbid"

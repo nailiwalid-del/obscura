@@ -87,6 +87,11 @@ impl ShieldedSecret {
 // natif → écriture VOLATILE de chaque felt à zéro (best-effort non élidable), plus une
 // barrière compilateur. Documenté comme best-effort (pas de garantie matérielle).
 impl zeroize::Zeroize for ShieldedSecret {
+    // L'UNIQUE `unsafe` du crate, isolé et justifié (voir `// SAFETY` ci-dessous).
+    // Le reste du crate est sous `unsafe_code = "deny"` (cf. Cargo.toml) : toute
+    // NOUVELLE occasion d'`unsafe` échouera la compilation, celle-ci est autorisée
+    // nommément.
+    #[allow(unsafe_code)]
     fn zeroize(&mut self) {
         for f in self.0.iter_mut() {
             // SAFETY: `f` est un `&mut Felt` valide et aligné ; `Felt: Copy`.

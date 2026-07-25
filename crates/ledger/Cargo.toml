@@ -21,3 +21,6 @@ zeroize.workspace = true
 # Merkle BLAKE3, Note owner-BLAKE3) : NON-consensus, OFF par défaut. Le build nu
 # n'expose que la surface consensus (proved_state/proved_wallet/keys).
 dev-transparent = []
+
+[lints.rust]
+unsafe_code = "forbid"

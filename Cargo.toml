@@ -1,9 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["crates/crypto", "crates/ledger", "crates/proved-hash", "crates/circuit", "crates/zk-spike", "crates/net", "crates/node", "crates/wallet"]
-# Le crate de fuzzing vit HORS du workspace : il exige nightly (cargo-fuzz) et ne
-# doit pas peser sur le build de consensus (cf. fuzz/Cargo.toml).
-exclude = ["fuzz"]
+members = ["crates/crypto", "crates/ledger", "crates/proved-hash", "crates/circuit", "crates/net", "crates/node", "crates/wallet"]
+# Vivent HORS du workspace, pour ne pas peser sur le build de consensus (build et
+# test par défaut) :
+#   - `fuzz`     : exige nightly (cargo-fuzz) ; cf. fuzz/Cargo.toml.
+#   - `zk-spike` : crate JETABLE (spike de faisabilité), ne fait PAS partie du
+#                  protocole ; cf. crates/zk-spike/Cargo.toml.
+exclude = ["fuzz", "crates/zk-spike"]
 
 [workspace.package]
 version = "0.1.0"
