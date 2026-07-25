@@ -80,7 +80,7 @@ validation — testés.
 
 Lot ORDONNÉ chaîné au parent, id = `dual_hash` non tronqué, décodage borné
 (`MAX_TX_PAR_BLOC` vérifié AVANT allocation ; `const _: () = assert!` consigne à
-la compilation qu'un bloc plein dépasse 30× le cadre réseau).
+la compilation qu'un bloc plein dépasse ~50× le cadre réseau).
 
 **Plafond de scellement en OCTETS** : `MAX_OCTETS_BLOC` = cadre réseau −
 `crypto::aead::SURCOUT` − marge message (≈ 1 Mio), vérifié au scellement ET au

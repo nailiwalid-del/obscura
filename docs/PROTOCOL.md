@@ -178,7 +178,7 @@ plus bas qui rend cette limite défendable plutôt que subie.
 
 ```
 Bloc { parent, hauteur, vue, transactions[], emissions[], scellement?, certificat? }
-id = dual_hash("obscura/bloc/v1", encode_sans_signatures(bloc))   // 64 o, jamais tronqué
+id = dual_hash("obscura/bloc/id/v1", encode_sans_signatures(bloc))   // 64 o, jamais tronqué
 ```
 
 - **Entrent dans l'identifiant** : `parent`, `hauteur`, **`vue`**, les
@@ -482,9 +482,9 @@ cadrage réseau — longueur préfixée, borne anti-DoS — est celui de `net::f
   Le débit se règle par la FRÉQUENCE des demandes. Deux wallets à la même position
   émettent des octets identiques.
 - `Historique` — un MORCEAU des sorties d'un bloc (réponse à `DemandeHistorique`).
-  En-tête : `tag(1) ‖ version(1=0x01) ‖ hauteur(8) ‖ debut(8) ‖ fin(8) ‖ racine_apres(64)
+  En-tête : `tag(1) ‖ version(1=0x01) ‖ hauteur(8) ‖ debut(8) ‖ fin(8) ‖ racine_apres(32)
   ‖ hauteur_tete(8) ‖ morceau(4) ‖ morceaux(4) ‖ decalage(8) ‖ n_sorties(4)`, puis `n`
-  entrées `commitment(64) ‖ len(kem_ct)(4) ‖ kem_ct(1121) ‖ len(enc_note)(4) ‖ enc_note`.
+  entrées `commitment(32) ‖ len(kem_ct)(4) ‖ kem_ct(1121) ‖ len(enc_note)(4) ‖ enc_note`.
   L'unité est le BLOC (jamais la plage de feuilles : `ProvedTx::anchor` est public, et un
   wallet arrêté à mi-bloc publierait une ancre quasi unique). Découpage décidé par le
   SERVEUR et **canonique** : `morceaux`/`decalage`/`n_sorties` sont RECALCULÉS au

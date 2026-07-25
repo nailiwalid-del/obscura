@@ -154,7 +154,7 @@ le bloc fautif.
 La genèse peut GRAVER une liste d'**autorités de scellement** (`Bloc::
 genese_avec_autorites`, clés hybrides Ed25519+ML-DSA-65, ≤ 64, dans l'IDENTIFIANT de
 genèse — deux listes = deux chaînes dès l'octet zéro). La règle est alors : le
-producteur légitime de la hauteur h est `autorites[(h−1) mod n]` (tour de rôle), le
+producteur légitime de la hauteur h est `autorites[(h−1+vue) mod n]` (tour de rôle), le
 bloc porte sa **signature de scellement** sur l'identifiant (« obscura/bloc/
 scellement/v1 » ; la signature est HORS de l'id — la signer serait circulaire — mais
 SUR le fil), et `appliquer_bloc` la vérifie APRÈS le chaînage (un bloc d'une autre
