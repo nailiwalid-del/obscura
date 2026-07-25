@@ -1,4 +1,5 @@
-//! `ProvedTx` v3 — la transaction prouvée par LE monolithe (v3 = enc_notes liés).
+//! `ProvedTx` v4 — la transaction prouvée par LE monolithe (v3 = enc_notes liés ;
+//! v4 = forme variable, comptes (m, n) préfixés dans le digest).
 //!
 //! Remplace l'assemblage v1 (3b5, composition de 15 sous-preuves : `prove_key` +
 //! 2×`prove_spend` + 2×`prove_output` + équilibre natif) par UNE SEULE preuve
@@ -12,7 +13,7 @@
 //! trace ; le vérificateur les fournit lui-même (root passée en argument, reste lu
 //! sur `tx`) et ne fait tourner qu'UN SEUL `winterfell::verify`.
 //!
-//! `tx_digest` (v3, domaine `obscura/proved-tx/v3`) lie `root ‖ nf ‖ oc ‖ fee ‖
+//! `tx_digest` (v4, domaine `obscura/proved-tx/v4`) lie `m ‖ n ‖ root ‖ nf ‖ oc ‖ fee ‖
 //! signer ‖ enc_notes` — non-rejeu et liaison des `enc_notes` (v3). ⚠️ Portée exacte :
 //! le digest empêche un relais PASSIF d'échanger les enc_notes en gardant la signature
 //! d'intention ; mais la preuve STARK ne lie pas `tx_digest`/`signer`, donc un relais
