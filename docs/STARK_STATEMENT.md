@@ -235,7 +235,11 @@
 > honnête-vérifieur en ROM, PAS de malicious-verifier ZK ni de « perfect ZK » ;
 > prototype non audité, argument non formalisé au niveau publication. Les
 > gadgets autonomes (`sponge`, `balance`, `spend`, …) et le banc `crates/zk-spike`
-> restent validity-only.
+> restent validity-only. ⚠️ **Les chiffres de cette entrée sont CADUQUES** depuis
+> la segmentation (3z-c1) et le durcissement de soundness du 2026-07-22 : la trace
+> fait 2048 lignes pour 1168 utiles à la profondeur 32, `q = 48` et
+> `BLIND_ROWS = 56` (donc `q + 2 = 50 < b = 56` — même marge de 6). Les valeurs
+> COURANTES font foi dans « Witness-hiding du monolithe — argument HVZK » ci-dessous.
 >
 > **ProvedTx v3 — enc_notes portés + liés (fait)** : les enveloppes chiffrées
 > des sorties voyagent dans `ProvedTx` et sont liées dans `tx_digest` v3
@@ -462,13 +466,13 @@ COMPLÈTE, laquelle inclut la région de blinding :
 
 - **Colonnes de trace** : chaque colonne est un polynôme `f` de degré `< n`
   (`n = trace_len`) interpolant ses `n` cellules sur le domaine de trace `H`.
-  Par colonne : `q = 32` **ouvertures de requête** `f(xᵢ)` aux positions
+  Par colonne : `q = 48` **ouvertures de requête** `f(xᵢ)` aux positions
   requêtées du domaine LDE (chaque requête ouvre UNE ligne entière — toutes les
-  colonnes) et `2` **évaluations OOD** `f(z)`, `f(z·g)` — soit `q + 2 = 34`
+  colonnes) et `2` **évaluations OOD** `f(z)`, `f(z·g)` — soit `q + 2 = 50`
   évaluations, combinaisons linéaires à coefficients PUBLICS (dépendant du seul
   point d'évaluation) des `n` cellules, aux points hors de `H`. Précision
   base-field : `z` vit dans l'extension quadratique, chaque évaluation OOD
-  compte donc pour 2 équations sur le corps de base — `32 + 4 = 36` équations
+  compte donc pour 2 équations sur le corps de base — `48 + 4 = 52` équations
   base-field par colonne.
 - **Colonnes de composition/quotient** : le vérifieur LIT dans la preuve les
   ouvertures des colonnes du polynôme de composition aux mêmes positions de
@@ -476,7 +480,7 @@ COMPLÈTE, laquelle inclut la région de blinding :
   (`winter-verifier/src/lib.rs`, `read_constraint_evaluations`), plus leur
   frame OOD en `z`. Ce sont des valeurs révélées EN PLUS — fonctions
   déterministes NON LINÉAIRES de la trace complète (via les contraintes), PAS
-  recalculables depuis les 34 évaluations de trace (c'est précisément pourquoi
+  recalculables depuis les 50 évaluations de trace (c'est précisément pourquoi
   ce commitment séparé existe).
 - **FRI** : chaque couche de repli ouvre des cosets aux positions dérivées, et
   le polynôme de RESTE (degré ≤ 127) est révélé EN ENTIER — autant de valeurs
@@ -484,16 +488,16 @@ COMPLÈTE, laquelle inclut la région de blinding :
   motive le salage de FRI dans ethSTARK ; winterfell ne sale pas FRI.)
 
 **Comptage exact par colonne de trace (prouvé).** Chaque colonne témoin porte
-`b = BLIND_ROWS = 40` cellules d'aléa uniforme **frais par preuve** (région de
+`b = BLIND_ROWS = 56` cellules d'aléa uniforme **frais par preuve** (région de
 blinding `[used, trace_len)`, OsRng), avec `b = q + 2 + 6 ≥ q + 2` verrouillé
 par une assertion de construction contre tout changement de `proof_options`.
 Ces cellules sont LIBRES : aucune contrainte de transition ne les lie (gating
 global `blind_off`) et aucune assertion ne vise une ligne `≥ used` (inertie
-testée white-box). Les 34 évaluations révélées d'une colonne sont des fonctions
-AFFINES de ses 40 cellules d'aléa (les cellules utiles — le témoin — fixent le
+testée white-box). Les 50 évaluations révélées d'une colonne sont des fonctions
+AFFINES de ses 56 cellules d'aléa (les cellules utiles — le témoin — fixent le
 terme constant, l'aléa fait le reste). Retrouver le témoin exigerait de résoudre
-34 équations (36 sur le corps de base) à 40 inconnues uniformes indépendantes :
-le système est **sous-déterminé** (`q + 2 = 34 < b = 40`). Ce comptage est EXACT
+50 équations (52 sur le corps de base) à 56 inconnues uniformes indépendantes :
+le système est **sous-déterminé** (`q + 2 = 50 < b = 56`). Ce comptage est EXACT
 et ne suppose rien ; ce qu'il n'établit pas seul — l'uniformité de la
 distribution révélée — relève du registre « Supposé » (rang plein sous ROM).
 La disjonction observée entre les ouvertures de deux preuves du même témoin
@@ -531,9 +535,9 @@ elle tombe.
 dérive tous les défis du vérifieur — le point hors-domaine `z` et les positions
 des `q` requêtes FRI — du TRANSCRIPT (hachages des engagements), modélisé comme
 un oracle aléatoire. On SUPPOSE que les points révélés sont donc uniformes et
-non adverses, et que la matrice 34×40 des coefficients (polynômes de Lagrange
-des positions de blinding aux 34 points révélés) est de rang plein 34 sauf
-événement négligeable — condition sous laquelle le vecteur des 34 évaluations
+non adverses, et que la matrice 50×56 des coefficients (polynômes de Lagrange
+des positions de blinding aux 50 points révélés) est de rang plein 50 sauf
+événement négligeable — condition sous laquelle le vecteur des 50 évaluations
 devient uniforme et indépendant des cellules utiles. L'esquisse de simulateur
 (plus bas) suppose de plus la **programmabilité** de l'oracle.
 *Conséquence si l'hypothèse tombe* : la non-interactivité n'est plus sûre — un
@@ -547,24 +551,24 @@ sont ceux du ROM, pas ceux d'un adversaire qui les choisirait. Aucune
 revendication n'est faite contre un vérifieur malveillant.
 *Conséquence si l'hypothèse tombe* : un vérifieur malicieux qui choisirait ses
 défis (positions de requête, point OOD) pourrait extraire de l'information du
-witness — le comptage `34 < 40` ne protège que contre des points tirés
+witness — le comptage `50 < 56` ne protège que contre des points tirés
 uniformément.
 
 **Hypothèse 3 — taille de la région de blinding (heuristique composition + FRI).**
 Le comptage exact ne couvre QUE les évaluations de trace. Pour les ouvertures de
 composition/quotient et les valeurs FRI (qui dépendent aussi du témoin), la
 garantie repose HEURISTIQUEMENT sur la TAILLE de la région de blinding :
-`trace_len − used = next_pow2(used + 40) − used` lignes ENTIÈRES — 512 à
-profondeur 32 (1024 − 512), 256 en dev (512 − 256) — sur les 201 colonnes, soit
-**≈ 51 000 à 103 000 cellules aléatoires fraîches** injectées dans la trace,
+`trace_len − used = next_pow2(used + 56) − used` lignes ENTIÈRES — 880 à
+profondeur 32 (2048 − 1168), 240 en dev (512 − 272) — sur les 92 colonnes, soit
+**≈ 22 000 à 81 000 cellules aléatoires fraîches** injectées dans la trace,
 contre un total révélé de l'ordre de 10⁴ éléments du corps de base au plus
-(ouvertures de trace ≈ 6 400, composition, frames OOD, couches FRI et reste
+(ouvertures de trace ≈ 4 400, composition, frames OOD, couches FRI et reste
 compris). On SUPPOSE que toute valeur révélée, fonction de cette trace
 massivement randomisée, a une distribution jointe indépendante du témoin.
 winterfell ne sale PAS FRI (contrairement à ethSTARK) : le polynôme de reste
 (révélé en entier) et les couches repliées ont le même statut heuristique.
 *Conséquence si l'hypothèse tombe* : les ouvertures de composition/quotient ou
-les valeurs FRI pourraient fuiter le témoin — `34 < 40` reste vrai pour la
+les valeurs FRI pourraient fuiter le témoin — `50 < 56` reste vrai pour la
 trace, mais il n'est PAS, à lui seul, le périmètre complet de l'argument.
 
 **Hypothèse 4 — indépendance des primitives (défense en profondeur).** La
@@ -635,10 +639,11 @@ circuit. Un expéditeur malveillant qui chiffre du garbage ne lèse que son dest
 (fonds inutilisables, pas de création de monnaie) — P5/P7 tiennent indépendamment.
 Réévaluer quand le coût des circuits sera mesuré.
 
-**enc_notes portés + liés (fait) :** `ProvedTx` v3 porte les enveloppes chiffrées des
-sorties (`enc_notes: [EncNote{kem_ct, enc_note}; 2]`, `circuit::tx`) pour le scan des
-destinataires. Elles sont **liées dans `tx_digest` v3** (domaine
-`obscura/proved-tx/v3`, longueurs LE préfixées, injectif) → un relais **passif** qui les
+**enc_notes portés + liés (fait) :** `ProvedTx` v4 porte les enveloppes chiffrées des
+sorties (`enc_notes: Vec<EncNote>`, une par sortie, `circuit::tx`) pour le scan des
+destinataires. Elles sont **liées dans `tx_digest`** (domaine
+`obscura/proved-tx/v4`, longueurs LE préfixées, injectif ; liaison introduite en
+v3) → un relais **passif** qui les
 substitue casse le digest, donc la signature d'intention (testé
 `enc_note_substitue_rejete`). ⚠️ **Portée exacte** : la preuve STARK ne lie PAS
 `tx_digest`/`signer` (le digest est calculé après la preuve, il n'est pas un public du
@@ -683,11 +688,15 @@ classe de liberté). Sans ces assertions, le hash prouvé établissait
 `H(payload ‖ junk)` au lieu de `H(payload)` : un prouveur pouvait publier un
 `cm' = H(note ‖ junk)` internement cohérent mais HORS du schéma canonique (aucune
 note ne recalcule ce commitment), ou un nœud de Merkle non canonique — violation
-de « hash jamais tronqué ». Forges white-box RED→GREEN
-(`padding_non_zero_rejete`, `padding_merge_non_zero_rejete`) : les traces forgées
-passaient sans les assertions (cellules réellement libres, confirmé), sont
-rejetées avec. Comptage : `num_assertions = 167 + 24·depth` (avant :
-`107 + 16·depth`). Les AIR v1 autonomes (`SpongeAir`, `merkle_path`) conservent
+de « hash jamais tronqué ». Forge white-box RED→GREEN `SegForge::PaddingCommitment`
+(`forges_montants_et_inertie_du_blinding`, avec contrôle `PaddingCommitment(0)`
+accepté ; rejouée à la profondeur consensus par
+`forges_a_reconstruction_rejetees_a_la_profondeur_consensus`) : la trace forgée
+passait sans les assertions (cellules réellement libres, confirmé), est
+rejetée avec. Comptage (forme 2/2) : `num_assertions = 163 + 24·depth` (avant :
+`107 + 16·depth`) ; en forme variable,
+`16 + m·43 + m·12·depth + 4 + n·27 + 3` (`seg_air::num_assertions`). Les AIR v1
+autonomes (`SpongeAir`, `merkle_path`) conservent
 l'hypothèse à domaine étendu (sûre sous résistance aux collisions de
 Rescue-Prime) — seule la règle de consensus (le monolithe) exigeait le resserrage.
 
