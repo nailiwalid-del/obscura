@@ -332,7 +332,7 @@
 
   <div class="col">
   <h3 id="vue">6. Vue d'ensemble : sept crates</h3>
-  <p>Le projet est un <em>workspace</em> Rust découpé en sept bibliothèques aux responsabilités nettes (plus un banc d'essai <code>zk-spike</code>). Les dépendances vont dans un seul sens (pas de cycle), ce qui garde chaque couche testable isolément — et <code>net</code> reste <strong>pur transport</strong> : c'est <code>node</code> qui le relie au consensus.</p>
+  <p>Le projet est un <em>workspace</em> Rust découpé en sept bibliothèques aux responsabilités nettes (le banc d'essai <code>zk-spike</code>, jetable, vit désormais <em>hors</em> du workspace, comme <code>fuzz</code> : ni l'un ni l'autre ne pèse sur le build ou les tests de consensus). Les dépendances vont dans un seul sens (pas de cycle), ce qui garde chaque couche testable isolément — et <code>net</code> reste <strong>pur transport</strong> : c'est <code>node</code> qui le relie au consensus.</p>
   </div>
 
   <figure class="fig" aria-label="Dépendances des crates">
@@ -655,7 +655,7 @@
   <footer class="footer">
     <p><span class="tag ok">Phases 1–5 · prototypées</span> &nbsp; <span class="tag ok">Cycle payer→sceller→recevoir · validé</span> &nbsp; <span class="tag ok">3z-c2 forme variable · livrée</span> &nbsp; <span class="tag ok">Consensus J1 · complet (liveness fermée)</span> &nbsp; <span class="tag ok">J2 ADR-002 · accepté</span> &nbsp; <span class="tag ok">J3 · livré</span> &nbsp; <span class="tag ok">État B · atteint côté dépôt</span> &nbsp; <span class="tag wip">Ouverture réelle · geste d'opérateur</span></p>
     <p class="mono">Obscura — prototype de recherche · Rust · dépôt privé <code>nailiwalid-del/obscura</code><br>Défense en profondeur · post-quantique · STARK witness-hiding (HVZK en ROM) sur le chemin de consensus (winterfell / Goldilocks / Rescue-Prime) · réseau chiffré PQ avec Dandelion++.</p>
-    <p style="font-size:13px">Document de synthèse — 24 juillet 2026, à l'<strong>état B</strong> (les cinq cycles clos côté dépôt). Chiffres reproductibles : <code>find crates -name '*.rs' -exec cat {} + | wc -l</code> → 41&nbsp;340 lignes (dont 494 pour le banc <code>zk-spike</code>) ; <code>grep -rn '#[test]' crates</code> → 597 marqueurs ; performances via <code>cargo run --release --example tx_bench -p circuit</code> (une mesure, machine de développement) ; coût du certificat de quorum via <code>cargo run -p node --example dimensionner-quorum --release</code>. Ce prototype n'est pas audité et ne doit pas être utilisé en production.</p>
+    <p style="font-size:13px">Document de synthèse — 24 juillet 2026, à l'<strong>état B</strong> (les cinq cycles clos côté dépôt) ; métriques rafraîchies le 25 juillet 2026 après une passe d'hygiène (curseur de décodage partagé <code>crypto::decode</code>, <code>zk-spike</code>/<code>fuzz</code> hors workspace, <code>forbid(unsafe_code)</code>, actions CI épinglées par SHA). Chiffres reproductibles : <code>find crates -name '*.rs' -exec cat {} + | wc -l</code> → 41&nbsp;493 lignes (dont 494 pour le banc <code>zk-spike</code>) ; <code>grep -rn '#[test]' crates</code> → 605 marqueurs ; performances via <code>cargo run --release --example tx_bench -p circuit</code> (une mesure, machine de développement) ; coût du certificat de quorum via <code>cargo run -p node --example dimensionner-quorum --release</code>. Ce prototype n'est pas audité et ne doit pas être utilisé en production.</p>
   </footer>
 
   </main>

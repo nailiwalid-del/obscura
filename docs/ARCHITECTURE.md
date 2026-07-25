@@ -31,10 +31,19 @@ verte sous `cargo test --all-features --release`
 
 ## crate `crypto` (`crates/crypto`)
 
-hash, kem, sig, aead — testés. KEM **contributif** : les points X25519 d'ordre
+hash, kem, sig, aead, decode — testés. KEM **contributif** : les points X25519 d'ordre
 faible sont rejetés à l'encapsulation ET à la décapsulation
 (`CryptoError::NonContributif`) — sinon un pair hostile force un DH nul et la
 moitié courbes disparaît en silence, ML-KEM portant seul la sécurité.
+
+`decode` : curseur de lecture BORNÉ partagé par les décodeurs réseau et disque
+(`ledger::bloc`, `ledger::historique`, `wallet::persistance`, `node::synchro`). La
+borne anti-DoS AVANT allocation — « on ne pré-alloue jamais d'après un compteur
+annoncé sans l'avoir confronté aux octets présents » — vit ainsi en UN seul point.
+Le curseur ne connaît qu'un échec, `Tronque` ; chaque décodeur le convertit vers
+SON erreur porteuse de contexte via `From<Tronque>` (l'opérateur `?` fait la
+conversion). ⚠️ Le `try_into().unwrap()` infaillible tranche→tableau de taille fixe
+est centralisé là et NON dupliqué ailleurs.
 
 ## crate `net` (`crates/net`)
 
@@ -597,6 +606,15 @@ multi-morceaux n'est testé qu'au niveau du FORMAT (une genèse plafonne à
   seul » doit tenir, et il est vérifié en CI). Les modules gadgets restent
   compilés (le monolithe réutilise leurs helpers `pub(crate)`) ; seules leurs
   entrées publiques standalone sont gatées.
+- **Périmètre du workspace** : deux crates vivent HORS du workspace (`exclude` à la
+  racine), donc hors du build et des tests par DÉFAUT. `fuzz` (exige nightly /
+  cargo-fuzz) et `zk-spike` (banc jetable de faisabilité witness-hiding, hors
+  protocole). Leurs manifestes sont autonomes (deps figées, non héritées).
+- **`unsafe` interdit dans les sources** : `[lints] unsafe_code = "forbid"` sur les
+  six crates de consensus — un `unsafe` ajouté par inadvertance échoue désormais la
+  COMPILATION, plus seulement clippy en CI. `proved-hash` est en `"deny"` avec un
+  `#[allow(unsafe_code)]` NOMMÉ sur son unique `unsafe` (écriture volatile
+  d'effacement au drop, durcissement #7) : l'exception est unique et visible.
 - **Migration FIPS 203/204 : FAITE** (T1, `858da4a`) — `pqcrypto-mlkem` et
   `pqcrypto-mldsa`, version d'algo `0x02`. Ce ne fut pas un changement d'import :
   FIPS 203/204 diffèrent du round-3 (dérivation, encodages, errata NIST). ⚠️ Le
