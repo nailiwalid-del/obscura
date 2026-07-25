@@ -114,7 +114,8 @@ que « tolérer zéro faute » signifie.
 
 ⚠️ **Le certificat ne s'agrège pas et ne s'agrègera pas** : aucune signature
 post-quantique ne l'offre. Son coût croît **linéairement** avec le comité, pour
-toujours. À `n = 64` il vaut l'équivalent d'une transaction et demie par bloc. Mesurez
+toujours. À `n = 64` il vaut l'équivalent de **≈ 1,35 transaction** par bloc
+(145 082 o de certificat contre 105 Kio = 107 520 o la transaction). Mesurez
 avant de graver : `cargo run -p node --example dimensionner-quorum --release`.
 
 ✅ **Une chaîne à `n ≥ 4` produit des blocs.** Le protocole qui fait circuler les

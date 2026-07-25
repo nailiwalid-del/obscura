@@ -767,7 +767,8 @@ dépense, équilibre des montants, cohérence Merkle/nullifier). Depuis **3z-b1*
 la preuve MONOLITHIQUE — le chemin de consensus `prove_tx`/`verify_tx` — est en
 outre **witness-hiding (HVZK dans le modèle de l'oracle aléatoire)** : lignes de
 blinding au niveau AIR, argument en deux étages (comptage par colonne de trace
-`q+2 = 34 < b = 40` + taille de la région de blinding pour les ouvertures de
+`q + 2 = 50 < b = 56`, avec `q = REQUETES_CONSENSUS = 48` et `b = BLIND_ROWS = 56` ;
+puis taille de la région de blinding pour les ouvertures de
 composition/quotient et FRI, heuristique) + esquisse de simulateur dans
 `docs/STARK_STATEMENT.md` (« Witness-hiding du monolithe — argument HVZK »).
 Limites précises de cette revendication :

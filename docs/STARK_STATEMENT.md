@@ -489,8 +489,14 @@ COMPLÈTE, laquelle inclut la région de blinding :
 
 **Comptage exact par colonne de trace (prouvé).** Chaque colonne témoin porte
 `b = BLIND_ROWS = 56` cellules d'aléa uniforme **frais par preuve** (région de
-blinding `[used, trace_len)`, OsRng), avec `b = q + 2 + 6 ≥ q + 2` verrouillé
-par une assertion de construction contre tout changement de `proof_options`.
+blinding `[used, trace_len)`, OsRng), soit `b = q + 8` : 6 de plus que le `q + 2`
+dont l'argument a besoin. ⚠️ Ce que l'assertion de construction verrouille contre
+tout changement de `proof_options` est `b ≥ q + 4` — `BLIND_ROWS >=
+options.num_queries() + 4` (`SegMonolithAir::new`, runtime), doublé du garde-fou
+compile-time `BLIND_ROWS >= REQUETES_CONSENSUS + 4` (`seg_layout`). C'est
+strictement plus que le `q + 2` requis, donc l'inégalité de l'argument survit à
+tout ajustement de `q` ; la marge de 6, elle, est OBSERVÉE au point de
+fonctionnement courant, pas garantie.
 Ces cellules sont LIBRES : aucune contrainte de transition ne les lie (gating
 global `blind_off`) et aucune assertion ne vise une ligne `≥ used` (inertie
 testée white-box). Les 50 évaluations révélées d'une colonne sont des fonctions
@@ -563,7 +569,13 @@ profondeur 32 (2048 − 1168), 240 en dev (512 − 272) — sur les 92 colonnes,
 **≈ 22 000 à 81 000 cellules aléatoires fraîches** injectées dans la trace,
 contre un total révélé de l'ordre de 10⁴ éléments du corps de base au plus
 (ouvertures de trace ≈ 4 400, composition, frames OOD, couches FRI et reste
-compris). On SUPPOSE que toute valeur révélée, fonction de cette trace
+compris). ⚠️ **Ce total de 10⁴ n'a PAS été re-dérivé** depuis que ses trois
+moteurs ont changé : requêtes FRI **32 → 48** (durcissement de soundness du
+2026-07-22), largeur de trace **201 → 92 colonnes** et longueur de trace portée à
+**2048** lignes à la profondeur consensus (segmentation). Au même titre que les
+tailles marquées CADUQUES plus haut, il se lit comme une **borne supérieure non
+re-vérifiée**, pas comme une mesure courante ; le re-dériver reste à faire. On
+SUPPOSE que toute valeur révélée, fonction de cette trace
 massivement randomisée, a une distribution jointe indépendante du témoin.
 winterfell ne sale PAS FRI (contrairement à ethSTARK) : le polynôme de reste
 (révélé en entier) et les couches repliées ont le même statut heuristique.
@@ -688,12 +700,17 @@ classe de liberté). Sans ces assertions, le hash prouvé établissait
 `H(payload ‖ junk)` au lieu de `H(payload)` : un prouveur pouvait publier un
 `cm' = H(note ‖ junk)` internement cohérent mais HORS du schéma canonique (aucune
 note ne recalcule ce commitment), ou un nœud de Merkle non canonique — violation
-de « hash jamais tronqué ». Forge white-box RED→GREEN `SegForge::PaddingCommitment`
+de « hash jamais tronqué ». Les DEUX familles ont chacune leur preuve. Commitment
+(`m = 32`) : forge white-box RED→GREEN `SegForge::PaddingCommitment`
 (`forges_montants_et_inertie_du_blinding`, avec contrôle `PaddingCommitment(0)`
 accepté ; rejouée à la profondeur consensus par
 `forges_a_reconstruction_rejetees_a_la_profondeur_consensus`) : la trace forgée
 passait sans les assertions (cellules réellement libres, confirmé), est
-rejetée avec. Comptage (forme 2/2) : `num_assertions = 163 + 24·depth` (avant :
+rejetée avec. Merge de Merkle (`m = 12`, dont le nombre de cellules de padding
+diffère — 4 contre 15) : test DIRECT sur les assertions produites, sans prouveur,
+`padding_des_merges_epingle_aux_bonnes_lignes` (`monolith::seg_air`), qui épingle
+les cellules exactes aux bonnes lignes ABSOLUES de leur segment.
+Comptage (forme 2/2) : `num_assertions = 163 + 24·depth` (avant :
 `107 + 16·depth`) ; en forme variable,
 `16 + m·43 + m·12·depth + 4 + n·27 + 3` (`seg_air::num_assertions`). Les AIR v1
 autonomes (`SpongeAir`, `merkle_path`) conservent

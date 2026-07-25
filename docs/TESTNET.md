@@ -163,7 +163,8 @@ de décisions écrites, et chacune renvoie à son document de référence.
   diagnostic, pas une ancre. Le gabarit de publication de l'ancre, avec la
   procédure de comparaison, est dans [`GENESE.md`](GENESE.md).
   ⚠️ **Ni l'une ni l'autre n'a encore eu lieu** : `GENESE.md` ne porte qu'un
-  gabarit (`<À RENSEIGNER AU GEL>`) et `deploiement/release.pub` est un
+  gabarit (`<À RENSEIGNER AU GEL — sortie de obscura-genese>`) et
+  `deploiement/release.pub` est un
   **placeholder** littéral — aucune release n'est signée à ce jour. Tant que ces
   deux valeurs ne sont pas renseignées, il n'y a rien à confronter.
 - **Le mempool n'est pas persisté** (sans gravité : les pairs réannoncent).

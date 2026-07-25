@@ -7,11 +7,13 @@
 //! établit **P1–P7 pour la transaction entière** (clé, dépenses, sorties,
 //! équilibre, TOUTES les liaisons inter-segments) dans une trace unique.
 //!
-//! Publics MINIMAUX : racine, les deux nullifiers, les deux commitments de sortie,
-//! les frais. Plus aucun `owner`/`nk` publiés en clair, plus aucune sous-preuve —
-//! le prouveur (`prove_monolith`) extrait ces publics directement des cellules de
-//! trace ; le vérificateur les fournit lui-même (root passée en argument, reste lu
-//! sur `tx`) et ne fait tourner qu'UN SEUL `winterfell::verify`.
+//! Publics MINIMAUX : racine, les `m` nullifiers, les `n` commitments de sortie,
+//! les frais — `m`, `n` variables dans `1..=MAX_IN` / `1..=MAX_OUT` (= 4), portés
+//! par la LONGUEUR des vecteurs (v4). Plus aucun `owner`/`nk` publiés en clair,
+//! plus aucune sous-preuve — le prouveur (`prove_monolith`) extrait ces publics
+//! directement des cellules de trace ; le vérificateur les fournit lui-même (root
+//! passée en argument, reste lu sur `tx`) et ne fait tourner qu'UN SEUL
+//! `winterfell::verify`.
 //!
 //! `tx_digest` (v4, domaine `obscura/proved-tx/v4`) lie `m ‖ n ‖ root ‖ nf ‖ oc ‖ fee ‖
 //! signer ‖ enc_notes` — non-rejeu et liaison des `enc_notes` (v3). ⚠️ Portée exacte :
@@ -132,10 +134,11 @@ impl ProvedTx {
 
 const TX_DOMAIN: &str = "obscura/proved-tx/v4";
 
-/// Encodage canonique injectif des publics : `root ‖ nf₁ ‖ nf₂ ‖ oc₁ ‖ oc₂ ‖ fee LE ‖
-/// signer ‖ [len(kem_ctⱼ) LE ‖ kem_ctⱼ ‖ len(enc_noteⱼ) LE ‖ enc_noteⱼ]ⱼ₌₀,₁` (v3 :
-/// les enc_notes, de taille variable, sont préfixées par leur longueur LE pour rester
-/// injectif — cf. Tâche 1).
+/// Encodage canonique injectif des publics (v4, forme variable) : `m (1 o) ‖ n (1 o) ‖
+/// root ‖ nf₁ … nf_m ‖ oc₁ … oc_n ‖ fee LE ‖ signer ‖ [len(kem_ctⱼ) u64 LE ‖ kem_ctⱼ ‖
+/// len(enc_noteⱼ) u64 LE ‖ enc_noteⱼ]ⱼ₌₁..n`. Les COMPTES viennent en PREMIER (v4 : sans
+/// eux, deux découpages des mêmes digests collisionneraient) ; les enc_notes, de taille
+/// variable, sont préfixées par leur longueur LE pour rester injectif (v3 — cf. Tâche 1).
 fn tx_digest_bytes(
     root: &Digest,
     nullifiers: &[Digest],
