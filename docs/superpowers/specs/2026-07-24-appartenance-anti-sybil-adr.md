@@ -223,8 +223,11 @@ bande), pas cryptographique.
 2. [x] Corriger `2026-07-22-j1-consensus-adr.md` (ou l'annoter) : le point 6
    (« admission par `stake` », « liste gravée en genèse pour B ») est superséé —
    admission par reconfiguration certifiée (J1-c), PoS public rejeté.
-3. [ ] Vérifier que `docs/TESTNET.md` §1.2 et la carte des décisions A restent
+3. [x] Vérifier que `docs/TESTNET.md` §1.2 et la carte des décisions A restent
    cohérents avec cette décision (ils le sont a priori ; la posture « fédéré, pas
-   décentralisé » y est déjà).
+   décentralisé » y est déjà). — **VÉRIFIÉ le 2026-07-25** : `TESTNET.md` §1.2 pose
+   « Fédéré, pas décentralisé », l'admission par reconfiguration certifiée (J1-c) et
+   « votre place dépend du quorum, pas d'un droit acquis » — aucun `stake` public.
+   Cohérent avec cette décision.
 4. [ ] Rien à implémenter : le mécanisme (J1-c) existe. Cet ADR est une position, pas
    du code.

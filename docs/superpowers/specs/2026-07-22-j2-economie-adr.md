@@ -430,12 +430,16 @@ soldes.
        de la mesure de consensus (action 4). Le mécanisme est engageant : la
        monnaie peut naître ailleurs qu'en genèse, sous condition d'une preuve
        d'ouverture sur une valeur RECALCULÉE. `R(h)` reste NON tranchée.
-2. [ ] Corriger `2026-07-22-portes-vers-le-mainnet-design.md` : J2 ne livre pas
+2. [x] Corriger `2026-07-22-portes-vers-le-mainnet-design.md` : J2 ne livre pas
        l'anti-Sybil à J3, et « collecteur de frais » et « coinbase » y sont un
-       seul mécanisme, pas deux.
-3. [ ] Ajouter la non-auditabilité de la masse de genèse aux limites connues de
+       seul mécanisme, pas deux. — **FAIT** : la carte de juillet porte, dans sa
+       section J2, l'addendum « CORRECTIONS DU 2026-07-23, apportées par ADR-002 »
+       qui corrige les deux points. (Case cochée le 2026-07-25 après vérification.)
+3. [x] Ajouter la non-auditabilité de la masse de genèse aux limites connues de
        `docs/TESTNET.md` (résidu 3) — indépendant de cet ADR, et exigible avant
-       l'ouverture.
+       l'ouverture. — **FAIT** : `docs/TESTNET.md` §1.3 le porte (tableau «`la genèse
+       contenait exactement N unités` → non, parole de l'auteur»). (Case cochée le
+       2026-07-25 après vérification.)
 4. [x] **Mesurer l'ouverture aux paramètres de CONSENSUS — FAIT le 2026-07-23.**
        `21 227 o, 2,02 % du bloc` à 48 requêtes / blowup 16 (×1,35 sur les
        paramètres de dev). Le test vit dans `crates/circuit`
