@@ -114,7 +114,7 @@ que « tolérer zéro faute » signifie.
 
 ⚠️ **Le certificat ne s'agrège pas et ne s'agrègera pas** : aucune signature
 post-quantique ne l'offre. Son coût croît **linéairement** avec le comité, pour
-toujours. À `n = 64` il vaut l'équivalent de deux transactions par bloc. Mesurez
+toujours. À `n = 64` il vaut l'équivalent d'une transaction et demie par bloc. Mesurez
 avant de graver : `cargo run -p node --example dimensionner-quorum --release`.
 
 ✅ **Une chaîne à `n ≥ 4` produit des blocs.** Le protocole qui fait circuler les
@@ -145,7 +145,7 @@ Une valeur inconnue ne fait **pas** taire le nœud : il avertit et retombe sur
 C'est la seule chose qu'un nœud sain écrit en régime permanent :
 
 ```
-[  300.001s] INFO   statut — hauteur 42 | pairs 5 | liens 3 | mempool 0 | désaccords 0
+[  300.001s] INFO   statut — hauteur 42 | pairs 5 | liens 3 | mempool 0 | désaccords 0 | calées 0
 ```
 
 | Champ | Ce qu'il dit | Quand s'inquiéter |
@@ -155,21 +155,34 @@ C'est la seule chose qu'un nœud sain écrit en régime permanent :
 | `liens` | connexions **ouvertes** | **0 = le nœud est isolé** |
 | `mempool` | transactions en attente | croît sans jamais retomber |
 | `désaccords` | blocs refusés pour chaînage | **> 0 et qui augmente** |
+| `calées` | hauteurs figées par un split de votes (J1-b2) | **> 0 : une nouvelle chaîne est nécessaire** |
 
-La ligne passe en **`AVERT`** dès que `liens = 0` ou `désaccords > 0`. Ces deux
-cas sont les **pannes silencieuses** du protocole : un nœud isolé ou décroché
-continue de répondre normalement, en servant un historique plus court mais
-parfaitement cohérent. Rien d'autre ne les rend visibles.
+La ligne passe en **`AVERT`** dès que `liens = 0`, `désaccords > 0` ou
+`calées > 0`. Ces trois cas sont les **pannes silencieuses** du protocole : un
+nœud isolé, décroché ou dont une hauteur est calée continue de répondre
+normalement, en servant un historique plus court mais parfaitement cohérent.
+Rien d'autre ne les rend visibles.
 
 ## Sauvegarder
 
-Trois fichiers dans `--donnees` :
+Quatre fichiers dans `--donnees` :
 
 | Fichier | Contenu | Perte = |
 |---|---|---|
 | `identite.cle` | **clé privée du nœud, EN CLAIR** | le nœud change de pair aux yeux du réseau |
 | `etat.bin` | état de consensus | resynchronisation depuis les pairs |
 | `historique.bin` | archive des sorties (si `--archiver`) | irrécupérable sans re-synchroniser depuis zéro |
+| `votes.bin` | dernier vote émis — registre **anti-équivocation** | **le nœud REFUSE de démarrer** s'il est corrompu |
+
+⚠️ **`votes.bin` est le fichier qui vous protège d'une faute PROUVABLE.** Il retient
+la dernière hauteur votée et l'identifiant voté ; sans lui, un nœud relancé peut
+voter une seconde fois, pour un AUTRE bloc, à la même hauteur — c'est-à-dire
+signer une **équivocation**, la seule faute que le protocole rend démontrable
+contre son auteur. Deux cas, deux comportements : **corrompu**, il n'est jamais
+rattrapé par un registre vierge et le nœud **refuse de démarrer**
+(`PersistanceError::VotesInvalides`) ; **effacé**, il est recréé vierge en
+silence — c'est vous, pas le nœud, qui perdez alors la mémoire des promesses.
+Sauvegardez-le comme `identite.cle`.
 
 `identite.cle` est le seul qui ne se reconstruit pas. Sur Unix il est en `0600` ;
 **il n'est pas chiffré** — sa protection est celle du système de fichiers.
