@@ -71,8 +71,11 @@ l'ANCIENNE liste (J1-c) est livré. **Prototype non audité — testnet uniqueme
 - **Non-malléabilité des preuves** : la preuve STARK est liée à tx_digest.
 - **Versioning d'algorithmes** dans tout transcript et toute sérialisation
   (migration FIPS 203/204 FAITE : version d'algo 0x02, le round-3 0x01 est refusé par son nom, sans cohabitation).
-- **Anti-sabotage de notes** : nullifier lié au commitment (nf = PRF_nk(rho ‖ cm)) —
-  deux notes de même rho ne partagent plus le même nullifier.
+- **Anti-sabotage de notes** : nullifier lié au commitment
+  (`nf = rescue::hash(Domain::Nullifier, nk ‖ rho ‖ cm)` — Rescue-Prime prouvé, et
+  l'ORDRE de la préimage fait partie du format ; `PRF_nk(rho ‖ cm)` était le modèle du
+  mode `dev-transparent`, hors consensus) — deux notes de même rho ne partagent plus
+  le même nullifier.
 - **Aucun pseudonyme public stable par wallet.** Tout champ en clair réutilisé d'une
   transaction à l'autre est un identifiant, et la confidentialité vaut son maillon le
   plus faible : un seul champ stable annule montants engagés, destinataires chiffrés,
@@ -212,9 +215,12 @@ Ce que cela défend, et qui n'était pas défendu avant :
 
 Ce que cela COÛTE, et qui ne se rattrapera pas : **il n'existe aucune agrégation de
 signatures post-quantique** — l'astuce BLS des BFT modernes repose sur des couplages,
-cassés par Shor. Le certificat pèse donc `2f+1 × 3374` octets, **linéairement, pour
-toujours** : 1,0 % du bloc à `n = 4`, 13,8 % à `n = 64`. **La taille du comité est
-bornée par le budget du bloc**, et `MAX_AUTORITES = 64` devra probablement descendre.
+cassés par Shor. Le certificat pèse donc `8 + (2f+1) × (4 + 3374)` octets — masque de
+votants et préfixe de longueur de chaque vote compris, c'est-à-dire ce que
+`cout_certificat` réserve — **linéairement, pour toujours** : 10 142 o (1,0 % du bloc)
+à `n = 4`, 145 262 o (13,9 %) à `n = 64`. **La taille du comité est bornée par le
+budget du bloc** — la capacité tombe de 9 à 8 transactions entre ces deux points — et
+`MAX_AUTORITES = 64` devra probablement descendre.
 Toute migration de backend PQ change ce calcul (`docs/BACKEND_PQ.md`) ; l'outil de
 mesure existe (`cargo run -p node --example dimensionner-quorum --release`).
 
@@ -270,9 +276,14 @@ reproduira :
    Le bloc certifie etant applique LOCALEMENT avant diffusion, le producteur avancait
    definitivement sur une chaine que personne ne pouvait recevoir. `Bloc::sceller`
    reserve desormais `cout_certificat(quorum)` (coût exact), et la borne est verifiee
-   aux trois niveaux : constructeur, decodeur (`from_bytes`, avant tout decodage de
-   champ) et application (`appliquer_bloc`, avant scellement, quorum et STARK) — cf.
-   le tableau de `docs/ARCHITECTURE.md`.
+   aux trois niveaux qui opposent `MAX_OCTETS_BLOC` a un BLOC : constructeur, decodeur
+   (`from_bytes`, avant tout decodage de champ) et application (`appliquer_bloc`, avant
+   scellement, quorum et STARK). Le transport (`net::frame`) est un quatrieme niveau,
+   d'une autre grandeur — il borne le cadre CHIFFRE — cf. le tableau a quatre lignes de
+   `docs/ARCHITECTURE.md`. Le SELECTEUR de mempool n'est pas un niveau de plus mais la
+   meme comptabilite que le constructeur, a l'octet : y omettre un terme ne produit pas
+   un bloc indiffusable mais un tour de production perdu en silence, rejoue a chaque
+   vue (`tout_lot_retenu_par_le_selecteur_est_scellable`).
 2. **La fenetre d'ancres etait plus courte qu'un bloc.** `RECENT_ROOTS_WINDOW = 100`
    contre `MAX_TX_PAR_BLOC = 512`, `remember_root` appele a chaque insertion : un
    bloc charge purgeait toutes les ancres. Un wallet passant environ 1,8 s a prouver

@@ -185,7 +185,8 @@ n'accepte pas ce prix n'a pas besoin d'Obscura — et le document doit le lui di
   bon marché — l'agrégation BLS — repose sur des couplages sur courbes
   elliptiques, cassés par Shor. Le certificat de quorum porte donc ses `2f+1`
   signatures **linéairement, pour toujours** : 1,0 % du bloc à 4 autorités,
-  13,8 % à 64. **La taille du comité est bornée par le budget du bloc** — une
+  13,9 % à 64 — et un bloc y porte 8 transactions au lieu de 9.
+  **La taille du comité est bornée par le budget du bloc** — une
   conséquence directe de la thèse post-quantique, pas un choix d'implémentation.
   Le jour où une agrégation post-quantique pratique existera, tout ce calcul
   change ; rien n'indique que ce soit proche (cf. ADR-001, THREAT_MODEL).

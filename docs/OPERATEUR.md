@@ -99,24 +99,39 @@ d'autorités distinctes, avec `n = 3f + 1`. Le nombre d'autorités gravées n'es
 donc pas cosmétique — il fixe à la fois ce que la chaîne tolère et ce que chaque
 bloc pèse.
 
-| `n` autorités | pannes tolérées `f` | quorum `2f+1` | certificat | part du bloc |
+Les octets ci-dessous sont ceux que le nœud **réserve réellement**
+(`ledger::bloc::cout_certificat`) : `masque (8 o) + quorum × (préfixe de longueur
+4 o + signature hybride 3 374 o)`. Le masque et les préfixes ne sont pas du
+décor — ils partent sur le fil, et une table qui les oublie promet une place que
+le bloc n'a pas.
+
+| `n` autorités | pannes tolérées `f` | quorum `⌊2n/3⌋+1` | certificat | part du bloc |
 |---|---|---|---|---|
-| 1 à 3 | **0** | 1 | 3 374 o | 0,3 % |
-| **4** | **1** | 3 | 10 122 o | **1,0 %** |
-| 7 | 2 | 5 | 16 870 o | 1,6 % |
-| 10 | 3 | 7 | 23 618 o | 2,3 % |
-| 64 (max) | 21 | 43 | 145 082 o | **13,8 %** |
+| 1 à 3 | **0** | 1 | 3 386 o | 0,3 % |
+| **4** | **1** | 3 | 10 142 o | **1,0 %** |
+| 7 | 2 | 5 | 16 898 o | 1,6 % |
+| 10 | 3 | 7 | 23 654 o | 2,3 % |
+| 64 (max) | 21 | 43 | 145 262 o | **13,9 %** |
 
 **Recommandation : `n = 4`.** C'est le premier point qui tolère réellement une
 panne, pour 1 % du budget du bloc. À `n ≤ 3`, `f = 0` : la chaîne exige un quorum
 qu'une seule autorité atteint, ce qui n'est pas une faiblesse du calcul — c'est ce
 que « tolérer zéro faute » signifie.
 
+⚠️ **Ce que le comité coûte en TRANSACTIONS, pas en pourcentages.** La place du
+certificat est réservée dès le scellement : elle sort du budget utile du bloc.
+À `n = 4` la capacité ne bouge pas — **9 transactions** de 105 Kio, comme sur une
+chaîne sans autorités. À `n = 64` elle tombe à **8** : un comité de 64 coûte une
+transaction par bloc, en permanence. C'est le vrai prix du dimensionnement, et il
+est discret parce qu'il ne se manifeste par aucune erreur — seulement par un bloc
+qui porte une transaction de moins.
+
 ⚠️ **Le certificat ne s'agrège pas et ne s'agrègera pas** : aucune signature
 post-quantique ne l'offre. Son coût croît **linéairement** avec le comité, pour
 toujours. À `n = 64` il vaut l'équivalent de **≈ 1,35 transaction** par bloc
-(145 082 o de certificat contre 105 Kio = 107 520 o la transaction). Mesurez
-avant de graver : `cargo run -p node --example dimensionner-quorum --release`.
+(145 262 o de certificat contre 105 Kio = 107 520 o la transaction). Mesurez
+avant de graver : `cargo run -p node --example dimensionner-quorum --release` —
+c'est cet outil qui fait autorité sur les chiffres du tableau, pas le tableau.
 
 ✅ **Une chaîne à `n ≥ 4` produit des blocs.** Le protocole qui fait circuler les
 votes (J1-b1) et le changement de vue (J1-b2) sont livrés : le producteur

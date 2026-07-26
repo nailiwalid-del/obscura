@@ -38,6 +38,15 @@ signifie donc porter les signatures **linéairement**, pour toujours.
 Mesuré par `cargo run -p node --example dimensionner-quorum --release`, sur un
 budget de bloc de **1 048 444** octets :
 
+> ⚠️ **Rectification de revue (2026-07-26).** Les octets de ce tableau valent
+> `quorum × 3 374` : ils oublient le **masque de votants (8 o)** et le **préfixe de
+> longueur de chaque vote (4 o)**, tous deux présents sur le fil. Les valeurs
+> réellement réservées par `ledger::bloc::cout_certificat` sont 10 142 / 16 898 /
+> 23 654 / 37 166 / 70 946 / **145 262** o, soit 13,9 % du bloc à `n = 64`. La
+> décision de l'ADR est inchangée ; le tableau ci-dessous est conservé tel qu'il a
+> été écrit, et `docs/OPERATEUR.md` porte la version corrigée qui fait autorité pour
+> un opérateur.
+
 | `n` | `f` | quorum `2f+1` | certificat | part du bloc |
 |---|---|---|---|---|
 | 4 | 1 | 3 | 10 122 o | **1,0 %** |

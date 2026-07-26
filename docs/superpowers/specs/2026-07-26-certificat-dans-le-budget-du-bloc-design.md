@@ -69,8 +69,11 @@ Deux raisons, toutes deux instructives et à consigner :
 deux extrémités (production locale et décodage).
 
 Le coût exact plutôt qu'un majorant : réserver
-`8 + MAX_AUTORITES × (4 + TAILLE_SCELLEMENT_MAX) = 262 408 o` amputerait **25 % de la
-capacité du bloc en permanence, même à `n = 4`**, et invaliderait l'analyse de budget
+`8 + MAX_AUTORITES × (4 + TAILLE_SCELLEMENT_MAX) = 8 + 64 × 4 104 = 262 664 o`
+amputerait **25 % de la capacité du bloc en permanence, même à `n = 4`**
+(rectification de revue : ce chiffre valait 262 408 o ici, calculé avec 4 096 au lieu
+de `TAILLE_SCELLEMENT_MAX = 4 + 4 096 = 4 100` ; la conclusion — ≈25 % du bloc,
+25,05 % exactement — est inchangée), et invaliderait l'analyse de budget
 d'ADR-002 (qui a mesuré l'ouverture d'émission à 2,02 % du bloc). Le coût exact
 est sûr parce que **le quorum à la hauteur du scellement est connu** : un changement
 d'autorités ne prend effet qu'à `h + K` (J1-c).
@@ -116,6 +119,11 @@ pas de certificat. Le coût réservé doit alors être nul, pas `8`. Vérifier c
 (`bloc.rs:178`) vaut `1 + TAILLE_ID + 8 + 4 + 4`. Le format `0x05` porte aussi `vue`,
 `autorites` et `changement_autorites`. Si ce surcoût sous-estime l'en-tête réel, le
 signaler dans le rapport — **ne pas le corriger dans ce cycle** sans le dire.
+
+> **Rectification de revue (2026-07-26).** Cette amorce est INSUFFISANTE : il y manque
+> `TAILLE_SCELLEMENT_MAX`, que `verifier_budget` ajoute de son côté. L'amorce retenue
+> est `SURCOUT_BLOC_VIDE + TAILLE_SCELLEMENT_MAX + cout_certificat(quorum)`, avec
+> `SURCOUT_BLOC_VIDE` corrigé à 105 o — voir « Ce que ce cycle ne fait pas ».
 
 **Dans `sceller`/`sceller_changement`** (`bloc.rs:579`, `:623`) : la vérification doit
 porter sur le bloc **tel qu'il partira certifié**. Ajouter le coût du certificat au
@@ -200,6 +208,13 @@ trouvées deux fois (audit interne **et** externe).
   preuve) — ils restent à arbitrer séparément.
 - Il **ne corrige pas** `SURCOUT_BLOC_VIDE` s'il s'avère sous-estimé : le constat est
   demandé, la correction non (voir volet 3).
+  → **Rectifié à la revue du 2026-07-26.** Le constat (81 o annoncés pour 105 o
+  réels) était juste, mais la conclusion « le constructeur reste plus sévère que le
+  sélecteur, ce qui est le sens qui compte » était une implication INVERSÉE : plus
+  sévère signifie exactement qu'il refuse ce que l'autre accepte. L'écart de 24 o,
+  ajouté à l'oubli de `TAILLE_SCELLEMENT_MAX` dans l'amorce du sélecteur, valait
+  4 124 o de SOUS-réserve et laissait le producteur perdre son tour en silence. La
+  correction est donc entrée dans le périmètre du lot de retouches.
 
 ## Critère de franchissement
 

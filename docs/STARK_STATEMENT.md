@@ -371,9 +371,12 @@
 > qui n'aurait mordu qu'aux petites profondeurs était invisible de tous les tests.
 > Les forges restent 2/2 en FORME (assertion explicite, pas un silence).
 
-**Ce statement EST la règle de consensus d'une dépense valide.** Tout le reste du
-protocole s'organise autour de lui. Le mode transparent actuel (`apply_transparent`)
-n'est qu'un échafaudage de développement et ne définit pas la validité.
+**Ce statement EST la règle de consensus d'une dépense valide**, et il l'est dans le
+code : `apply_proved_tx` vérifie le monolithe P1–P7. Tout le reste du protocole
+s'organise autour de lui. Le mode transparent (`ledger::state::apply_transparent`)
+subsiste derrière la feature `dev-transparent`, **OFF par défaut** : c'est un
+échafaudage de développement, hors du chemin de consensus, et il ne définit pas la
+validité. Le qualifier d'« actuel » laissait croire qu'il tenait encore le rôle.
 
 ## Statement
 
@@ -395,7 +398,8 @@ Témoins PRIVÉS :
 La preuve établit :
   P1. chaque commitment d'entrée appartient à l'arbre de racine `root`
   P2. pour chaque note d'entrée : note.owner = H_owner(shielded_secret)   (autorité de dépense)
-  P3. chaque nullifier est correctement dérivé : nf = PRF_nk(rho ‖ commitment)
+  P3. chaque nullifier est correctement dérivé : nf = H_nullifier(nk ‖ rho ‖ commitment)
+      (Rescue-Prime domaine-séparé ; l'ORDRE de la préimage fait partie du format)
   P4. nk = H_nk(shielded_secret)   (nk contrainte par le même secret racine)
   P5. Σ valeurs d'entrée = Σ valeurs de sortie + fee
   P6. toutes les valeurs sont range-checkées dans [0, 2^60)   (RANGE_BITS = 60 : sur
@@ -720,24 +724,44 @@ Rescue-Prime) — seule la règle de consensus (le monolithe) exigeait le resser
 ### Précision d'implémentation (v0.2) — où `dual_hash` s'applique réellement
 
 Au sein du domaine « hash consensus », `dual_hash` (BLAKE3‖SHA3, 64 o, jamais tronqué)
-est **exigé** là où la résistance aux collisions est *directement* sécuritaire :
+est **exigé** là où la résistance aux collisions est *directement* sécuritaire **et où
+aucune contrainte AIR ne pèse** :
 
-- **commitments de notes** (`note.rs`) — binding de la note ;
-- **tx_digest** (`tx.rs`) — lie signature et preuve à CETTE transaction ; une
+- **tx_digest** (`circuit::tx`) — lie signature et preuve à CETTE transaction ; une
   collision transférerait une signature d'une tx à une autre, et la double
   signature n'y changerait rien (les deux signent le même digest). Implémenté
-  en dual depuis la correction d'audit 2026-07.
+  en dual depuis la correction d'audit 2026-07 ;
+- **identifiant de bloc** (`ledger::bloc::Bloc::id`) — c'est l'ordre des
+  transactions qu'on rend infalsifiable ;
+- **sommes de contrôle** : encodage textuel d'adresse (`wallet::adresse`), empreinte
+  d'intégrité d'un fichier de wallet (`wallet::persistance`).
+
+⚠️ **Les commitments de notes N'EN FONT PLUS PARTIE.** Le commitment du consensus est
+`proved_hash::rescue::note_commitment(value, owner, rho, r)` — `Domain::NoteCommitment`,
+Rescue-Prime — parce que c'est celui que le circuit PROUVE (P7) : un commitment en
+`dual_hash` ne s'exprime pas en contraintes AIR de degré modéré. Le
+`dual_hash("obscura/note/v1", …)` de `ledger::note` appartient au mode
+`dev-transparent` (feature OFF par défaut, module compilé seulement avec elle), hors
+consensus.
 
 Les usages en **KDF/PRF** — `derive_key` (sous-clés AEAD), combinaison du secret
 KEM — reposent sur **BLAKE3 seul** (keyed / derive-key). Choix
 assumé : la défense en profondeur y est portée par les deux primitives KEM/signature
 sous-jacentes, pas par le hash ; un hash unique de 256 bits comme PRF/KDF y suffit et
-imposer le dual n'apporterait rien. En revanche, le **hash d'identité**
-(`owner = H_owner(shielded_secret)`, `keys.rs`) et la **dérivation de `nk`**
-(`nk = H_nk(shielded_secret)`) relèvent du **hash prouvé** (Rescue-Prime, migration
-avec le circuit), PAS d'un KDF wallet — voir la ligne « hash prouvé » ci-dessus.
-BLAKE3 domain-séparé n'y est qu'un échafaudage de dev. « Dual » est donc une *exigence* pour
-commitments + tx_digest, non une contrainte uniforme sur tout hachage consensus.
+imposer le dual n'apporterait rien.
+
+Le **hash d'identité** (`owner = H_owner(shielded_secret)`) et la **dérivation de
+`nk`** (`nk = H_nk(shielded_secret)`) relèvent du **hash prouvé** et **y sont
+désormais** : `rescue::hash(Domain::Owner, secret.as_felts())` et
+`rescue::hash(Domain::Nk, …)`, contraints par le segment `key` du monolithe
+(`circuit::key`). La migration est FAITE — ce n'est plus « avec le circuit », au
+futur. Le `blake3_domain("obscura/owner/v2" | "obscura/nk/v2")` de `ledger::keys`
+n'est pas un échafaudage en attente de migration : c'est la dérivation du mode
+`dev-transparent`, dont le seul consommateur est `ledger::tx`, et elle ne migrera
+jamais — elle disparaîtra avec lui.
+
+« Dual » est donc une *exigence* pour tx_digest, identifiant de bloc et sommes de
+contrôle, non une contrainte uniforme sur tout hachage consensus.
 
 ## Candidat d'implémentation
 

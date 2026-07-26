@@ -88,8 +88,10 @@ le NOMBRE, pas le POIDS (~9 tx de 105 Kio suffisent à déborder le cadre), et l
 cadre borne le CHIFFRÉ, d'où la soustraction du surcoût AEAD (sans elle, un bloc
 scellé à la borne était indiffusable de 5 o).
 
-Qui borne quoi, aux **trois** niveaux — l'énumération n'est pas décorative, chaque
-niveau attrape ce que les autres ne voient pas :
+Qui borne quoi, aux **quatre** niveaux — l'énumération n'est pas décorative, chaque
+niveau attrape ce que les autres ne voient pas. Les trois premiers opposent
+`MAX_OCTETS_BLOC` à un bloc ; le quatrième borne le cadre CHIFFRÉ, ce qui n'est pas
+la même grandeur (d'où la soustraction du surcoût AEAD ci-dessus) :
 
 | niveau | fonction | ce qu'il garde |
 |---|---|---|
@@ -98,10 +100,25 @@ niveau attrape ce que les autres ne voient pas :
 | application | `ProvedLedgerState::appliquer_bloc` | le bloc fabriqué à la main (les champs de `Bloc` sont publics), refusé avant scellement, quorum et STARK |
 | transport | `net::frame::ecrire_cadre` | le cadre CHIFFRÉ, borné à `MAX_CADRE` |
 
-Le certificat est réservé dès la SÉLECTION (`node::orchestration`, accumulateur
-amorcé à `SURCOUT_BLOC_VIDE + cout_certificat(quorum)`) : sans cela le sélecteur
-proposait un lot que le constructeur refuse ensuite, et le producteur perdait son
-tour sans le dire. Le quorum arrive par PARAMÈTRE — `ledger::bloc` ne dépend pas de
+⚠️ **Le sélecteur de mempool doit compter EXACTEMENT comme le constructeur.**
+`node::orchestration::selectionner_sous_budget` amorce son accumulateur à
+`SURCOUT_BLOC_VIDE + TAILLE_SCELLEMENT_MAX + cout_certificat(quorum)`, puis ajoute
+`cout_transaction` par transaction retenue : la somme obtenue est terme à terme
+celle que `Bloc::verifier_budget` mesure (`to_bytes().len()` d'un bloc de
+transactions vaut `SURCOUT_BLOC_VIDE + Σ cout_transaction`). **L'écart entre les
+deux comptabilités est donc nul**, et l'invariant « tout lot retenu par le
+sélecteur est accepté par `sceller` » est porté par un test qui balaie le quorum de
+0 à 64 (`tout_lot_retenu_par_le_selecteur_est_scellable`).
+
+Chaque terme omis est une sous-réserve, et une sous-réserve ne se manifeste par
+aucune erreur : `sceller` refuse, `proposer_a_vue` rend `None`, et le producteur
+perd son tour **en silence** ; l'ordre de sélection étant le digest trié, les vues
+suivantes rejouent la même sélection et échouent identiquement jusqu'à ce que le
+mempool change. L'amorce a omis `TAILLE_SCELLEMENT_MAX` et sous-estimé
+`SURCOUT_BLOC_VIDE` de 24 o — 4 124 o de sous-réserve, atteints dès qu'un pavage
+laisse moins que cela sous le plafond.
+
+Le quorum arrive par PARAMÈTRE — `ledger::bloc` ne dépend pas de
 `ProvedLedgerState`. Le coût réservé est EXACT et non majoré : réserver le majorant
 du décodeur (262 664 o) amputerait 25 % du bloc en permanence, même à `n = 4`.
 Capacité effective : 9 transactions de 105 Kio à `n = 4`, 8 à `n = 64`.
@@ -163,9 +180,11 @@ signent le même id, donc sans séparation le scellement du producteur compterai
 comme un vote et `2f` votes réels afficheraient `2f+1` (test dédié :
 `scellement_rejoue_comme_vote_refuse`).
 
-⚠️ AUCUNE agrégation PQ n'existe : le certificat pèse `popcount(masque) × 3374`
-o, LINÉAIREMENT et pour toujours (1,0 % du bloc à n=4, 13,8 % à n=64) — la taille
-du comité est BORNÉE par le budget du bloc.
+⚠️ AUCUNE agrégation PQ n'existe : le certificat pèse
+`8 + popcount(masque) × (4 + 3374)` o — masque et préfixes de longueur compris,
+c'est-à-dire ce que `cout_certificat` réserve — LINÉAIREMENT et pour toujours
+(10 142 o = 1,0 % du bloc à n=4, 145 262 o = 13,9 % à n=64) : la taille du comité
+est BORNÉE par le budget du bloc.
 
 **J1-b — protocole de vue (liveness fermée)** : les votes circulent réellement
 sur le fil (`Message::Proposition`/`Message::Vote`, cf. `crate node`), la vue

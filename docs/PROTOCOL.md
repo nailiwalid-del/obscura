@@ -11,7 +11,7 @@
    transparent de développement* — explicitement non-privé et non-sound — subsiste
    derrière la feature `dev-transparent`, **OFF par défaut et hors consensus**.
 2. Profondeur de Merkle : **32 en consensus** (2^32 notes), 16 en mode dev uniquement.
-3. Nullifier lié au commitment : `nf = rescue::hash(Domain::Nullifier, rho ‖ cm ‖ nk)`
+3. Nullifier lié au commitment : `nf = rescue::hash(Domain::Nullifier, nk ‖ rho ‖ cm)`
    (`PRF_nk(rho ‖ commitment)` en mode transparent seulement).
 4. Versioning explicite des algorithmes dans transcripts et sérialisations.
 5. Exigence de **key privacy** sur le chiffrement des notes.
@@ -31,9 +31,14 @@ Note { value: u64, owner: [u8;32], rho: [u8;32], r: [u8;32] }
   Rescue-Prime domaine-séparé (`Domain::NoteCommitment`), sur le corps
   Goldilocks. La migration depuis `dual_hash` **est faite** : c'est le
   commitment que le circuit prouve, donc celui du consensus.
-- **Nullifier** : `rescue::hash(Domain::Nullifier, rho ‖ commitment ‖ nk)` —
+- **Nullifier** : `rescue::hash(Domain::Nullifier, nk ‖ rho ‖ commitment)` —
   Rescue-Prime lui aussi, prouvé par le segment nullifier du monolithe
-  (`circuit::spend`). Lier le commitment neutralise l'attaque « deux notes, même
+  (`circuit::spend`). ⚠️ **L'ORDRE DE LA PRÉIMAGE FAIT PARTIE DU FORMAT** : c'est
+  `nk` d'abord, puis `rho`, puis le commitment (`circuit::spend::prove_spend`,
+  `circuit::sponge::prove_nullifier`, `wallet::Wallet::nullifier` — les trois
+  concordent, et le wallet ne reconnaîtrait pas ses propres notes sinon). Une
+  permutation de cet ordre est une préimage différente, donc une chaîne
+  différente. Lier le commitment neutralise l'attaque « deux notes, même
   rho, même destinataire → même nullifier » (un expéditeur malveillant pouvait
   rendre une note indépensable) ; même approche qu'Orchard, qui lie le nullifier
   au contexte complet de la note.
@@ -358,9 +363,12 @@ vote = HybridSig("obscura/bloc/vote/v1", id)
   scellement du producteur pourrait être compté comme un vote, et `2f` votes
   réels suffiraient à afficher `2f+1`.
 - ⚠️ **Aucune agrégation** : aucune signature post-quantique n'en offre. Le
-  certificat pèse `popcount(masque) × 3374` octets — 1,0 % d'un bloc à `n = 4`,
-  13,8 % à `n = 64`. **La taille du comité est donc bornée par le budget du
-  bloc**, définitivement.
+  certificat pèse `8 + popcount(masque) × (4 + 3374)` octets — le masque et le
+  préfixe de longueur de chaque vote compris, c'est-à-dire ce que
+  `ledger::bloc::cout_certificat` réserve et ce que `to_bytes` écrit : 10 142 o
+  (1,0 % d'un bloc) à `n = 4`, 145 262 o (13,9 %) à `n = 64`. **La taille du
+  comité est donc bornée par le budget du bloc**, définitivement — et elle se paie
+  en transactions : 9 par bloc à `n = 4`, 8 à `n = 64`.
 
 ### Partition : la politique de minorité
 
@@ -430,15 +438,34 @@ la **même tête** et le **même arbre**.
 `appliquer_bloc` va du moins cher au plus cher, et l'ordre est une défense
 anti-DoS, pas une élégance :
 
-1. contrôles O(1) (version, émission hors genèse, bornes) ;
+1. contrôles O(1) sur des champs déjà décodés : **émission hors genèse**, puis
+   **autorités hors genèse** — invalides pour tout le monde, donc répondus avant
+   un refus relatif à nous (cela permet à `node` de sanctionner l'un sans
+   sanctionner l'autre) ;
 2. **chaînage** (parent, hauteur) — un bloc d'une autre chaîne tombe en
    `ParentInattendu` sans rien coûter et **sans accusation** ;
-3. **scellement** du producteur du tour ;
-4. **certificat de quorum** — jusqu'à 43 vérifications hybrides au pire ;
-5. **puis seulement** les preuves STARK.
+3. **borne de NOMBRE** de transactions (`MAX_TX_PAR_BLOC`), O(1) ;
+4. **plafond d'OCTETS** (`MAX_OCTETS_BLOC`) — ⚠️ **le seul contrôle en O(taille)
+   de cette liste** : mesurer exige de RE-SÉRIALISER le bloc, `appliquer_bloc` ne
+   recevant qu'un `&Bloc`. Il est ici, et pas plus loin, parce qu'un mégaoctet
+   recopié est sans commune mesure avec ce qui suit — jusqu'à 43 vérifications de
+   signature hybride puis ≈4 ms × n_tx de STARK, soit trois ordres de grandeur
+   au-dessus. Et il est ici, et pas plus tôt, parce qu'il coûte plus que les
+   contrôles O(1) qui le précèdent. C'est la seule ligne qui garde le bloc
+   fabriqué LOCALEMENT : `from_bytes` refuse déjà ces octets sur le fil, mais un
+   producteur n'applique pas ce qu'il vient de sceller en passant par le décodeur ;
+5. **scellement** du producteur du tour ;
+6. **certificat de quorum** — jusqu'à 43 vérifications hybrides au pire ;
+7. **puis seulement** les preuves STARK.
 
-Inverser 4 et 5 offrirait à un pair hostile de déclencher la vérification de
-preuves avec un certificat bidon.
+La version du bloc n'apparaît pas dans cette liste : elle est refusée au
+DÉCODAGE (`from_bytes`, `VersionInconnue` / `VersionPerimee`), avant qu'un `Bloc`
+n'existe.
+
+Inverser 6 et 7 offrirait à un pair hostile de déclencher la vérification de
+preuves avec un certificat bidon. Repousser 4 après 6 laisserait un producteur
+appliquer définitivement, sur un état append-only, un bloc que personne ne peut
+recevoir.
 
 ### État de la mise en œuvre (J1 complet)
 

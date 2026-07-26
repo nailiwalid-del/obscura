@@ -186,8 +186,9 @@ Ce qui reste ouvert, en détail dans [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md
    d'un participant ne fige donc plus la chaîne. ⚠️ Réduire le comité à `n ≤ 3` sacrifie
    la tolérance aux fautes (quorum = `n`).
    ⚠️ **Le certificat ne s'agrège pas** — aucune signature post-quantique ne l'offre :
-   son coût est linéaire en la taille du comité (1,0 % du bloc à `n = 4`, 13,8 % à
-   `n = 64`), qui se trouve donc **borné par le budget du bloc**, définitivement.
+   son coût est linéaire en la taille du comité (10 142 o = 1,0 % du bloc à `n = 4`,
+   145 262 o = 13,9 % à `n = 64`, où un bloc porte 8 transactions au lieu de 9), qui se
+   trouve donc **borné par le budget du bloc**, définitivement.
 2. **Le nœud qui sert l'historique en apprend long, et l'omission demande maintenant
    une COLLUSION.** Il voit l'IP du wallet, la CADENCE de ses demandes et sa POSITION
    de chaîne. Taire une sortie donnait une chaîne parfaitement close dont la racine est
