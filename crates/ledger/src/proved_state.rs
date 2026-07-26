@@ -199,6 +199,15 @@ pub enum BlocRefus {
     HauteurInattendue { attendue: u64, recue: u64 },
     #[error("bloc de {recues} transactions (borne : {borne})")]
     TropDeTransactions { borne: usize, recues: usize },
+    /// Bloc plus lourd que le plafond de DIFFUSION : l'appliquer avancerait notre
+    /// chaîne — définitivement, l'état étant append-only — sur un bloc que personne
+    /// ne peut recevoir.
+    ///
+    /// INATTEIGNABLE depuis le réseau (`Bloc::from_bytes` refuse déjà ces octets) :
+    /// ce refus garde le bloc fabriqué LOCALEMENT — un producteur qui remplit son
+    /// bloc sans réserver la place du certificat, ou un bloc relu du disque.
+    #[error("bloc de {octets} o : indiffusable (borne : {borne} o)")]
+    TropDOctets { octets: usize, borne: usize },
     /// Émission hors genèse : **tentative d'inflation**, à la différence des refus de
     /// chaînage qui sont le cas normal d'un nœud en retard.
     #[error("{recues} émissions à la hauteur {hauteur} : seule la genèse peut émettre")]

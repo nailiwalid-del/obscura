@@ -257,6 +257,12 @@ pub enum BlocDecodeError {
     AutoriteDupliquee,
     #[error("certificat de quorum indécodable ou hors bornes")]
     CertificatInvalide,
+    /// Bloc plus lourd que le plafond de DIFFUSION. Même libellé que
+    /// [`BlocConstructionError::TropDOctets`] — même borne, aux deux extrémités : les
+    /// deux énumérations sont distinctes à dessein (l'une protège celui qui reçoit,
+    /// l'autre celui qui fabrique), la variante ne peut donc pas être partagée.
+    #[error("bloc de {octets} o : indiffusable (borne : {MAX_OCTETS_BLOC} o)")]
+    TropDOctets { octets: usize },
     #[error("scellement indécodable ou hors bornes")]
     ScellementInvalide,
     #[error(
@@ -1405,6 +1411,65 @@ mod tests {
             pour(10) > MAX_OCTETS_BLOC,
             "10 doivent déborder : c'est précisément pourquoi le plafond existe,              MAX_TX_PAR_BLOC = {MAX_TX_PAR_BLOC} ne bornant que le NOMBRE"
         );
+    }
+
+    /// Un bloc HORS BORNE, dont chaque champ reste dans ses propres bornes de
+    /// décodage : 512 émissions, 64 autorités, un certificat de 64 votes. Aucune
+    /// preuve — la taille n'a pas à en attendre une, et c'est tout l'enjeu.
+    #[cfg(test)]
+    fn bloc_temoin_hors_borne() -> Bloc {
+        let cles: Vec<SigKeypair> = (0..MAX_AUTORITES).map(|_| SigKeypair::generate()).collect();
+        let emissions: Vec<Emission> = (0..MAX_EMISSIONS_PAR_BLOC)
+            .map(|i| Emission {
+                commitment: cm(i as u64),
+                enc_note: EncNote {
+                    kem_ct: vec![0u8; KEM_CT_LEN],
+                    enc_note: vec![0u8; MAX_ENC_NOTE_LEN],
+                },
+            })
+            .collect();
+        let mut bloc =
+            Bloc::genese_avec_autorites(emissions, cles.iter().map(|k| k.public.clone()).collect())
+                .expect("témoin dans les bornes de champ");
+        // Une seule signature, posée à 64 index : le certificat pèse exactement ce
+        // que pèseraient 64 votes distincts, pour 63 signatures de moins à produire.
+        let sig = cles[0].sign(DOMAINE_VOTE, &bloc.id());
+        for i in 0..MAX_AUTORITES {
+            bloc.poser_vote(i, sig.clone());
+        }
+        bloc
+    }
+
+    /// UN BLOC HORS BORNE EST REFUSÉ AU DÉCODAGE, avant tout décodage de champ.
+    ///
+    /// `MAX_OCTETS_BLOC` n'était vérifié qu'au SCELLEMENT. Or c'est la borne qui rend
+    /// un bloc DIFFUSABLE : l'accepter au décodage, c'est accepter de relire du disque
+    /// — ou de recevoir dans la fenêtre de 132 o que le cadre réseau laisse au-dessus
+    /// du plafond — un bloc qu'aucun pair ne pourra retransmettre. La règle du dépôt
+    /// veut les deux extrémités : toute borne du constructeur existe au décodeur, et
+    /// réciproquement.
+    #[test]
+    fn from_bytes_refuse_un_bloc_hors_borne() {
+        let octets = bloc_temoin_hors_borne().to_bytes();
+        assert!(
+            octets.len() > MAX_OCTETS_BLOC,
+            "le témoin doit dépasser le plafond : {} o pour une borne de {MAX_OCTETS_BLOC} o",
+            octets.len()
+        );
+        match Bloc::from_bytes(&octets) {
+            Err(BlocDecodeError::TropDOctets { octets: n }) => assert_eq!(n, octets.len()),
+            autre => panic!(
+                "un bloc de {} o doit être refusé pour indiffusabilité, obtenu : {}",
+                octets.len(),
+                match autre {
+                    Ok(_) => "accepté".to_string(),
+                    Err(e) => e.to_string(),
+                }
+            ),
+        }
+        // Et le décodeur ne refuse pas TOUT : un bloc dans la borne se relit.
+        let dedans = Bloc::genese().to_bytes();
+        assert!(Bloc::from_bytes(&dedans).is_ok());
     }
 
     #[test]

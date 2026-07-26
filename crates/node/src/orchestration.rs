@@ -1706,6 +1706,11 @@ mod tests {
     /// personne ne pourrait recevoir — partition définitive. La première version de
     /// ce test mesurait le message EN CLAIR : à la borne, les 68 octets de la
     /// cascade suffisaient à rendre le bloc indiffusable sans qu'aucun test rougisse.
+    ///
+    /// ⚠️ Ce test ne couvre PAS le CERTIFICAT de quorum : il mesure le bloc SCELLÉ,
+    /// alors que ce qui part sur le fil après quorum porte aussi `2f+1` signatures.
+    /// C'est l'objet de [`un_bloc_certifie_tient_toujours_dans_un_cadre_reseau`], et
+    /// c'est précisément l'écart qui avait laissé passer le défaut.
     #[test]
     #[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
     fn un_bloc_scelle_tient_toujours_dans_un_cadre_reseau() {
@@ -1718,6 +1723,284 @@ mod tests {
             "bloc de {} o chiffrés sur le fil : au-delà du cadre de {} o",
             sur_le_fil.len() + crypto::aead::SURCOUT,
             net::MAX_CADRE
+        );
+    }
+
+    /// Chaîne à `n` autorités, et les clés dans l'ORDRE des index. `cles[0]` est le
+    /// producteur légitime de la hauteur 1 (tour de rôle `(h−1+vue) mod n`).
+    #[cfg(test)]
+    fn chaine_a_autorites(n: usize) -> (ProvedLedgerState, Vec<SigKeypair>) {
+        let cles: Vec<SigKeypair> = (0..n).map(|_| SigKeypair::generate()).collect();
+        let genese = ledger::bloc::Bloc::genese_avec_autorites(
+            Vec::new(),
+            cles.iter().map(|k| k.public.clone()).collect(),
+        )
+        .expect("genèse à autorités");
+        let etat = ProvedLedgerState::depuis_genese_depth(&genese, 4).expect("amorçage");
+        (etat, cles)
+    }
+
+    /// Scelle ET certifie, exactement comme `sur_vote` assemble le bloc qu'il va
+    /// diffuser : scellement du producteur, puis le quorum entier de votes.
+    #[cfg(test)]
+    fn certifier(bloc: &mut Bloc, cles: &[SigKeypair], quorum: usize) {
+        bloc.signer_scellement(&cles[0]);
+        for (i, cle) in cles.iter().enumerate().take(quorum) {
+            bloc.signer_vote(i, cle);
+        }
+    }
+
+    /// UNE seule VRAIE preuve, dupliquée autant de fois qu'il faut pour remplir un
+    /// bloc jusqu'à sa borne d'octets.
+    ///
+    /// `ProvedTx::from_bytes` ne vérifie RIEN (la vérification vit dans
+    /// `apply_proved_tx`) : dupliquer une transaction par aller-retour d'octets rend
+    /// des copies structurellement valides et cryptographiquement identiques, ce qui
+    /// suffit à PESER. Générer une dizaine de vraies preuves coûterait des minutes
+    /// pour mesurer les mêmes octets — et le contrôle de TAILLE doit de toute façon
+    /// tomber AVANT toute vérification de preuve, sans quoi il n'a pas sa place dans
+    /// l'ordre de coût du nœud.
+    #[cfg(test)]
+    fn copies_de_transaction(octets: &[u8], k: usize) -> Vec<ProvedTx> {
+        (0..k)
+            .map(|_| ProvedTx::from_bytes(octets).expect("copie structurellement valide"))
+            .collect()
+    }
+
+    /// Le bloc le plus LOURD qu'un producteur puisse sceller à cette hauteur : on
+    /// ajoute des transactions jusqu'à ce que le constructeur refuse, comme le
+    /// sélecteur de mempool s'arrête au premier dépassement.
+    #[cfg(test)]
+    fn bloc_rempli_au_plafond(parent: &[u8; 64], hauteur: u64) -> Bloc {
+        let (_, tx) = noeud_avec_transaction();
+        let octets = tx.to_bytes();
+        let mut plein = None;
+        for k in 1..=ledger::bloc::MAX_TX_PAR_BLOC {
+            match Bloc::sceller(parent, hauteur, copies_de_transaction(&octets, k)) {
+                Ok(b) => plein = Some(b),
+                Err(_) => break,
+            }
+        }
+        plein.expect("au moins une transaction tient dans un bloc")
+    }
+
+    /// INVARIANT DE DIFFUSION, CERTIFICAT COMPRIS — ce que le test précédent ne
+    /// mesure pas.
+    ///
+    /// Ce qui part sur le fil après quorum n'est pas le bloc SCELLÉ mais le bloc
+    /// CERTIFIÉ, et les signatures post-quantiques ne s'agrègent pas : à `n = 64` le
+    /// quorum est 43, soit 145 262 o de certificat. Or entre `MAX_OCTETS_BLOC` et le
+    /// cadre réseau il ne reste que 132 o — **un seul vote suffit à faire déborder un
+    /// bloc rempli jusqu'à sa borne**.
+    ///
+    /// La conséquence n'est pas un message perdu : le bloc certifié est appliqué
+    /// LOCALEMENT avant d'être diffusé (`sur_vote`, `proposer_a_vue`), sur un état
+    /// append-only sans réorganisation. Le producteur avancerait donc définitivement
+    /// sur une chaîne que personne ne peut recevoir.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
+    fn un_bloc_certifie_tient_toujours_dans_un_cadre_reseau() {
+        let (etat, cles) = chaine_a_autorites(64);
+        let quorum = etat.quorum_a(1);
+        assert_eq!(quorum, 43, "n = 64 ⇒ quorum ⌊2n/3⌋+1 = 43");
+
+        let mut bloc = bloc_rempli_au_plafond(&etat.tete(), 1);
+        certifier(&mut bloc, &cles, quorum);
+        assert_eq!(
+            bloc.certificat
+                .as_ref()
+                .expect("certificat")
+                .nombre_de_votants(),
+            quorum,
+            "le certificat porte le quorum entier"
+        );
+
+        let sur_le_fil = crate::message::Message::Bloc(Box::new(bloc)).to_bytes();
+        assert!(
+            sur_le_fil.len() + crypto::aead::SURCOUT <= net::MAX_CADRE,
+            "bloc CERTIFIÉ de {} o chiffrés sur le fil : au-delà du cadre de {} o \
+             (dépassement de {} o) — indiffusable, et pourtant appliqué localement",
+            sur_le_fil.len() + crypto::aead::SURCOUT,
+            net::MAX_CADRE,
+            (sur_le_fil.len() + crypto::aead::SURCOUT).saturating_sub(net::MAX_CADRE)
+        );
+    }
+
+    /// Une VRAIE transaction 1-in/1-out — ≈87 Kio, contre ≈108 Kio pour la
+    /// 2-in/2-out.
+    ///
+    /// L'écart n'est pas un détail de sérialisation : la largeur de trace du
+    /// monolithe est DIMENSIONNÉE À LA FORME (`seg_layout::Forme`), donc la preuve
+    /// elle-même rétrécit. C'est ce qui permet de PAVER le budget d'un bloc au plus
+    /// près de son plafond, et donc d'atteindre le pire cas à `n = 4`.
+    #[cfg(test)]
+    fn transaction_1_1() -> ProvedTx {
+        use circuit::{prove_tx_forme, ProvedInput, SpendNote};
+        use ledger::proved_wallet::encrypt_note;
+        use proved_hash::digest::{Digest, ShieldedSecret};
+        use proved_hash::domain::Domain;
+        use proved_hash::felt::Felt;
+        use proved_hash::{merkle, rescue};
+
+        let d = |seed: u64| {
+            Digest(core::array::from_fn(|i| {
+                Felt::from_canonical_u64(seed + i as u64).unwrap()
+            }))
+        };
+        let secret = ShieldedSecret::from_felts(core::array::from_fn(|i| {
+            Felt::from_canonical_u64(900 + i as u64).unwrap()
+        }));
+        let owner = rescue::hash(Domain::Owner, secret.as_felts());
+        let entree = SpendNote {
+            value: 1_000,
+            owner,
+            rho: d(120),
+            r: d(130),
+        };
+        let cm = rescue::note_commitment(entree.value, &entree.owner, &entree.rho, &entree.r);
+        let mut arbre = merkle::ProvedMerkleTree::new(4);
+        arbre.append(&cm);
+        let sortie = SpendNote {
+            value: 980,
+            owner: d(160),
+            rho: d(161),
+            r: d(162),
+        };
+        let oc = rescue::note_commitment(sortie.value, &sortie.owner, &sortie.rho, &sortie.r);
+        let dest = crypto::kem::KemKeypair::generate();
+        let (_root, tx) = prove_tx_forme(
+            &secret,
+            vec![ProvedInput {
+                note: entree,
+                path: arbre.path(0).unwrap(),
+                index: 0,
+            }],
+            vec![sortie.clone()],
+            20,
+            &SigKeypair::generate(),
+            vec![encrypt_note(&dest.public, &oc, &sortie).unwrap()],
+        )
+        .expect("1/1 est une forme valide");
+        tx
+    }
+
+    /// LE MÊME INVARIANT À `n = 4` — le cas où le défaut est le plus discret.
+    ///
+    /// À quatre autorités le certificat ne pèse « que » 10 142 o, et un bloc rempli
+    /// de transactions IDENTIQUES laisse ≈67 Kio d'écart sous le plafond : il ne
+    /// déborde pas. Mais un mempool réel porte des transactions de FORMES
+    /// différentes, donc de tailles différentes (cf. [`transaction_1_1`]) — et le
+    /// sélecteur, qui s'arrête au premier dépassement, pave alors le budget au plus
+    /// près du plafond. L'écart résiduel tombe sous le coût du certificat, et le
+    /// bloc certifié redevient indiffusable.
+    ///
+    /// Le test admet DEUX issues, et c'est l'invariant lui-même : soit le
+    /// constructeur REFUSE ce remplissage (la place du certificat est réservée),
+    /// soit il l'accepte et le bloc certifié doit tenir dans un cadre. Ce qu'aucune
+    /// des deux ne permet, c'est de sceller un bloc que personne ne pourra recevoir.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
+    fn un_bloc_certifie_tient_dans_un_cadre_a_quatre_autorites() {
+        let (etat, cles) = chaine_a_autorites(4);
+        let quorum = etat.quorum_a(1);
+        assert_eq!(quorum, 3, "n = 4 ⇒ quorum 3");
+
+        // Coût RÉEL du certificat de ce quorum : MESURÉ sur un bloc témoin, pas
+        // recopié depuis une note.
+        let mut temoin = Bloc::sceller(&etat.tete(), 1, Vec::new()).expect("bloc vide");
+        let vide = temoin.to_bytes().len();
+        temoin.signer_scellement(&cles[0]);
+        let scelle = temoin.to_bytes().len();
+        for (i, cle) in cles.iter().enumerate().take(quorum) {
+            temoin.signer_vote(i, cle);
+        }
+        let cout_certificat = temoin.to_bytes().len() - scelle;
+
+        // PAVAGE : la combinaison de transactions réelles qui laisse le plus petit
+        // écart sous le plafond de scellement. C'est le pire cas atteignable, pas
+        // une taille inventée.
+        let grande = noeud_avec_transaction().1.to_bytes();
+        let petite = transaction_1_1().to_bytes();
+        let (cg, cp) = (
+            ledger::bloc::cout_transaction(grande.len()),
+            ledger::bloc::cout_transaction(petite.len()),
+        );
+        let budget = ledger::bloc::MAX_OCTETS_BLOC - vide - ledger::bloc::TAILLE_SCELLEMENT_MAX;
+        let mut meilleur = (0usize, 0usize, 0usize);
+        for g in 0..=budget / cg {
+            let p = (budget - g * cg) / cp;
+            let somme = g * cg + p * cp;
+            if g + p <= ledger::bloc::MAX_TX_PAR_BLOC && somme > meilleur.2 {
+                meilleur = (g, p, somme);
+            }
+        }
+        let (g, p, somme) = meilleur;
+        assert!(
+            budget - somme < cout_certificat,
+            "PRÉMISSE du test : le pavage le plus serré ({g} grandes + {p} petites) \
+             laisse {} o sous le plafond, soit PLUS que le certificat ({cout_certificat} o). \
+             Le cas n'est plus atteignable à n = 4 — les tailles de transaction ont dérivé.",
+            budget - somme
+        );
+
+        let mut transactions = copies_de_transaction(&grande, g);
+        transactions.extend(copies_de_transaction(&petite, p));
+        match Bloc::sceller(&etat.tete(), 1, transactions) {
+            // La borne a fait son travail : rien d'indiffusable n'a été scellé.
+            Err(ledger::bloc::BlocConstructionError::TropDOctets { .. }) => {}
+            Ok(mut bloc) => {
+                certifier(&mut bloc, &cles, quorum);
+                let sur_le_fil = crate::message::Message::Bloc(Box::new(bloc)).to_bytes();
+                assert!(
+                    sur_le_fil.len() + crypto::aead::SURCOUT <= net::MAX_CADRE,
+                    "bloc CERTIFIÉ de {} o chiffrés sur le fil à n = 4 : au-delà du cadre \
+                     de {} o (dépassement de {} o)",
+                    sur_le_fil.len() + crypto::aead::SURCOUT,
+                    net::MAX_CADRE,
+                    (sur_le_fil.len() + crypto::aead::SURCOUT).saturating_sub(net::MAX_CADRE)
+                );
+            }
+            Err(autre) => panic!("refus inattendu du scellement : {autre}"),
+        }
+    }
+
+    /// LE REFUS DE TAILLE TOMBE AVANT LA VÉRIFICATION DES PREUVES.
+    ///
+    /// `appliquer_bloc` est la dernière ligne : un producteur peut fabriquer un bloc
+    /// hors borne sans passer par `sceller` (les champs de `Bloc` sont publics), et
+    /// c'est là qu'il faut l'arrêter — avant qu'il n'entre définitivement dans un
+    /// état append-only.
+    ///
+    /// Le test le prouve par le VARIANT DU REFUS : `TropDOctets` signifie que ni le
+    /// quorum ni aucune transaction n'ont été touchés. Sans le contrôle, le refus
+    /// arrivait en `Transaction { .. }` — donc après les 43 vérifications hybrides du
+    /// quorum, l'instantané de l'arbre et l'entrée dans la boucle des transactions,
+    /// pour un bloc que la seule mesure de sa taille condamnait.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
+    fn appliquer_bloc_refuse_hors_borne_avant_le_stark() {
+        let (mut etat, cles) = chaine_a_autorites(64);
+        let quorum = etat.quorum_a(1);
+        let mut bloc = bloc_rempli_au_plafond(&etat.tete(), 1);
+
+        // UNE transaction de trop, posée directement : c'est le bloc qu'un producteur
+        // qui ne réserve pas la place de son certificat finirait par appliquer.
+        let (_, tx) = noeud_avec_transaction();
+        bloc.transactions
+            .push(ProvedTx::from_bytes(&tx.to_bytes()).expect("copie"));
+        certifier(&mut bloc, &cles, quorum);
+        assert!(
+            bloc.to_bytes().len() > ledger::bloc::MAX_OCTETS_BLOC,
+            "le témoin doit être hors borne : {} o",
+            bloc.to_bytes().len()
+        );
+
+        let refus = etat
+            .appliquer_bloc(&bloc)
+            .expect_err("bloc hors borne refusé");
+        assert!(
+            matches!(refus, BlocRefus::TropDOctets { .. }),
+            "refus attendu sur la TAILLE, avant tout quorum et toute preuve ; obtenu : {refus}"
         );
     }
 
