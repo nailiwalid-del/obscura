@@ -254,6 +254,68 @@ fn delai_vue(vue: u32) -> u64 {
         .min(PLAFOND_DELAI_VUE_MS)
 }
 
+/// SÉLECTION SOUS DOUBLE BUDGET : nombre ET octets.
+///
+/// Le second est le seul qui garantisse un bloc DIFFUSABLE — à ≈105 Kio la
+/// transaction, la borne de 512 est atteinte des dizaines de fois après le cadre
+/// réseau. On s'arrête au PREMIER dépassement plutôt que de continuer à chercher plus
+/// petit : l'ordre est celui du digest trié, le fausser ici rendrait deux nœuds
+/// divergents.
+///
+/// # L'AMORCE EST L'INVARIANT
+///
+/// L'accumulateur part de `SURCOUT_BLOC_VIDE + TAILLE_SCELLEMENT_MAX +
+/// cout_certificat(quorum)`, puis ajoute `cout_transaction` par transaction retenue.
+/// Ce que `Bloc::verifier_budget` mesure, lui, est `to_bytes().len() +
+/// TAILLE_SCELLEMENT_MAX + cout_certificat(quorum)` — et `to_bytes()` d'un bloc de
+/// transactions vaut `SURCOUT_BLOC_VIDE + Σ cout_transaction(…)`, terme à terme. Les
+/// deux sommes sont donc ÉGALES, et **tout lot retenu ici est accepté par
+/// `sceller`** : c'est la propriété que
+/// `tout_lot_retenu_par_le_selecteur_est_scellable` vérifie, quorum par quorum.
+///
+/// Chaque terme oublié est une SOUS-RÉSERVE, et une sous-réserve n'est pas une
+/// approximation : le sélecteur retient un lot que `sceller` refuse, `proposer_a_vue`
+/// rend `None`, et le producteur perd son tour **sans rien dire**. L'ordre de
+/// sélection étant déterministe, les producteurs des vues suivantes rejouent la même
+/// sélection et échouent identiquement jusqu'à ce que le mempool change. L'amorce a
+/// omis `TAILLE_SCELLEMENT_MAX` et sous-estimé `SURCOUT_BLOC_VIDE` de 24 o, soit
+/// 4 124 o de sous-réserve — atteignable dès qu'un pavage laisse moins que cela sous
+/// le plafond.
+///
+/// `lire` est le SEUL point de contact avec le mempool. La sélection est extraite ici
+/// pour cette raison : l'invariant se teste alors sur le code réellement exécuté, sans
+/// avoir à peupler un mempool de transactions prouvées distinctes.
+fn selectionner_sous_budget(
+    digests: &[[u8; 64]],
+    quorum: usize,
+    lire: impl Fn(&[u8; 64]) -> Option<Vec<u8>>,
+) -> (Vec<ProvedTx>, Vec<[u8; 64]>) {
+    let mut octets = ledger::bloc::SURCOUT_BLOC_VIDE
+        + ledger::bloc::TAILLE_SCELLEMENT_MAX
+        + ledger::bloc::cout_certificat(quorum);
+    let mut transactions: Vec<ProvedTx> = Vec::new();
+    let mut retenus: Vec<[u8; 64]> = Vec::new();
+    for d in digests {
+        if transactions.len() >= ledger::bloc::MAX_TX_PAR_BLOC {
+            break;
+        }
+        let Some(o) = lire(d) else {
+            continue;
+        };
+        let cout = ledger::bloc::cout_transaction(o.len());
+        if octets + cout > ledger::bloc::MAX_OCTETS_BLOC {
+            break;
+        }
+        let Ok(tx) = ProvedTx::from_bytes(&o) else {
+            continue;
+        };
+        octets += cout;
+        transactions.push(tx);
+        retenus.push(*d);
+    }
+    (transactions, retenus)
+}
+
 impl Noeud {
     pub fn new(identite: SigKeypair, etat: ProvedLedgerState, secret_dandelion: [u8; 32]) -> Self {
         let hauteur_max_vue = etat.hauteur();
@@ -638,42 +700,9 @@ impl Noeud {
         } else {
             let mut digests = self.mempool.digests();
             digests.sort_unstable();
-
-            // SÉLECTION SOUS DOUBLE BUDGET : nombre ET octets. Le second est le seul
-            // qui garantisse un bloc DIFFUSABLE — à ≈68 Kio la transaction, la borne
-            // de 512 est atteinte des dizaines de fois après le cadre réseau. On
-            // s'arrête au premier dépassement plutôt que de continuer à chercher plus
-            // petit : l'ordre est celui du digest, le fausser ici rendrait deux nœuds
-            // divergents.
-            //
-            // Le budget réserve la place du CERTIFICAT dès la sélection, et pas
-            // seulement dans `Bloc::sceller` : sans cela le sélecteur proposait un lot
-            // que le constructeur refusait ensuite, et `sceller` rendant `None`, le
-            // nœud perdait son tour sans rien dire — une panne de liveness silencieuse
-            // là où l'ancien défaut en était une définitive.
-            let mut octets =
-                ledger::bloc::SURCOUT_BLOC_VIDE + ledger::bloc::cout_certificat(quorum);
-            let mut transactions: Vec<circuit::ProvedTx> = Vec::new();
-            let mut retenus: Vec<[u8; 64]> = Vec::new();
-            for d in &digests {
-                if transactions.len() >= ledger::bloc::MAX_TX_PAR_BLOC {
-                    break;
-                }
-                let Some(brute) = self.mempool.get(d) else {
-                    continue;
-                };
-                let o = brute.to_bytes();
-                let cout = ledger::bloc::cout_transaction(o.len());
-                if octets + cout > ledger::bloc::MAX_OCTETS_BLOC {
-                    break;
-                }
-                let Ok(tx) = ProvedTx::from_bytes(&o) else {
-                    continue;
-                };
-                octets += cout;
-                transactions.push(tx);
-                retenus.push(*d);
-            }
+            let (transactions, retenus) = selectionner_sous_budget(&digests, quorum, |d| {
+                self.mempool.get(d).map(|tx| tx.to_bytes())
+            });
             // Chaîne OUVERTE sans rien à sceller : pas de bloc vide spontané
             // (comportement historique). Chaîne à AUTORITÉS : le bloc vide est le
             // battement, on le produit.
@@ -864,30 +893,48 @@ impl Noeud {
             return Vec::new();
         }
 
+        let octets_proposition = proposition.to_bytes();
+        let requis = self.etat.quorum_a(self.etat.hauteur() + 1);
+
         // Table indexée : recevoir deux fois le même votant ne le compte qu'une fois.
         let recus = self.votes_recus.entry(vote.id).or_default();
         recus.insert(vote.index, vote.signature);
-        if recus.len() < self.etat.quorum_a(self.etat.hauteur() + 1) {
+        if recus.len() < requis {
             return Vec::new();
         }
 
-        // QUORUM ATTEINT — on assemble et on diffuse le bloc CERTIFIÉ.
-        let mut bloc = match Bloc::from_bytes(&proposition.to_bytes()) {
-            Ok(b) => b,
-            Err(_) => return Vec::new(),
-        };
         // CERTIFICAT CANONIQUE : exactement le quorum, pas un vote de plus. Les
         // signatures PQ ne s'agrègent pas — chaque vote surnuméraire serait de la
         // bande passante et une vérification en plus, pour rien. On pose les
         // `quorum` plus petits index, triés.
-        let requis = self.etat.quorum_a(self.etat.hauteur() + 1);
+        //
+        // Extraits AVANT le décodage du bloc : les bras d'échec qui suivent doivent
+        // pouvoir vider `votes_recus`, ce que l'emprunt de `recus` interdirait.
         let mut votants: Vec<u16> = recus.keys().copied().collect();
         votants.sort_unstable();
         votants.truncate(requis);
-        for index in votants {
-            if let Some(sig) = recus.get(&index) {
-                bloc.poser_vote(index as usize, sig.clone());
+        let quorum_pose: Vec<(usize, crypto::sig::HybridSignature)> = votants
+            .iter()
+            .filter_map(|i| recus.get(i).map(|sig| (*i as usize, sig.clone())))
+            .collect();
+
+        // QUORUM ATTEINT — on assemble et on diffuse le bloc CERTIFIÉ.
+        //
+        // L'échec du décodage est INATTEIGNABLE (ces octets viennent d'un `Bloc` que
+        // nous détenons), mais c'est la seule fissure par laquelle l'exactitude du coût
+        // du certificat pourrait fuir : sans nettoyage, la proposition et les votes
+        // resteraient en cours, et chaque vote suivant relancerait le même échec sur la
+        // même proposition. Même traitement que le bras d'échec d'`appliquer_bloc`.
+        let mut bloc = match Bloc::from_bytes(&octets_proposition) {
+            Ok(b) => b,
+            Err(_) => {
+                self.votes_recus.clear();
+                self.proposition_en_cours = None;
+                return Vec::new();
             }
+        };
+        for (index, sig) in quorum_pose {
+            bloc.poser_vote(index, sig);
         }
         // On l'applique chez nous d'abord : diffuser un bloc qu'on n'a pas su
         // appliquer soi-même reviendrait à demander aux autres de nous croire.
@@ -1934,35 +1981,59 @@ mod tests {
         // PAVAGE : la combinaison de transactions réelles qui laisse le plus petit
         // écart sous le plafond de scellement. C'est le pire cas atteignable, pas
         // une taille inventée.
-        let grande = noeud_avec_transaction().1.to_bytes();
-        let petite = transaction_1_1().to_bytes();
-        let (cg, cp) = (
-            ledger::bloc::cout_transaction(grande.len()),
-            ledger::bloc::cout_transaction(petite.len()),
-        );
+        //
+        // QUATRE tailles, et non deux. Le witness-hiding tire de l'aléa FRAIS à chaque
+        // preuve : deux transactions de même forme ne pèsent pas exactement pareil
+        // (mesuré : 75 177 / 75 983 / 77 840 o pour trois 1/1, 88 676 / 89 061 o pour
+        // deux 2/2). Avec deux tailles, le pavage ne dispose que d'une douzaine de
+        // combinaisons — pour chaque nombre de grandes, un seul nombre de petites est
+        // optimal — et l'écart résiduel le plus serré dépasse le coût du certificat
+        // environ une fois sur quatre : la PRÉMISSE échouait alors par intermittence,
+        // sans que rien n'ait régressé. Quatre tailles portent la grille à quelques
+        // centaines de combinaisons et l'écart attendu sous le millier d'octets.
+        let lots: Vec<Vec<u8>> = vec![
+            noeud_avec_transaction().1.to_bytes(),
+            transaction_1_1().to_bytes(),
+            transaction_1_1().to_bytes(),
+            transaction_1_1().to_bytes(),
+        ];
+        let couts: Vec<usize> = lots
+            .iter()
+            .map(|o| ledger::bloc::cout_transaction(o.len()))
+            .collect();
         // Budget SANS la place du certificat, à dessein : on fabrique le lot le plus
         // lourd que l'ancienne règle laissait passer, et c'est au constructeur de le
         // juger — pas au test de se donner d'avance la bonne réponse.
         let budget = ledger::bloc::MAX_OCTETS_BLOC - vide - ledger::bloc::TAILLE_SCELLEMENT_MAX;
-        let mut meilleur = (0usize, 0usize, 0usize);
-        for g in 0..=budget / cg {
-            let p = (budget - g * cg) / cp;
-            let somme = g * cg + p * cp;
-            if g + p <= ledger::bloc::MAX_TX_PAR_BLOC && somme > meilleur.2 {
-                meilleur = (g, p, somme);
+        let mut meilleur = (vec![0usize; 4], 0usize);
+        for n0 in 0..=budget / couts[0] {
+            let r0 = budget - n0 * couts[0];
+            for n1 in 0..=r0 / couts[1] {
+                let r1 = r0 - n1 * couts[1];
+                for n2 in 0..=r1 / couts[2] {
+                    let r2 = r1 - n2 * couts[2];
+                    let n3 = r2 / couts[3];
+                    let somme = budget - (r2 - n3 * couts[3]);
+                    if n0 + n1 + n2 + n3 <= ledger::bloc::MAX_TX_PAR_BLOC && somme > meilleur.1 {
+                        meilleur = (vec![n0, n1, n2, n3], somme);
+                    }
+                }
             }
         }
-        let (g, p, somme) = meilleur;
+        let (multiplicites, somme) = meilleur;
         assert!(
             budget - somme < cout_certificat,
-            "PRÉMISSE du test : le pavage le plus serré ({g} grandes + {p} petites) \
-             laisse {} o sous le plafond, soit PLUS que le certificat ({cout_certificat} o). \
-             Le cas n'est plus atteignable à n = 4 — les tailles de transaction ont dérivé.",
+            "PRÉMISSE du test : le pavage le plus serré {multiplicites:?} (pour des coûts \
+             de {couts:?} o) laisse {} o sous le plafond, soit PLUS que le certificat \
+             ({cout_certificat} o). Le cas n'est plus atteignable à n = 4 — les tailles \
+             de transaction ont dérivé.",
             budget - somme
         );
 
-        let mut transactions = copies_de_transaction(&grande, g);
-        transactions.extend(copies_de_transaction(&petite, p));
+        let mut transactions = Vec::new();
+        for (o, k) in lots.iter().zip(multiplicites.iter()) {
+            transactions.extend(copies_de_transaction(o, *k));
+        }
         match Bloc::sceller(&etat.tete(), 1, transactions, quorum) {
             // La borne a fait son travail : rien d'indiffusable n'a été scellé.
             Err(ledger::bloc::BlocConstructionError::TropDOctets { .. }) => {}
@@ -1979,6 +2050,87 @@ mod tests {
                 );
             }
             Err(autre) => panic!("refus inattendu du scellement : {autre}"),
+        }
+    }
+
+    /// **PROPRIÉTÉ : TOUT LOT QUE LE SÉLECTEUR RETIENT EST ACCEPTÉ PAR `sceller`.**
+    ///
+    /// C'est l'invariant réel du couple sélecteur/constructeur, et aucun test ne le
+    /// portait. Les deux tests voisins mesurent des BLOCS ; celui-ci mesure l'ACCORD
+    /// entre deux comptabilités d'octets écrites dans deux crates différentes — la
+    /// seule chose dont dépend le fait qu'un producteur ne perde pas son tour.
+    ///
+    /// Le sélecteur amorçait son accumulateur à `SURCOUT_BLOC_VIDE +
+    /// cout_certificat(quorum)`, sans `TAILLE_SCELLEMENT_MAX` (4 100 o) et avec un
+    /// `SURCOUT_BLOC_VIDE` sous-estimé de 24 o : **4 124 o de sous-réserve**. La
+    /// conséquence n'est pas un bloc indiffusable — `sceller` refuse, donc rien
+    /// n'entre dans l'état — mais un `None` MUET dans `proposer_a_vue` : le producteur
+    /// perd son tour, et comme l'ordre de sélection est le digest trié, les
+    /// producteurs des vues suivantes rejouent la même sélection et échouent
+    /// identiquement jusqu'à ce que le mempool change.
+    ///
+    /// # Pourquoi balayer le QUORUM plutôt que les tailles de transaction
+    ///
+    /// La sous-réserve ne mord que si le pavage laisse moins de 4 124 o sous le
+    /// plafond du sélecteur, et les tailles de transaction ne sont pas réglables au
+    /// hasard (le witness-hiding tire de l'aléa frais). Le quorum, lui, déplace le
+    /// plafond de `cout_certificat` = 3 378 o par vote — moins que 4 124. En le
+    /// balayant de 0 à `MAX_AUTORITES`, l'écart résiduel passe donc NÉCESSAIREMENT
+    /// sous la sous-réserve avant chaque décrément du nombre de transactions
+    /// retenues : le cas défaillant est atteint par construction, pas par chance.
+    ///
+    /// La seconde assertion ferme l'autre sens : une transaction de plus doit être
+    /// REFUSÉE par `sceller`. Le sélecteur s'arrête donc exactement là où le
+    /// constructeur s'arrête — l'écart entre les deux comptabilités est NUL, et non
+    /// « du bon côté ».
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "preuves gatées : --release")]
+    fn tout_lot_retenu_par_le_selecteur_est_scellable() {
+        let (_, tx) = noeud_avec_transaction();
+        let octets = tx.to_bytes();
+        // Des digests DISTINCTS : le sélecteur les trie et en lit un par transaction.
+        // Toutes les copies pesant pareil, l'ordre n'a aucune incidence sur le lot.
+        let digests: Vec<[u8; 64]> = (0..ledger::bloc::MAX_TX_PAR_BLOC)
+            .map(|i| {
+                let mut d = [0u8; 64];
+                d[..8].copy_from_slice(&(i as u64).to_le_bytes());
+                d
+            })
+            .collect();
+        let parent = [7u8; 64];
+
+        for quorum in 0..=ledger::bloc::MAX_AUTORITES {
+            let (transactions, retenus) =
+                selectionner_sous_budget(&digests, quorum, |_| Some(octets.clone()));
+            assert_eq!(
+                transactions.len(),
+                retenus.len(),
+                "quorum {quorum} : autant de digests retenus que de transactions"
+            );
+            let n = transactions.len();
+            assert!(
+                n > 0,
+                "quorum {quorum} : la réservation ne doit pas vider le bloc"
+            );
+
+            let une_de_plus = copies_de_transaction(&octets, n + 1);
+            if let Err(e) = Bloc::sceller(&parent, 1, transactions, quorum) {
+                panic!(
+                    "quorum {quorum} : lot de {n} transactions RETENU par le sélecteur \
+                     et REFUSÉ par sceller ({e}) — le producteur perdrait son tour en \
+                     silence, et le rejouerait à chaque vue"
+                );
+            }
+            assert!(
+                matches!(
+                    Bloc::sceller(&parent, 1, une_de_plus, quorum),
+                    Err(ledger::bloc::BlocConstructionError::TropDOctets { .. })
+                ),
+                "quorum {quorum} : le sélecteur s'arrête à {n} transactions, le \
+                 constructeur devrait donc refuser la {}ᵉ — sinon il RESTE de la place \
+                 et la réservation est trop large",
+                n + 1
+            );
         }
     }
 

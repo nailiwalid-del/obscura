@@ -174,20 +174,32 @@ const CADRE_NET: usize = 1024 * 1024;
 /// la compilation au lieu de laisser une note périmée.
 const _: () = assert!(MAX_TX_PAR_BLOC * TAILLE_TX_INDICATIVE > CADRE_NET);
 
-/// Surcoût d'encodage d'un bloc VIDE : `version ‖ parent ‖ hauteur ‖ n ‖ m`.
+/// Surcoût d'encodage d'un bloc VIDE : **exactement** ce que `to_bytes` rend sur un
+/// bloc sans transaction, sans émission, sans autorité, sans scellement et sans
+/// certificat — 105 o en version `0x05`.
 ///
-/// ⚠️ **SOUS-ESTIME l'en-tête réel de 24 o** en version `0x05` : le corps porte aussi
-/// `vue`, `autorites`, `changement_autorites` et `extension` (4 × 4 o), et l'encodage
-/// wire ajoute les deux préfixes de `scellement` et `certificat` (2 × 4 o) — un bloc
-/// vide pèse 105 o sur le fil, pas 81. La constante ne sert qu'à AMORCER le budget du
-/// sélecteur de mempool (`node::orchestration`), et l'écart est absorbé par les
-/// 4 128 o de marge que `Bloc::sceller` garde en plus (`TAILLE_SCELLEMENT_MAX` majore
-/// le champ réel de 726 o, et le préfixe de 4 o y est compté deux fois) : le
-/// constructeur reste donc STRICTEMENT plus sévère que le sélecteur, ce qui est le
-/// sens qui compte. Constat consigné, correction délibérément hors du lot qui a
-/// introduit `cout_certificat` — la corriger déplace la capacité utile d'un bloc et
-/// mérite son propre cycle.
-pub const SURCOUT_BLOC_VIDE: usize = 1 + TAILLE_ID + 8 + 4 + 4;
+/// ⚠️ **L'exactitude de cette constante est un invariant de SÛRETÉ, pas une
+/// coquetterie.** Elle amorce le budget du sélecteur de mempool
+/// (`node::orchestration`), qui doit retenir un lot que `Bloc::sceller` accepte
+/// ensuite. La sous-estimer laisse le sélecteur retenir un lot que le constructeur
+/// refuse — `proposer_a_vue` rend alors `None` et le producteur perd son tour sans
+/// rien dire ; l'ordre de sélection étant le digest trié, les producteurs des vues
+/// suivantes rejouent la même sélection et échouent identiquement jusqu'à ce que le
+/// mempool change. Elle valait `1 + TAILLE_ID + 8 + 4 + 4` = 81 o, soit **24 o de
+/// moins que le fil**, et cette panne était atteignable.
+///
+/// Décompte, champ par champ : `version (1) ‖ parent (TAILLE_ID) ‖ hauteur (u64) ‖
+/// vue (u32)`, puis les CINQ compteurs du corps (transactions, émissions, autorités,
+/// changement d'autorités, extension) et les DEUX préfixes de longueur que
+/// l'encodage wire ajoute pour `scellement` et `certificat` — tous à `0` sur un bloc
+/// vide, mais tous présents. `surcout_bloc_vide_est_celui_du_fil` confronte la
+/// constante à une sérialisation réelle : elle ne peut plus dériver en silence.
+pub const SURCOUT_BLOC_VIDE: usize = 1 // version
+    + TAILLE_ID // parent
+    + 8 // hauteur (u64 LE)
+    + 4 // vue (u32 LE)
+    + 5 * TAILLE_PREFIXE // compteurs du corps : tx, émissions, autorités, changement, extension
+    + 2 * TAILLE_PREFIXE; // préfixes wire : scellement, certificat (`0` = absent)
 
 /// Marge réservée à l'enveloppe applicative (`Message::Bloc` = 1 octet de tag) et à
 /// tout en-tête futur. Généreuse à dessein : la dépasser coûterait un bloc indiffusable.
@@ -244,11 +256,30 @@ pub fn cout_transaction(octets_tx: usize) -> usize {
 /// Une chaîne OUVERTE (sans autorités) n'a pas de certificat du tout : le champ y
 /// reste `0`, et `quorum_pour(0)` rend bien `0`. Réserver `8` y retirerait huit
 /// octets de capacité pour une structure qui n'existe pas.
+///
+/// # `quorum` hors borne : plafonné, et le plafond est EXACT
+///
+/// Le résultat est une RÉSERVATION DE SÛRETÉ : le rendre faux par débordement
+/// arithmétique (silencieux en `release`) reviendrait à sous-réserver, donc à
+/// rouvrir la panne que cette fonction ferme. Le masque étant un `u64`, un
+/// certificat ne peut PAS porter plus de [`MAX_AUTORITES`] votes : plafonner à cette
+/// valeur n'est pas une approximation prudente mais le coût exact du plus gros
+/// certificat encodable. Le `debug_assert!` — même discipline que
+/// [`Bloc::poser_vote`] — signale en `debug` l'appelant qui s'est trompé de comité.
 pub fn cout_certificat(quorum: usize) -> usize {
+    debug_assert!(
+        quorum <= MAX_AUTORITES,
+        "quorum hors borne : {quorum} > {MAX_AUTORITES}"
+    );
     if quorum == 0 {
         return 0;
     }
-    TAILLE_MASQUE + quorum * (TAILLE_PREFIXE + crypto::sig::TAILLE_SIGNATURE_HYBRIDE)
+    let votants = if quorum > MAX_AUTORITES {
+        MAX_AUTORITES
+    } else {
+        quorum
+    };
+    TAILLE_MASQUE + votants * (TAILLE_PREFIXE + crypto::sig::TAILLE_SIGNATURE_HYBRIDE)
 }
 
 /// `true` si deux clés de `liste` sont identiques (comparaison par encodage :
@@ -270,13 +301,30 @@ pub(crate) fn liste_a_un_doublon(liste: &[SigPublicKey]) -> bool {
 /// l'`EncNote`, chacun préfixé de sa longueur.
 const TAILLE_EMISSION_MAX: usize = DIGEST_BYTES + 4 + KEM_CT_LEN + 4 + MAX_ENC_NOTE_LEN;
 
-/// CONSIGNÉ À LA COMPILATION : une genèse PLEINE tient dans un cadre réseau.
+/// Poids WIRE maximal d'une genèse : en-tête, 512 émissions **et** 64 autorités.
+///
+/// Les autorités entrent dans le décompte au majorant de leur encodage
+/// (`TAILLE_AUTORITE_MAX`, celui du décodeur) et non à leur taille réelle : c'est la
+/// borne qu'un artefact reçu peut atteindre.
+const TAILLE_GENESE_MAX: usize = SURCOUT_BLOC_VIDE
+    + MAX_EMISSIONS_PAR_BLOC * TAILLE_EMISSION_MAX
+    + MAX_AUTORITES * (TAILLE_PREFIXE + TAILLE_AUTORITE_MAX);
+
+/// CONSIGNÉ À LA COMPILATION : une genèse PLEINE reste DIFFUSABLE.
 ///
 /// Contrairement à un bloc plein de transactions, une genèse doit pouvoir être
 /// échangée d'un bloc (fichier, message) : c'est l'artefact que deux opérateurs
-/// comparent. Si `MAX_EMISSIONS_PAR_BLOC` grossissait au point de la rendre
-/// inacheminable, la compilation casse plutôt qu'une note devienne fausse.
-const _: () = assert!(MAX_EMISSIONS_PAR_BLOC * TAILLE_EMISSION_MAX < CADRE_NET);
+/// comparent. Si `MAX_EMISSIONS_PAR_BLOC` ou `MAX_AUTORITES` grossissaient au point
+/// de la rendre inacheminable, la compilation casse plutôt qu'une note devienne
+/// fausse.
+///
+/// La borne est `MAX_OCTETS_BLOC` et non `CADRE_NET` — le cadre borne le CHIFFRÉ, et
+/// c'est `MAX_OCTETS_BLOC` que `from_bytes` opposera à ces octets. La comparaison
+/// précédente ignorait la LISTE D'AUTORITÉS (jusqu'à 262 400 o au majorant wire) :
+/// elle ne documentait donc pas la borne qu'elle prétendait garder. Le
+/// `TAILLE_SCELLEMENT_MAX` ajouté est ce que `genese_avec_autorites` réserve via
+/// `verifier_budget(0)`.
+const _: () = assert!(TAILLE_GENESE_MAX + TAILLE_SCELLEMENT_MAX <= MAX_OCTETS_BLOC);
 
 /// Erreur de décodage d'un bloc. Comme `ProvedTx::from_bytes`, c'est un point
 /// d'entrée RÉSEAU : il ne fait jamais confiance à ses octets et ne panique jamais.
@@ -305,9 +353,12 @@ pub enum BlocDecodeError {
     #[error("certificat de quorum indécodable ou hors bornes")]
     CertificatInvalide,
     /// Bloc plus lourd que le plafond de DIFFUSION. Même libellé que
-    /// [`BlocConstructionError::TropDOctets`] — même borne, aux deux extrémités : les
-    /// deux énumérations sont distinctes à dessein (l'une protège celui qui reçoit,
-    /// l'autre celui qui fabrique), la variante ne peut donc pas être partagée.
+    /// [`BlocConstructionError::TropDOctets`] et que
+    /// `proved_state::BlocRefus::TropDOctets` — même borne, aux TROIS extrémités : les
+    /// trois énumérations sont distinctes à dessein (l'une protège celui qui reçoit,
+    /// l'autre celui qui fabrique, la troisième celui qui applique), la variante ne
+    /// peut donc pas être partagée. Les libellés sont écrits à la main trois fois ;
+    /// `les_trois_libelles_de_trop_doctets_concordent` les empêche de dériver.
     #[error("bloc de {octets} o : indiffusable (borne : {MAX_OCTETS_BLOC} o)")]
     TropDOctets { octets: usize },
     #[error("scellement indécodable ou hors bornes")]
@@ -383,8 +434,11 @@ pub struct Emission {
 ///
 /// Aucune signature post-quantique n'offre l'agrégation : l'astuce des BFT
 /// modernes (BLS) repose sur des couplages, cassés par Shor. Le certificat pèse
-/// donc `popcount(masque) × 3374` octets, linéairement. C'est ce qui BORNE la
-/// taille du comité — cf. `examples/dimensionner-quorum.rs`.
+/// donc `8 + popcount(masque) × (4 + 3374)` octets — masque et préfixes de longueur
+/// compris, cf. [`cout_certificat`] qui est la seule autorité sur ce chiffre —,
+/// linéairement. C'est ce qui BORNE la taille du comité : 10 142 o à `n = 4`,
+/// 145 262 o à `n = 64`, et une transaction de moins par bloc entre les deux
+/// (`examples/dimensionner-quorum.rs`).
 ///
 /// Ni `Debug` ni `PartialEq` : `HybridSignature` ne les offre pas, et un
 /// certificat se compare par son masque et la validité de ses signatures, jamais
@@ -558,6 +612,21 @@ impl Bloc {
     /// La borne `MAX_AUTORITES` est vérifiée ICI et pas seulement au décodage — même
     /// règle que pour les émissions (une borne de `from_bytes` doit exister aussi
     /// dans le constructeur).
+    ///
+    /// # Borne d'OCTETS
+    ///
+    /// Vérifiée ici aussi, par le même `verifier_budget` que `sceller` : `from_bytes`
+    /// oppose `MAX_OCTETS_BLOC` aux octets d'une genèse comme à ceux de n'importe
+    /// quel bloc, et un constructeur qui n'aurait pas cette borne fabriquerait
+    /// l'artefact que personne ne peut relire — l'asymétrie exacte que la règle du
+    /// dépôt interdit, prise dans l'autre sens. La borne est INATTEIGNABLE à ce jour
+    /// (`TAILLE_GENESE_MAX`, consigné à la compilation), mais « inatteignable »
+    /// dépend de constantes qui bougent, pas d'un argument.
+    ///
+    /// `quorum = 0` : une genèse est l'ancre, elle ne porte ni scellement ni
+    /// certificat. Les `TAILLE_SCELLEMENT_MAX` que `verifier_budget` ajoute quand
+    /// même sont une réserve inutile ici — assumée, pour n'avoir qu'un seul chemin de
+    /// vérification de budget dans le module.
     pub fn genese_avec_autorites(
         emissions: Vec<Emission>,
         autorites: Vec<SigPublicKey>,
@@ -578,7 +647,7 @@ impl Bloc {
         if liste_a_un_doublon(&autorites) {
             return Err(BlocConstructionError::AutoriteDupliquee);
         }
-        Ok(Bloc {
+        let bloc = Bloc {
             parent: PAS_DE_PARENT,
             hauteur: 0,
             vue: 0,
@@ -589,7 +658,9 @@ impl Bloc {
             extension: Vec::new(),
             scellement: None,
             certificat: None,
-        })
+        };
+        bloc.verifier_budget(0)?;
+        Ok(bloc)
     }
 
     /// Scelle un bloc à la suite de `parent`.
@@ -649,6 +720,17 @@ impl Bloc {
     /// partira sur le fil, une fois signé par son producteur et certifié par son
     /// quorum. Le scellement est MAJORÉ (`TAILLE_SCELLEMENT_MAX`, marge FIPS), le
     /// certificat est EXACT (cf. [`cout_certificat`]).
+    ///
+    /// # L'invariant que le sélecteur de mempool doit respecter
+    ///
+    /// Le sélecteur de `node::orchestration` ne peut pas appeler ceci — il n'a pas
+    /// encore de bloc. Il additionne à la place `SURCOUT_BLOC_VIDE +
+    /// TAILLE_SCELLEMENT_MAX + cout_certificat(quorum) + Σ cout_transaction(…)`, et
+    /// cette somme vaut EXACTEMENT ce que la ligne ci-dessous mesure : l'encodage
+    /// d'un bloc de transactions est `SURCOUT_BLOC_VIDE + Σ cout_transaction(…)`,
+    /// terme à terme. Les deux tests qui portent l'égalité :
+    /// `surcout_bloc_vide_est_celui_du_fil` (ledger) et
+    /// `tout_lot_retenu_par_le_selecteur_est_scellable` (node).
     fn verifier_budget(&self, quorum: usize) -> Result<(), BlocConstructionError> {
         let octets = self.to_bytes().len() + TAILLE_SCELLEMENT_MAX + cout_certificat(quorum);
         if octets > MAX_OCTETS_BLOC {
@@ -1313,6 +1395,63 @@ mod tests {
         let sig = kp.sign(DOMAINE_SCELLEMENT, b"mesure");
         assert!(4 + sig.to_bytes().len() <= TAILLE_SCELLEMENT_MAX);
         assert!(kp.public.to_bytes().len() <= TAILLE_AUTORITE_MAX);
+    }
+
+    /// `SURCOUT_BLOC_VIDE` EST le poids d'un bloc vide sur le fil — pas un minorant.
+    ///
+    /// C'est la moitié « ledger » de l'invariant du sélecteur de mempool (cf.
+    /// `Bloc::verifier_budget`) : le sélecteur amorce son accumulateur avec cette
+    /// constante, le constructeur mesure `to_bytes()`. Toute divergence est une
+    /// sous-réserve, donc un lot retenu que `sceller` refuse, donc un tour de
+    /// production perdu en silence. La constante a valu 81 o pour 105 o réels.
+    ///
+    /// L'égalité est vérifiée sur un bloc de transactions ET sur une genèse vide :
+    /// les deux passent par le même encodage d'en-tête.
+    #[test]
+    fn surcout_bloc_vide_est_celui_du_fil() {
+        let vide = Bloc::sceller(&PAS_DE_PARENT, 1, Vec::new(), 0).expect("bloc vide");
+        assert_eq!(
+            vide.to_bytes().len(),
+            SURCOUT_BLOC_VIDE,
+            "le surcoût annoncé doit être celui du fil, à l'octet"
+        );
+        assert_eq!(
+            Bloc::genese().to_bytes().len(),
+            SURCOUT_BLOC_VIDE,
+            "la genèse vide porte le même en-tête"
+        );
+    }
+
+    /// Les trois variantes `TropDOctets` disent la MÊME chose — et rien ne le
+    /// garantissait.
+    ///
+    /// Trois énumérations (décodage, construction, application) portent une variante
+    /// homonyme, avec trois formes de champs différentes et trois libellés écrits à la
+    /// main. La séparation des énumérations est délibérée — l'une protège celui qui
+    /// reçoit, l'autre celui qui fabrique, la troisième celui qui applique — donc la
+    /// variante ne peut pas être partagée ; ce qui manquait est le garde-fou qui
+    /// empêche les trois libellés de dériver l'un de l'autre. Un opérateur qui lit
+    /// « bloc de N o : indiffusable » dans un journal ne doit pas avoir à savoir
+    /// LEQUEL des trois chemins a parlé pour comprendre ce qui s'est passé.
+    #[test]
+    fn les_trois_libelles_de_trop_doctets_concordent() {
+        let octets = MAX_OCTETS_BLOC + 7;
+        let decodage = BlocDecodeError::TropDOctets { octets }.to_string();
+        let construction = BlocConstructionError::TropDOctets { octets }.to_string();
+        let application = crate::proved_state::BlocRefus::TropDOctets {
+            octets,
+            borne: MAX_OCTETS_BLOC,
+        }
+        .to_string();
+        assert_eq!(decodage, construction, "décodage vs construction");
+        assert_eq!(construction, application, "construction vs application");
+        // Et le libellé NOMME les deux nombres : sans eux, le message ne dit pas de
+        // combien on a dépassé.
+        assert!(
+            decodage.contains(&octets.to_string())
+                && decodage.contains(&MAX_OCTETS_BLOC.to_string()),
+            "le libellé doit porter la taille reçue ET la borne : {decodage}"
+        );
     }
 
     /// Aller-retour d'un bloc VIDE (le cas le plus courant d'une chaîne au repos).
