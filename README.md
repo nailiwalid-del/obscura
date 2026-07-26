@@ -89,7 +89,9 @@ non-root) : [docs/OPERATEUR.md](docs/OPERATEUR.md).
 - [docs/PROTOCOL.md](docs/PROTOCOL.md) — spécification v0.2 (notes, nullifiers, transactions, versioning)
 - [docs/POST_QUANTIQUE.md](docs/POST_QUANTIQUE.md) — ce que « post-quantique » veut dire ici, et ce que ça ne dit pas
 - [docs/BACKEND_PQ.md](docs/BACKEND_PQ.md) — la dette de backend PQ, son évaluation et ses critères de sortie
+- [docs/MIGRATION_PQ.md](docs/MIGRATION_PQ.md) — retour d'expérience : migrer une chaîne vers FIPS 203/204 (non normatif)
 - [docs/OPERATEUR.md](docs/OPERATEUR.md) — faire tourner un nœud
+- [CONTRIBUTING.md](CONTRIBUTING.md) — licence des contributions, DCO, surface de stabilité à ne pas toucher sans ADR
 - `crates/crypto` — primitives hybrides : `hash`, `kem`, `sig`, `aead`
 - `crates/circuit` — le circuit STARK monolithe, `m`-in/`n`-out (`1..=4`)
 - `crates/ledger` — notes engagées, arbre de Merkle, nullifiers, blocs, historique
