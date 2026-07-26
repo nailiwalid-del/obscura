@@ -18,8 +18,9 @@ zeroize.workspace = true
 
 [features]
 # Mode transparent de développement (LedgerState/apply_transparent, tx en clair,
-# Merkle BLAKE3, Note owner-BLAKE3) : NON-consensus, OFF par défaut. Le build nu
-# n'expose que la surface consensus (proved_state/proved_wallet/keys).
+# Merkle BLAKE3, Note owner-BLAKE3, WalletKeys owner/nk-BLAKE3) : NON-consensus,
+# OFF par défaut. Le build nu n'expose que la surface consensus
+# (proved_state/proved_wallet, bloc, historique, mempool).
 dev-transparent = []
 
 [lints.rust]

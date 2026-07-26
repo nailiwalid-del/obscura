@@ -635,7 +635,9 @@ multi-morceaux n'est testé qu'au niveau du FORMAT (une genèse plafonne à
 
 - **Features de dev, OFF par défaut** (le build/test nu = surface CONSENSUS
   seule) : `dev-transparent` (ledger : mode transparent non-privé,
-  `apply_transparent`, `build_transparent_transaction`, `merkle`/`note` BLAKE3)
+  `apply_transparent`, `build_transparent_transaction`, `merkle`/`note` BLAKE3,
+  et `keys`/`WalletKeys` — dont l'`owner`/`nk` BLAKE3 n'est PAS l'identité du
+  consensus, qui est Rescue : `rescue::hash(Domain::Owner | Domain::Nk, …)`)
   et `dev-circuits` (circuit : sous-circuits autonomes `prove_*`/`verify_*`). La
   suite complète = `cargo test --all-features --release`. Ne jamais ajouter de
   dépendance du consensus vers du code gaté (l'invariant « défaut = consensus
@@ -669,8 +671,9 @@ multi-morceaux n'est testé qu'au niveau du FORMAT (une genèse plafonne à
   (« unmaintained » n'est pas une vulnérabilité) et critères de re-test avant le
   gel de genèse : **`docs/BACKEND_PQ.md`** fait autorité.
 - **Zeroize (durcissement #7)** : `ShieldedSecret` (volatile non élidable),
-  `WalletKeys::{shielded_secret, nk}` et les clés AEAD dérivées s'effacent au
-  drop ; les moitiés dalek (X25519/Ed25519) aussi. Les secrets **ML-KEM et
+  `WalletKeys::{shielded_secret, nk}` (mode transparent seul, cf. plus haut) et
+  les clés AEAD dérivées s'effacent au drop ; les moitiés dalek
+  (X25519/Ed25519) aussi. Les secrets **ML-KEM et
   ML-DSA aussi**, par le repli T1.5 : stockés en `Zeroizing<Vec<u8>>`, le type
   pqcrypto étant RECONSTRUIT à chaque usage (`crypto::kem`, `crypto::sig`) —
   coût, un `from_bytes` par opération, hors chemin chaud. Autorité :
