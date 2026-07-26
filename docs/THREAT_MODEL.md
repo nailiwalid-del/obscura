@@ -260,6 +260,19 @@ reproduira :
    est desormais verifie au scellement ET au decodage — et comme le cadre borne le
    CHIFFRE, le surcout de la cascade est soustrait du budget, sinon un bloc scelle a la
    borne passait le constructeur puis etait refuse une fois chiffre, 5 octets trop gros.
+   **Et la variante CERTIFICAT, un cran plus loin, a ete fermee ensuite** (audit
+   externe, re-verifie) : le budget reservait la place du scellement, PAS celle du
+   certificat de quorum. Entre `MAX_OCTETS_BLOC` et le cadre il ne reste que 132 o,
+   quand un seul vote pese 3 378 o — a `n = 64` le depassement atteignait 76 770 o, et
+   `n = 4` suffisait deja (7 178 o) des lors que le mempool porte des transactions de
+   FORMES differentes, donc de tailles differentes (≈87 Kio en 1-in/1-out contre
+   ≈108 Kio en 2-in/2-out), ce qui permet de paver le budget au plus pres du plafond.
+   Le bloc certifie etant applique LOCALEMENT avant diffusion, le producteur avancait
+   definitivement sur une chaine que personne ne pouvait recevoir. `Bloc::sceller`
+   reserve desormais `cout_certificat(quorum)` (coût exact), et la borne est verifiee
+   aux trois niveaux : constructeur, decodeur (`from_bytes`, avant tout decodage de
+   champ) et application (`appliquer_bloc`, avant scellement, quorum et STARK) — cf.
+   le tableau de `docs/ARCHITECTURE.md`.
 2. **La fenetre d'ancres etait plus courte qu'un bloc.** `RECENT_ROOTS_WINDOW = 100`
    contre `MAX_TX_PAR_BLOC = 512`, `remember_root` appele a chaque insertion : un
    bloc charge purgeait toutes les ancres. Un wallet passant environ 1,8 s a prouver

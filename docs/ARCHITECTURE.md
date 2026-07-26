@@ -83,11 +83,28 @@ Lot ORDONNÉ chaîné au parent, id = `dual_hash` non tronqué, décodage borné
 la compilation qu'un bloc plein dépasse ~50× le cadre réseau).
 
 **Plafond de scellement en OCTETS** : `MAX_OCTETS_BLOC` = cadre réseau −
-`crypto::aead::SURCOUT` − marge message (≈ 1 Mio), vérifié au scellement ET au
-décodage — `MAX_TX_PAR_BLOC` borne le NOMBRE, pas le POIDS (~9 tx de 105 Kio
-suffisent à déborder le cadre), et le cadre borne le CHIFFRÉ, d'où la
-soustraction du surcoût AEAD (sans elle, un bloc scellé à la borne était
-indiffusable de 5 o).
+`crypto::aead::SURCOUT` − marge message (= 1 048 444 o) — `MAX_TX_PAR_BLOC` borne
+le NOMBRE, pas le POIDS (~9 tx de 105 Kio suffisent à déborder le cadre), et le
+cadre borne le CHIFFRÉ, d'où la soustraction du surcoût AEAD (sans elle, un bloc
+scellé à la borne était indiffusable de 5 o).
+
+Qui borne quoi, aux **trois** niveaux — l'énumération n'est pas décorative, chaque
+niveau attrape ce que les autres ne voient pas :
+
+| niveau | fonction | ce qu'il garde |
+|---|---|---|
+| constructeur | `Bloc::sceller`, `sceller_changement` | le bloc que NOUS produisons, **scellement ET certificat de quorum compris** (`TAILLE_SCELLEMENT_MAX` majoré + `cout_certificat(quorum)` exact) |
+| décodeur | `Bloc::from_bytes` | les octets REÇUS ou relus du disque : refus si `len > MAX_OCTETS_BLOC`, avant tout décodage de champ |
+| application | `ProvedLedgerState::appliquer_bloc` | le bloc fabriqué à la main (les champs de `Bloc` sont publics), refusé avant scellement, quorum et STARK |
+| transport | `net::frame::ecrire_cadre` | le cadre CHIFFRÉ, borné à `MAX_CADRE` |
+
+Le certificat est réservé dès la SÉLECTION (`node::orchestration`, accumulateur
+amorcé à `SURCOUT_BLOC_VIDE + cout_certificat(quorum)`) : sans cela le sélecteur
+proposait un lot que le constructeur refuse ensuite, et le producteur perdait son
+tour sans le dire. Le quorum arrive par PARAMÈTRE — `ledger::bloc` ne dépend pas de
+`ProvedLedgerState`. Le coût réservé est EXACT et non majoré : réserver le majorant
+du décodeur (262 664 o) amputerait 25 % du bloc en permanence, même à `n = 4`.
+Capacité effective : 9 transactions de 105 Kio à `n = 4`, 8 à `n = 64`.
 
 **Émission (genèse seule)** : `Bloc` porte `emissions: Vec<Emission>` et la règle
 est `hauteur > 0 ⇒ emissions.is_empty()` (`BlocRefus::EmissionHorsGenese`),

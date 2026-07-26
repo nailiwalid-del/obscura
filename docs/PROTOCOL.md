@@ -6,11 +6,13 @@
 
 ## Changements v0.1 → v0.2 (suite à revue)
 
-1. **La preuve STARK est la règle de consensus** (voir `STARK_STATEMENT.md`) ; la
-   validation actuelle est un *mode transparent de développement* explicitement
-   marqué non-privé et non-sound.
+1. **La preuve STARK est la règle de consensus** (voir `STARK_STATEMENT.md`), et
+   elle l'est dans le code : `apply_proved_tx` vérifie le monolithe P1–P7. Le *mode
+   transparent de développement* — explicitement non-privé et non-sound — subsiste
+   derrière la feature `dev-transparent`, **OFF par défaut et hors consensus**.
 2. Profondeur de Merkle : **32 en consensus** (2^32 notes), 16 en mode dev uniquement.
-3. Nullifier lié au commitment : `nf = PRF_nk(rho ‖ commitment)`.
+3. Nullifier lié au commitment : `nf = rescue::hash(Domain::Nullifier, rho ‖ cm ‖ nk)`
+   (`PRF_nk(rho ‖ commitment)` en mode transparent seulement).
 4. Versioning explicite des algorithmes dans transcripts et sérialisations.
 5. Exigence de **key privacy** sur le chiffrement des notes.
 6. Séparation hash consensus / hash prouvé (voir `STARK_STATEMENT.md`).
@@ -25,12 +27,27 @@
 Note { value: u64, owner: [u8;32], rho: [u8;32], r: [u8;32] }
 ```
 
-- **Commitment** (64 o) : `dual_hash("obscura/note/v1", encode(note))`.
-  (Migrera vers Rescue-Prime en même temps que le circuit — jamais avant.)
-- **Nullifier v2** (32 o) : `PRF_nk("obscura/nullifier/v2", rho ‖ commitment)`.
-  Lier le commitment neutralise l'attaque « deux notes, même rho, même destinataire
-  → même nullifier » (un expéditeur malveillant pouvait rendre une note indépensable).
-  Même approche qu'Orchard qui lie le nullifier au contexte complet de la note.
+- **Commitment** : `rescue::note_commitment(value, owner, rho, r)` —
+  Rescue-Prime domaine-séparé (`Domain::NoteCommitment`), sur le corps
+  Goldilocks. La migration depuis `dual_hash` **est faite** : c'est le
+  commitment que le circuit prouve, donc celui du consensus.
+- **Nullifier** : `rescue::hash(Domain::Nullifier, rho ‖ commitment ‖ nk)` —
+  Rescue-Prime lui aussi, prouvé par le segment nullifier du monolithe
+  (`circuit::spend`). Lier le commitment neutralise l'attaque « deux notes, même
+  rho, même destinataire → même nullifier » (un expéditeur malveillant pouvait
+  rendre une note indépensable) ; même approche qu'Orchard, qui lie le nullifier
+  au contexte complet de la note.
+
+`dual_hash` (BLAKE3 ‖ SHA3-256) reste employé **hors du domaine prouvé** — là où
+aucune contrainte AIR ne pèse et où la double collision-résistance vaut mieux
+qu'une permutation algébrique : identifiant de bloc, `tx_digest`, somme de
+contrôle d'adresse, empreinte d'intégrité d'un fichier de wallet.
+
+> **Mode transparent** (feature `dev-transparent`, OFF par défaut, HORS
+> consensus). `ledger::note::Note` y garde l'ancien modèle :
+> commitment `dual_hash("obscura/note/v1", encode(note))` et nullifier
+> `PRF_nk("obscura/nullifier/v2", rho ‖ commitment)`. C'est du développement, pas
+> une règle de consensus, et rien de ce qui est décrit ici n'en dépend.
 
 ## Clés d'un wallet
 
@@ -58,8 +75,11 @@ d'intention d'une transaction à l'autre — donc rien n'empêche de la renouvel
 ## Adresse
 
 Adresse = (`owner = H_owner(shielded_secret)`, clé publique KEM). Jamais publiée on-chain.
-`owner` et `nk` appartiennent au domaine **« hash prouvé »** : BLAKE3 domain-séparé en
-v0.2 dev, migration vers Rescue-Prime avec le circuit (jamais figés en BLAKE3).
+`owner` et `nk` appartiennent au domaine **« hash prouvé »**, et y sont désormais
+calculés en **Rescue-Prime** domaine-séparé (`rescue::hash(Domain::Owner, …)`,
+`Domain::Nk`) : la migration est faite, ce sont les valeurs que le circuit lie. Seule
+la somme de contrôle de l'encodage textuel reste en `dual_hash` — elle protège une
+faute de frappe, pas un adversaire, et n'entre dans aucune contrainte AIR.
 
 ### Encodage textuel (`wallet::adresse`)
 
@@ -162,8 +182,9 @@ attendant le circuit. Fonctions suffixées `_transparent` dans le code.
 
 ## Arbre de Merkle
 
-- Profondeur **32** (consensus), 16 (mode dev). Hash de nœud : BLAKE3 domain-séparé
-  (migrera vers Rescue-Prime avec le circuit).
+- Profondeur **32** (consensus), 16 (mode dev). Hash de feuille et de nœud :
+  **Rescue-Prime** domaine-séparé (`Domain::MerkleLeaf`, `Domain::MerkleNode`) —
+  migration faite, c'est l'arbre dont le circuit prouve les chemins.
 - Racines récentes conservées pour valider des tx construites sur un état légèrement ancien.
 
 ## Finalité : le bloc (`VERSION_BLOC = 0x05`)
@@ -188,17 +209,31 @@ id = dual_hash("obscura/bloc/id/v1", encode_sans_signatures(bloc))   // 64 o, ja
   voyagent néanmoins sur le fil.
 - **Émission** : `hauteur > 0 ⇒ emissions.is_empty()`. La création de monnaie est
   confinée à la genèse (aucune coinbase).
-- **Bornes** : `MAX_TX_PAR_BLOC` borne le NOMBRE, `MAX_OCTETS_BLOC` (≈ 1 Mio =
-  cadre réseau − surcoût AEAD − marge message) borne le POIDS. Les deux sont
-  vérifiées **au scellement ET au décodage** — un bloc valide est toujours
-  diffusable en un cadre.
+- **Bornes** : `MAX_TX_PAR_BLOC` borne le NOMBRE, `MAX_OCTETS_BLOC`
+  (= 1 048 444 o = cadre réseau − surcoût AEAD − marge message) borne le POIDS.
+  Les deux sont vérifiées **au scellement, au décodage ET à l'application** — un
+  bloc valide est toujours diffusable en un cadre. Le poids compté au scellement
+  est celui du bloc **certifié** : `Bloc::sceller` réserve
+  `TAILLE_SCELLEMENT_MAX + cout_certificat(quorum)`, le quorum étant passé en
+  paramètre par l'appelant (celui de la hauteur produite, `quorum_a(h)`). Le coût
+  du certificat est EXACT — `8 + quorum × (4 + 3 374)` — et non majoré : à
+  `n = 64` il vaut 145 262 o, contre 262 664 o pour le majorant du décodeur, qui
+  coûterait un quart du bloc en permanence. Capacité effective : 9 transactions de
+  105 Kio à `n = 4`, 8 à `n = 64`.
 
-**Versions périmées refusées par leur nom.** Un bloc `0x03` ou `0x04` (J1-a/b —
-autorités de scellement gravées, mais sans le changement d'autorités en
-attente de J1-c) rend `BlocDecodeError::VersionPerimee`, jamais une
-réinterprétation. Même discipline que `CryptoError::AlgoPerime` et
-`VERSION_ETAT`. Aucune chaîne publique n'a existé en `0x03` ni en `0x04` : il
-n'y avait rien à migrer.
+**Versions périmées refusées par leur nom.** Un bloc `0x04` (J1-a/b — autorités de
+scellement gravées et certificat de quorum, mais sans le changement d'autorités
+attendu de J1-c) rend `BlocDecodeError::VersionPerimee`, jamais une
+réinterprétation. Même discipline que `CryptoError::AlgoPerime` et `VERSION_ETAT`.
+
+`0x03` n'est PAS nommé par le décodeur : il rend `VersionInconnue`, comme `0x02`,
+`0x01` et toute version future. C'est délibéré, et c'est le document qui a été
+corrigé plutôt que le code — aucune chaîne n'a jamais circulé en `0x03`, et un
+décodeur n'a pas à connaître un format qu'il n'a jamais eu à recevoir. Nommer
+`VersionPerimee` a un coût de maintenance (une constante par version morte) : il
+n'est payé que pour la version immédiatement antérieure, celle qu'un opérateur
+peut réellement avoir sur son disque. Aucune chaîne publique n'a existé en `0x03`
+ni en `0x04` : il n'y avait rien à migrer dans les deux cas.
 
 ### Élection de producteur et vue
 
@@ -494,8 +529,9 @@ cadrage réseau — longueur préfixée, borne anti-DoS — est celui de `net::f
   est CALCULÉ sur `MAX_CADRE − surcoût AEAD − en-tête` : le cadrage borne le CHIFFRÉ.
 - `DemandeBloc { hauteur: u64 }` / réponse `Bloc` — **rattrapage** d'un nœud qui a manqué
   une hauteur (même discipline : un seul champ, débit par fréquence). Un bloc est borné
-  en OCTETS au scellement ET au décodage (`MAX_OCTETS_BLOC` = cadre réseau − surcoût
-  AEAD − marge message, ≈ 1 Mio) : un bloc valide est toujours diffusable en un cadre.
+  en OCTETS au scellement, au décodage ET à l'application (`MAX_OCTETS_BLOC` = cadre
+  réseau − surcoût AEAD − marge message = 1 048 444 o ; au scellement, certificat de
+  quorum compris) : un bloc valide est toujours diffusable en un cadre.
 
 Côté wallet, la BOUCLE (`node::client`) demande `hauteur = prochaine_hauteur()`,
 rassemble tous les morceaux du bloc, les rejoue en UNE fois (`Wallet::synchroniser`),
