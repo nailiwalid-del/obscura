@@ -2,15 +2,18 @@
 
 pub mod bloc;
 pub mod historique;
-pub mod keys;
 pub mod mempool;
 pub mod proved_state;
 pub mod proved_wallet;
 
 // Mode transparent de développement (feature `dev-transparent`, OFF par défaut) :
-// non-consensus. `merkle` (BLAKE3) et `note` (owner BLAKE3) ne sont utilisés QUE
-// par ce mode — le chemin prouvé passe par `proved_hash::ProvedMerkleTree` et
-// `circuit::SpendNote`.
+// non-consensus. `merkle` (BLAKE3), `note` (owner BLAKE3) et `keys` (owner/nk
+// BLAKE3) ne sont utilisés QUE par ce mode — le chemin prouvé passe par
+// `proved_hash::ProvedMerkleTree`, `circuit::SpendNote` et l'identité Rescue
+// (`rescue::hash(Domain::Owner | Domain::Nk, …)`, cf. `circuit::key`), que le
+// wallet dérive lui-même sans passer par `keys`.
+#[cfg(feature = "dev-transparent")]
+pub mod keys;
 #[cfg(feature = "dev-transparent")]
 pub mod merkle;
 #[cfg(feature = "dev-transparent")]

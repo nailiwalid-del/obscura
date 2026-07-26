@@ -1,5 +1,12 @@
 //! Clés d'un wallet : identité shielded (secret racine), signature (enveloppe
 //! d'intention), réception (KEM hybride), nullifier.
+//!
+//! MODE TRANSPARENT (dev uniquement, feature `dev-transparent`) : ne compile pas
+//! dans le build nu. L'identité du CONSENSUS n'est pas celle-ci — elle est
+//! Rescue-Prime (`rescue::hash(Domain::Owner | Domain::Nk, …)`, prouvée par le
+//! bloc clé du monolithe `circuit::monolith`) et le wallet du chemin prouvé la
+//! dérive lui-même, sans jamais passer par ce module (cf. `crates/wallet/src/lib.rs`
+//! et `proved_wallet`).
 
 use crypto::hash;
 use crypto::kem::{KemKeypair, KemPublicKey};
@@ -8,13 +15,16 @@ use rand_core::{OsRng, RngCore};
 
 pub struct WalletKeys {
     /// Signature hybride : enveloppe d'intention / anti-malléabilité sur
-    /// `tx_digest`. PAS une autorisation d'ownership tant qu'elle n'est pas liée
-    /// au `shielded_secret` (décision de circuit, phase 3).
+    /// `tx_digest`. PAS une autorisation d'ownership : la décision de circuit est
+    /// tranchée et le chemin prouvé ne lie NI `tx_digest` NI `signer` au
+    /// `shielded_secret` — l'ownership vient de la preuve, pas de la signature
+    /// (cf. `circuit::tx`).
     pub spend: SigKeypair,
     /// KEM hybride : réception et scan des notes.
     pub receive: KemKeypair,
-    /// Secret racine de l'identité shielded (32 o), JAMAIS publié : témoin du
-    /// circuit STARK. `owner` et `nk` en dérivent (P2/P4).
+    /// Secret racine de l'identité shielded (32 o), JAMAIS publié. `owner` et `nk`
+    /// en dérivent (P2/P4). Le témoin du circuit STARK est son homologue prouvé,
+    /// `proved_hash::digest::ShieldedSecret` (felts), pas ces 32 octets.
     shielded_secret: [u8; 32],
     /// Clé de nullifier, dérivée du secret shielded (P4). Nécessaire au calcul
     /// des nullifiers ; ne doit pas être partagée.
@@ -41,19 +51,25 @@ pub struct Address {
     pub kem_pk: KemPublicKey,
 }
 
-/// Identité de la note à partir du secret shielded (P2 : `owner = H(secret)`).
+/// Identité de la note à partir du secret shielded (P2 : `owner = H(secret)`),
+/// version MODE TRANSPARENT.
 ///
-/// HASH PROUVÉ (domaine consensus-en-circuit) : cette relation sera vérifiée par
-/// le STARK. Elle MIGRERA vers Rescue-Prime EN MÊME TEMPS que le circuit — jamais
-/// avant (même règle que merkle.rs / note.rs). BLAKE3 ici = échafaudage de dev,
-/// PAS un KDF wallet figé.
+/// ⚠️ Ce n'est PAS le hash du consensus. La migration vers Rescue-Prime a eu lieu
+/// côté circuit : l'`owner` prouvé est `rescue::hash(Domain::Owner, s)` sur les
+/// felts du secret (`circuit::monolith`, et `circuit::key` en version autonome).
+/// Cette dérivation-ci ne migrera JAMAIS — elle ne sert qu'au mode transparent et
+/// disparaîtra avec lui.
 pub fn owner_from_secret(shielded_secret: &[u8; 32]) -> [u8; 32] {
     hash::blake3_domain("obscura/owner/v2", shielded_secret)
 }
 
-/// Clé de nullifier à partir du secret shielded (P4 : `nk` lié à l'autorité).
+/// Clé de nullifier à partir du secret shielded (P4 : `nk` lié à l'autorité),
+/// version MODE TRANSPARENT.
 ///
-/// HASH PROUVÉ : voir `owner_from_secret`. Migre vers Rescue-Prime avec le circuit.
+/// ⚠️ Voir `owner_from_secret` : le `nk` du consensus est
+/// `rescue::hash(Domain::Nk, s)`, lié au MÊME secret que l'owner par la contrainte
+/// de liaison du bloc clé (ligne 0, cf. `circuit::key`). Cette dérivation-ci ne
+/// migrera JAMAIS.
 pub fn nk_from_secret(shielded_secret: &[u8; 32]) -> [u8; 32] {
     hash::blake3_domain("obscura/nk/v2", shielded_secret)
 }
@@ -104,8 +120,9 @@ mod tests {
         assert_eq!(nk_from_secret(&s), hash::blake3_domain("obscura/nk/v2", &s));
         assert_ne!(owner_from_secret(&s), nk_from_secret(&s));
 
-        // Vecteurs hex figés : gèlent les domaines "obscura/{owner,nk}/v2" (hash prouvé)
-        // jusqu'à la migration Rescue-Prime. Toute rupture ici = changement de consensus.
+        // Vecteurs hex figés : gèlent les domaines "obscura/{owner,nk}/v2" du mode
+        // transparent. HORS CONSENSUS — une rupture ici ne casse pas la chaîne (dont
+        // l'identité est Rescue), seulement les fixtures et scénarios de dev.
         assert_eq!(
             hex::encode(owner_from_secret(&s)),
             "5b80b1f4e8ba8686ad9a3286de1792547bd139bbe9d6c5a9c2380e888e3a41c7"
