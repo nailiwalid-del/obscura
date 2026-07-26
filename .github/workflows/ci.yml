@@ -37,6 +37,45 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Provenance des contributions (CONTRIBUTING.md) : chaque commit d'une PR doit
+  # porter un `Signed-off-by`. C'est ce qu'atteste le DCO — que le contributeur
+  # avait le DROIT de soumettre ce code. Ce n'est pas une question de licence
+  # (l'entrant permissif ne ferme aucune option) mais de provenance, et c'est
+  # exactement ce qu'une revue de chaîne d'approvisionnement interroge.
+  #
+  # Placé en premier et sans compilation : inutile de dépenser vingt minutes de
+  # runner sur une PR qu'il faudra de toute façon renvoyer pour une ligne.
+  #
+  # Les commits de FUSION sont exclus — ils n'ont pas d'auteur au sens du DCO.
+  dco:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          # Historique complet : le clone superficiel par défaut ne contient pas
+          # la plage base..head, et `git rev-list` échouerait silencieusement.
+          fetch-depth: 0
+
+      - name: signature DCO de chaque commit
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          TETE: ${{ github.event.pull_request.head.sha }}
+        run: |
+          statut=0
+          for c in $(git rev-list --no-merges "$BASE..$TETE"); do
+            if ! git show -s --format=%B "$c" | grep -qE '^Signed-off-by: .+ <.+@.+>'; then
+              echo "::error::commit sans Signed-off-by : $(git show -s --format='%h %s' "$c")"
+              statut=1
+            fi
+          done
+          if [ "$statut" -ne 0 ]; then
+            echo "Voir CONTRIBUTING.md. Correctif :"
+            echo "  git rebase --signoff $BASE && git push --force-with-lease"
+            exit 1
+          fi
+          echo "Tous les commits portent un Signed-off-by."
+
   # Les trois contrôles rapides tiennent dans un seul job : trois runners qui
   # démarrent, c'est trois fois le coût fixe de démarrage et de cache pour
   # quelques secondes de travail utile.
