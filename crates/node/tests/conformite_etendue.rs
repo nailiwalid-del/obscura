@@ -506,7 +506,11 @@ fn generer_la_fixture_etendue() {
         cles[0].public.to_bytes(),
         "le producteur de la hauteur 1 en vue 0 doit être l'autorité 0"
     );
-    let mut bloc1 = Bloc::sceller(&genese.id(), 1, vec![tx]).expect("scellement refusé");
+    // Le quorum de la hauteur produite entre dans le budget du scellement (place
+    // réservée au certificat) : le générateur scelle sous les mêmes contraintes qu'un
+    // producteur réel. Les octets de la fixture, eux, sont inchangés.
+    let quorum = etat.quorum_a(1);
+    let mut bloc1 = Bloc::sceller(&genese.id(), 1, vec![tx], quorum).expect("scellement refusé");
     bloc1.signer_scellement(&cles[0]);
     for (i, cle) in cles.iter().enumerate().take(3) {
         bloc1.signer_vote(i, cle);
@@ -517,7 +521,8 @@ fn generer_la_fixture_etendue() {
     // 7. LE MÊME BLOC, RÉDUIT À DEUX VOTES. Même parent, même hauteur, même
     //    transaction : seul le certificat change, donc l'identifiant est identique.
     let tx_bis = circuit::ProvedTx::from_bytes(&tx_octets).expect("aller-retour wire");
-    let mut sous_quorum = Bloc::sceller(&genese.id(), 1, vec![tx_bis]).expect("scellement refusé");
+    let mut sous_quorum =
+        Bloc::sceller(&genese.id(), 1, vec![tx_bis], quorum).expect("scellement refusé");
     sous_quorum.signer_scellement(&cles[0]);
     for (i, cle) in cles.iter().enumerate().take(2) {
         sous_quorum.signer_vote(i, cle);

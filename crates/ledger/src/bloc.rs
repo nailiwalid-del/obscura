@@ -175,6 +175,18 @@ const CADRE_NET: usize = 1024 * 1024;
 const _: () = assert!(MAX_TX_PAR_BLOC * TAILLE_TX_INDICATIVE > CADRE_NET);
 
 /// Surcoût d'encodage d'un bloc VIDE : `version ‖ parent ‖ hauteur ‖ n ‖ m`.
+///
+/// ⚠️ **SOUS-ESTIME l'en-tête réel de 24 o** en version `0x05` : le corps porte aussi
+/// `vue`, `autorites`, `changement_autorites` et `extension` (4 × 4 o), et l'encodage
+/// wire ajoute les deux préfixes de `scellement` et `certificat` (2 × 4 o) — un bloc
+/// vide pèse 105 o sur le fil, pas 81. La constante ne sert qu'à AMORCER le budget du
+/// sélecteur de mempool (`node::orchestration`), et l'écart est absorbé par les
+/// 4 128 o de marge que `Bloc::sceller` garde en plus (`TAILLE_SCELLEMENT_MAX` majore
+/// le champ réel de 726 o, et le préfixe de 4 o y est compté deux fois) : le
+/// constructeur reste donc STRICTEMENT plus sévère que le sélecteur, ce qui est le
+/// sens qui compte. Constat consigné, correction délibérément hors du lot qui a
+/// introduit `cout_certificat` — la corriger déplace la capacité utile d'un bloc et
+/// mérite son propre cycle.
 pub const SURCOUT_BLOC_VIDE: usize = 1 + TAILLE_ID + 8 + 4 + 4;
 
 /// Marge réservée à l'enveloppe applicative (`Message::Bloc` = 1 octet de tag) et à
@@ -199,9 +211,44 @@ pub const MAX_OCTETS_BLOC: usize = CADRE_NET - crypto::aead::SURCOUT - MARGE_MES
 const _: () = assert!(MAX_OCTETS_BLOC < CADRE_NET);
 const _: () = assert!(SURCOUT_BLOC_VIDE < MAX_OCTETS_BLOC);
 
+/// Préfixe de longueur (`u32` LE) devant tout champ de taille variable — c'est
+/// l'encodage utilisé partout dans ce module, transactions comme signatures.
+const TAILLE_PREFIXE: usize = core::mem::size_of::<u32>();
+
+/// Le MASQUE de votants d'un certificat (`u64` LE) — cf. [`Certificat::to_bytes`].
+const TAILLE_MASQUE: usize = core::mem::size_of::<u64>();
+
 /// Coût sérialisé d'une transaction DANS un bloc : sa longueur + son préfixe de 4 o.
 pub fn cout_transaction(octets_tx: usize) -> usize {
-    4 + octets_tx
+    TAILLE_PREFIXE + octets_tx
+}
+
+/// Coût sérialisé d'un CERTIFICAT DE QUORUM de `quorum` votes, dans le bloc.
+///
+/// C'est exactement ce que [`Bloc::to_bytes`] gagne en posant le certificat :
+/// `masque (8) ‖ [len(sigᵢ) (4) ‖ sigᵢ]` — le préfixe de longueur du champ
+/// lui-même est déjà présent sous forme de `0` dans un bloc sans certificat, il
+/// n'entre donc pas dans ce coût.
+///
+/// # Pourquoi le coût EXACT et pas le majorant du décodeur
+///
+/// `from_bytes` majore le champ à `8 + MAX_AUTORITES × (4 + TAILLE_SCELLEMENT_MAX)`
+/// = 262 664 o. Réserver ce majorant amputerait **un quart de la capacité d'un bloc
+/// (25,05 %) en permanence, même à `n = 4`** — et invaliderait l'analyse de budget
+/// d'ADR-002.
+/// Le coût exact est sûr parce que le quorum à la hauteur du scellement est CONNU :
+/// un changement d'autorités ne prend effet qu'à `h + K` (J1-c).
+///
+/// # `quorum = 0` ⇒ coût NUL
+///
+/// Une chaîne OUVERTE (sans autorités) n'a pas de certificat du tout : le champ y
+/// reste `0`, et `quorum_pour(0)` rend bien `0`. Réserver `8` y retirerait huit
+/// octets de capacité pour une structure qui n'existe pas.
+pub fn cout_certificat(quorum: usize) -> usize {
+    if quorum == 0 {
+        return 0;
+    }
+    TAILLE_MASQUE + quorum * (TAILLE_PREFIXE + crypto::sig::TAILLE_SIGNATURE_HYBRIDE)
 }
 
 /// `true` si deux clés de `liste` sont identiques (comparaison par encodage :
@@ -558,10 +605,24 @@ impl Bloc {
     /// Deux bornes, toutes deux vérifiées ICI et pas seulement au décodage (même
     /// discipline que `genese_avec`) : le NOMBRE de transactions, et surtout leur
     /// POIDS — un bloc plus lourd qu'un cadre réseau ne peut atteindre personne.
+    ///
+    /// # `quorum` : pourquoi un paramètre, et pas `0` en dur
+    ///
+    /// Ce qui part sur le fil n'est pas ce bloc mais le bloc CERTIFIÉ, `2f+1`
+    /// signatures plus lourd. Ne réserver que la place du scellement laissait sceller
+    /// un bloc que le certificat rendait indiffusable — et le producteur l'appliquait
+    /// AVANT de découvrir qu'il ne pouvait pas le diffuser, sur un état append-only.
+    ///
+    /// Le quorum arrive donc par PARAMÈTRE : `ledger::bloc` ne doit pas dépendre de
+    /// `ProvedLedgerState` (contrainte d'architecture), et l'appelant est de toute
+    /// façon le seul à savoir à quelle hauteur il scelle — `quorum_a(h)` peut
+    /// différer de `quorum_requis()` à la hauteur d'effet d'une reconfiguration.
+    /// `0` sur une chaîne OUVERTE : elle n'a pas de certificat.
     pub fn sceller(
         parent: &[u8; TAILLE_ID],
         hauteur: u64,
         transactions: Vec<ProvedTx>,
+        quorum: usize,
     ) -> Result<Self, BlocConstructionError> {
         if transactions.len() > MAX_TX_PAR_BLOC {
             return Err(BlocConstructionError::TropDeTransactions {
@@ -580,13 +641,20 @@ impl Bloc {
             scellement: None,
             certificat: None,
         };
-        // Budget vérifié SCELLEMENT COMPRIS : le champ pèse ~4,7 Kio une fois signé,
-        // et la borne doit couvrir le bloc tel qu'il partira sur le fil.
-        let octets = bloc.to_bytes().len() + TAILLE_SCELLEMENT_MAX;
+        bloc.verifier_budget(quorum)?;
+        Ok(bloc)
+    }
+
+    /// Budget vérifié SCELLEMENT ET CERTIFICAT COMPRIS : le bloc doit tenir tel qu'il
+    /// partira sur le fil, une fois signé par son producteur et certifié par son
+    /// quorum. Le scellement est MAJORÉ (`TAILLE_SCELLEMENT_MAX`, marge FIPS), le
+    /// certificat est EXACT (cf. [`cout_certificat`]).
+    fn verifier_budget(&self, quorum: usize) -> Result<(), BlocConstructionError> {
+        let octets = self.to_bytes().len() + TAILLE_SCELLEMENT_MAX + cout_certificat(quorum);
         if octets > MAX_OCTETS_BLOC {
             return Err(BlocConstructionError::TropDOctets { octets });
         }
-        Ok(bloc)
+        Ok(())
     }
 
     /// Scelle un bloc de RECONFIGURATION : vide de transactions, portant la nouvelle
@@ -596,10 +664,15 @@ impl Bloc {
     /// Les bornes (non vide, taille, doublon, poids diffusable) sont vérifiées ICI et
     /// pas seulement au décodage — même discipline que `genese_avec_autorites` : une
     /// borne de `from_bytes` doit exister aussi dans le constructeur.
+    ///
+    /// `quorum` : celui du comité qui certifiera CE bloc, comme pour [`Bloc::sceller`]
+    /// — donc l'ANCIEN comité, celui qui vote sur la nouvelle liste (le changement ne
+    /// prend effet qu'à `h + K`).
     pub fn sceller_changement(
         parent: &[u8; TAILLE_ID],
         hauteur: u64,
         nouvelles: Vec<SigPublicKey>,
+        quorum: usize,
     ) -> Result<Self, BlocConstructionError> {
         if nouvelles.is_empty() {
             return Err(BlocConstructionError::ChangementListeVide);
@@ -624,12 +697,9 @@ impl Bloc {
             scellement: None,
             certificat: None,
         };
-        // Budget vérifié SCELLEMENT COMPRIS et LISTE COMPRISE (point 7 de la revue) :
-        // la nouvelle liste pèse jusqu'à ~127 Kio, le bloc doit rester diffusable.
-        let octets = bloc.to_bytes().len() + TAILLE_SCELLEMENT_MAX;
-        if octets > MAX_OCTETS_BLOC {
-            return Err(BlocConstructionError::TropDOctets { octets });
-        }
+        // Budget vérifié LISTE COMPRISE (point 7 de la revue) : la nouvelle liste pèse
+        // jusqu'à ~127 Kio, et le certificat de l'ancien comité jusqu'à ~145 Kio.
+        bloc.verifier_budget(quorum)?;
         Ok(bloc)
     }
 
@@ -778,6 +848,15 @@ impl Bloc {
     /// Décode un bloc reçu du réseau. Borné et validant : jamais de panique.
     pub fn from_bytes(b: &[u8]) -> Result<Self, BlocDecodeError> {
         use crypto::decode::{lire_u32, lire_u64, prendre, tableau};
+
+        // PLAFOND DE DIFFUSION, refusé AVANT tout décodage de champ — donc avant la
+        // moindre allocation. Un bloc au-delà de `MAX_OCTETS_BLOC` ne peut être
+        // retransmis par personne : l'accepter ici, c'est accepter de relire du
+        // disque, ou de recevoir dans la fenêtre de 132 o que le cadre réseau laisse
+        // au-dessus du plafond, un bloc dont la chaîne serait déjà coupée.
+        if b.len() > MAX_OCTETS_BLOC {
+            return Err(BlocDecodeError::TropDOctets { octets: b.len() });
+        }
         let mut pos = 0usize;
 
         let version = prendre(b, &mut pos, 1)?[0];
@@ -956,9 +1035,9 @@ mod tests {
     #[test]
     fn id_lie_le_chainage() {
         let g = Bloc::genese().id();
-        let a = Bloc::sceller(&g, 1, Vec::new()).unwrap();
-        let b = Bloc::sceller(&g, 2, Vec::new()).unwrap();
-        let c = Bloc::sceller(&[9u8; TAILLE_ID], 1, Vec::new()).unwrap();
+        let a = Bloc::sceller(&g, 1, Vec::new(), 0).unwrap();
+        let b = Bloc::sceller(&g, 2, Vec::new(), 0).unwrap();
+        let c = Bloc::sceller(&[9u8; TAILLE_ID], 1, Vec::new(), 0).unwrap();
         assert_ne!(a.id(), b.id(), "la hauteur doit entrer dans l'identifiant");
         assert_ne!(a.id(), c.id(), "le parent doit entrer dans l'identifiant");
     }
@@ -995,7 +1074,7 @@ mod tests {
     fn scellement_sur_le_fil_mais_hors_de_lidentifiant() {
         let identite = SigKeypair::generate();
         let parent = Bloc::genese().id();
-        let mut bloc = Bloc::sceller(&parent, 1, Vec::new()).unwrap();
+        let mut bloc = Bloc::sceller(&parent, 1, Vec::new(), 0).unwrap();
         let id_avant = bloc.id();
 
         bloc.signer_scellement(&identite);
@@ -1018,7 +1097,7 @@ mod tests {
         );
 
         // Et un bloc NON scellé ne vérifie jamais.
-        let nu = Bloc::sceller(&parent, 1, Vec::new()).unwrap();
+        let nu = Bloc::sceller(&parent, 1, Vec::new(), 0).unwrap();
         assert!(!nu.verifier_scellement(&identite.public));
     }
 
@@ -1156,7 +1235,7 @@ mod tests {
     #[test]
     fn certificat_sur_le_fil_hors_de_lidentifiant() {
         let genese = Bloc::genese();
-        let mut b = Bloc::sceller(&genese.id(), 1, Vec::new()).unwrap();
+        let mut b = Bloc::sceller(&genese.id(), 1, Vec::new(), 0).unwrap();
         let sans = b.id();
         b.certificat = Some(certificat_de_test(0b111, 3));
         assert_eq!(b.id(), sans, "le certificat n'entre pas dans l'identifiant");
@@ -1182,8 +1261,8 @@ mod tests {
     #[test]
     fn la_vue_entre_dans_l_identifiant() {
         let genese = Bloc::genese();
-        let a = Bloc::sceller(&genese.id(), 1, Vec::new()).unwrap();
-        let mut b = Bloc::sceller(&genese.id(), 1, Vec::new()).unwrap();
+        let a = Bloc::sceller(&genese.id(), 1, Vec::new(), 0).unwrap();
+        let mut b = Bloc::sceller(&genese.id(), 1, Vec::new(), 0).unwrap();
         b.vue = 1;
         assert_ne!(a.id(), b.id(), "la vue doit changer l'identifiant");
     }
@@ -1192,7 +1271,7 @@ mod tests {
     #[test]
     fn aller_retour_avec_vue() {
         let genese = Bloc::genese();
-        let mut b = Bloc::sceller(&genese.id(), 1, Vec::new()).unwrap();
+        let mut b = Bloc::sceller(&genese.id(), 1, Vec::new(), 0).unwrap();
         b.vue = 7;
         let relu = Bloc::from_bytes(&b.to_bytes()).expect("décodable");
         assert_eq!(relu.vue, 7);
@@ -1201,14 +1280,14 @@ mod tests {
 
     #[test]
     fn extension_reservee_et_verrouillee_vide() {
-        let bloc = Bloc::sceller(&PAS_DE_PARENT, 1, Vec::new()).unwrap();
+        let bloc = Bloc::sceller(&PAS_DE_PARENT, 1, Vec::new(), 0).unwrap();
         assert!(bloc.extension.is_empty());
         let relu = Bloc::from_bytes(&bloc.to_bytes()).expect("bloc décodable");
         assert!(relu.extension.is_empty());
         assert_eq!(relu.id(), bloc.id());
 
         // Bloc HOSTILE à extension non vide : refusé au décodage.
-        let mut hostile = Bloc::sceller(&PAS_DE_PARENT, 1, Vec::new()).unwrap();
+        let mut hostile = Bloc::sceller(&PAS_DE_PARENT, 1, Vec::new(), 0).unwrap();
         hostile.extension = vec![1, 2, 3];
         assert!(matches!(
             Bloc::from_bytes(&hostile.to_bytes()),
@@ -1216,7 +1295,7 @@ mod tests {
         ));
 
         // Et le champ est ENGAGÉ par l'identifiant.
-        let mut autre = Bloc::sceller(&PAS_DE_PARENT, 1, Vec::new()).unwrap();
+        let mut autre = Bloc::sceller(&PAS_DE_PARENT, 1, Vec::new(), 0).unwrap();
         autre.extension = vec![9];
         assert_ne!(
             autre.id(),
@@ -1239,7 +1318,7 @@ mod tests {
     /// Aller-retour d'un bloc VIDE (le cas le plus courant d'une chaîne au repos).
     #[test]
     fn aller_retour_bloc_vide() {
-        let bloc = Bloc::sceller(&[3u8; TAILLE_ID], 7, Vec::new()).unwrap();
+        let bloc = Bloc::sceller(&[3u8; TAILLE_ID], 7, Vec::new(), 0).unwrap();
         let r = Bloc::from_bytes(&bloc.to_bytes()).expect("aller-retour");
         assert_eq!(r.parent, bloc.parent);
         assert_eq!(r.hauteur, 7);
@@ -1314,7 +1393,7 @@ mod tests {
             Err(BlocDecodeError::Tronque)
         ));
 
-        let bon = Bloc::sceller(&[1u8; TAILLE_ID], 3, Vec::new())
+        let bon = Bloc::sceller(&[1u8; TAILLE_ID], 3, Vec::new(), 0)
             .unwrap()
             .to_bytes();
         assert!(matches!(
@@ -1410,6 +1489,58 @@ mod tests {
         assert!(
             pour(10) > MAX_OCTETS_BLOC,
             "10 doivent déborder : c'est précisément pourquoi le plafond existe,              MAX_TX_PAR_BLOC = {MAX_TX_PAR_BLOC} ne bornant que le NOMBRE"
+        );
+    }
+
+    /// NON-RÉGRESSION DE CAPACITÉ : réserver la place du certificat ne vide pas le
+    /// bloc.
+    ///
+    /// La réservation est le prix de la diffusabilité, et il fallait vérifier qu'elle
+    /// reste un prix et non une amputation. À `n = 4` (quorum 3, certificat 10 142 o)
+    /// la capacité ne bouge PAS : neuf transactions, comme avant le correctif. À
+    /// `n = 64` (quorum 43, 145 262 o) elle passe de neuf à huit — une transaction,
+    /// contre une partition définitive.
+    ///
+    /// La dernière assertion tient le raisonnement de la décision : réserver le
+    /// MAJORANT du décodeur plutôt que le coût exact aurait coûté DEUX transactions,
+    /// à toute valeur de `n`, même sur une chaîne à quatre autorités.
+    #[test]
+    fn la_reservation_du_certificat_ne_vide_pas_le_bloc() {
+        let tient = |n_tx: usize, reserve: usize| {
+            SURCOUT_BLOC_VIDE
+                + n_tx * cout_transaction(TAILLE_TX_INDICATIVE)
+                + TAILLE_SCELLEMENT_MAX
+                + reserve
+                <= MAX_OCTETS_BLOC
+        };
+        // Chaîne OUVERTE : pas de certificat, donc pas un octet réservé.
+        assert_eq!(
+            cout_certificat(0),
+            0,
+            "une chaîne ouverte n'a pas de quorum"
+        );
+        assert!(
+            tient(9, 0) && !tient(10, 0),
+            "9 transactions sans certificat"
+        );
+        // n = 4 ⇒ quorum 3 : capacité INCHANGÉE.
+        assert!(
+            tient(9, cout_certificat(3)),
+            "9 transactions tiennent à n = 4"
+        );
+        assert!(!tient(10, cout_certificat(3)));
+        // n = 64 ⇒ quorum 43 : une transaction de moins, pas un bloc vide.
+        assert!(
+            tient(8, cout_certificat(43)),
+            "8 transactions tiennent à n = 64"
+        );
+        assert!(!tient(9, cout_certificat(43)));
+        // Le majorant du décodeur (cf. `from_bytes`), lui, en coûterait deux.
+        let majorant = TAILLE_MASQUE + MAX_AUTORITES * (TAILLE_PREFIXE + TAILLE_SCELLEMENT_MAX);
+        assert!(
+            !tient(8, majorant),
+            "réserver le majorant ({majorant} o) coûterait deux transactions, en \
+             permanence et pour tout n — c'est la raison du coût EXACT"
         );
     }
 
@@ -1637,7 +1768,7 @@ mod tests {
     /// pas être refusé pour inflation par accident.
     #[test]
     fn un_bloc_scelle_na_jamais_demission() {
-        let b = Bloc::sceller(&[1u8; TAILLE_ID], 9, Vec::new()).unwrap();
+        let b = Bloc::sceller(&[1u8; TAILLE_ID], 9, Vec::new(), 0).unwrap();
         assert!(b.emissions.is_empty());
     }
 
@@ -1651,8 +1782,8 @@ mod tests {
     fn changement_dans_lidentifiant_et_sur_le_fil() {
         let a = SigKeypair::generate().public;
         let b = SigKeypair::generate().public;
-        let sans = Bloc::sceller(&Bloc::genese().id(), 1, Vec::new()).unwrap();
-        let mut avec = Bloc::sceller(&Bloc::genese().id(), 1, Vec::new()).unwrap();
+        let sans = Bloc::sceller(&Bloc::genese().id(), 1, Vec::new(), 0).unwrap();
+        let mut avec = Bloc::sceller(&Bloc::genese().id(), 1, Vec::new(), 0).unwrap();
         avec.changement_autorites = Some(vec![a.clone(), b.clone()]);
         assert_ne!(sans.id(), avec.id(), "le changement doit entrer dans l'id");
 
@@ -1668,7 +1799,7 @@ mod tests {
     /// bien `None` (jamais `Some(vec![])`).
     #[test]
     fn absence_de_changement_decode_none() {
-        let b = Bloc::sceller(&Bloc::genese().id(), 1, Vec::new()).unwrap();
+        let b = Bloc::sceller(&Bloc::genese().id(), 1, Vec::new(), 0).unwrap();
         assert!(b.changement_autorites.is_none());
         let relu = Bloc::from_bytes(&b.to_bytes()).unwrap();
         assert!(relu.changement_autorites.is_none());
@@ -1678,7 +1809,7 @@ mod tests {
     #[test]
     fn changement_trop_dautorites_refuse_au_decodage() {
         let pk = SigKeypair::generate().public;
-        let mut b = Bloc::sceller(&Bloc::genese().id(), 1, Vec::new()).unwrap();
+        let mut b = Bloc::sceller(&Bloc::genese().id(), 1, Vec::new(), 0).unwrap();
         b.changement_autorites = Some((0..MAX_AUTORITES + 1).map(|_| pk.clone()).collect());
         assert!(matches!(
             Bloc::from_bytes(&b.to_bytes()),
@@ -1691,7 +1822,7 @@ mod tests {
     #[test]
     fn changement_doublon_refuse_au_decodage() {
         let pk = SigKeypair::generate().public;
-        let mut b = Bloc::sceller(&Bloc::genese().id(), 1, Vec::new()).unwrap();
+        let mut b = Bloc::sceller(&Bloc::genese().id(), 1, Vec::new(), 0).unwrap();
         b.changement_autorites = Some(vec![pk.clone(), pk.clone()]);
         assert!(matches!(
             Bloc::from_bytes(&b.to_bytes()),
@@ -1716,8 +1847,8 @@ mod tests {
     fn sceller_changement_construit_un_bloc_de_reconfig() {
         let a = SigKeypair::generate().public;
         let b = SigKeypair::generate().public;
-        let bloc =
-            Bloc::sceller_changement(&Bloc::genese().id(), 5, vec![a.clone(), b.clone()]).unwrap();
+        let bloc = Bloc::sceller_changement(&Bloc::genese().id(), 5, vec![a.clone(), b.clone()], 0)
+            .unwrap();
         assert_eq!(bloc.hauteur, 5);
         assert!(
             bloc.transactions.is_empty(),
@@ -1733,7 +1864,7 @@ mod tests {
     #[test]
     fn sceller_changement_liste_vide_refusee() {
         assert!(matches!(
-            Bloc::sceller_changement(&Bloc::genese().id(), 1, Vec::new()),
+            Bloc::sceller_changement(&Bloc::genese().id(), 1, Vec::new(), 0),
             Err(BlocConstructionError::ChangementListeVide)
         ));
     }
@@ -1743,7 +1874,7 @@ mod tests {
     fn sceller_changement_doublon_refuse() {
         let pk = SigKeypair::generate().public;
         assert!(matches!(
-            Bloc::sceller_changement(&Bloc::genese().id(), 1, vec![pk.clone(), pk.clone()]),
+            Bloc::sceller_changement(&Bloc::genese().id(), 1, vec![pk.clone(), pk.clone()], 0),
             Err(BlocConstructionError::AutoriteDupliquee)
         ));
     }
@@ -1755,7 +1886,7 @@ mod tests {
         let pk = SigKeypair::generate().public;
         let trop: Vec<_> = (0..MAX_AUTORITES + 1).map(|_| pk.clone()).collect();
         assert!(matches!(
-            Bloc::sceller_changement(&Bloc::genese().id(), 1, trop),
+            Bloc::sceller_changement(&Bloc::genese().id(), 1, trop, 0),
             Err(BlocConstructionError::ChangementTropDAutorites { .. })
         ));
     }

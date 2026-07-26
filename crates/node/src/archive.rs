@@ -152,6 +152,7 @@ mod tests {
             &[hauteur as u8; ledger::bloc::TAILLE_ID],
             hauteur,
             Vec::new(),
+            0,
         )
         .unwrap()
     }

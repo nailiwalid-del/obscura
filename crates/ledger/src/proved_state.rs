@@ -772,6 +772,27 @@ impl ProvedLedgerState {
                 recues: bloc.transactions.len(),
             });
         }
+        // PLAFOND DE DIFFUSION — la DERNIÈRE ligne, et la seule qui garde le bloc
+        // fabriqué localement : `Bloc::from_bytes` refuse déjà ces octets, mais un
+        // producteur ne passe pas par le décodeur pour appliquer ce qu'il vient de
+        // sceller. Appliquer un bloc indiffusable avance NOTRE chaîne, définitivement
+        // (l'état est append-only), sur un bloc que personne ne pourra recevoir : la
+        // partition est sans réparation.
+        //
+        // Mesurer exige de sérialiser — O(taille), là où tout ce qui précède est O(1).
+        // Le contrôle reste néanmoins ICI, avant le scellement, le quorum et les
+        // preuves : un mégaoctet de mémoire recopié est sans commune mesure avec
+        // `2f+1` vérifications hybrides suivies de ~4 ms × n_tx de STARK. Les octets
+        // ne sont pas disponibles autrement — `appliquer_bloc` reçoit un `&Bloc`, et
+        // les faire porter par la signature obligerait tous les appelants (rejeu,
+        // fixtures, tests) à les transporter pour un contrôle qui les concerne tous.
+        let octets = bloc.to_bytes().len();
+        if octets > crate::bloc::MAX_OCTETS_BLOC {
+            return Err(BlocRefus::TropDOctets {
+                octets,
+                borne: crate::bloc::MAX_OCTETS_BLOC,
+            });
+        }
 
         // LISTE ACTIVE LOCALE (point 3 de la revue) : le bloc à la hauteur d'effet est
         // jugé sous le NOUVEAU régime, sans rien muter avant le succès. Clonée (≤ 64
@@ -1201,7 +1222,7 @@ mod tests {
 
     /// Bloc VIDE de hauteur 1, scellé par le producteur du tour (vue 0 → index 0).
     fn bloc_h1(etat: &ProvedLedgerState, cles: &[crypto::sig::SigKeypair]) -> crate::bloc::Bloc {
-        let mut b = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new()).expect("scellement");
+        let mut b = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new(), 0).expect("scellement");
         b.signer_scellement(&cles[0]);
         b
     }
@@ -1215,7 +1236,7 @@ mod tests {
         nouvelle: Vec<crypto::sig::SigPublicKey>,
     ) -> crate::bloc::Bloc {
         let prod = ((h - 1) % cles.len() as u64) as usize;
-        let mut b = crate::bloc::Bloc::sceller_changement(&etat.tete(), h, nouvelle).unwrap();
+        let mut b = crate::bloc::Bloc::sceller_changement(&etat.tete(), h, nouvelle, 0).unwrap();
         b.signer_scellement(&cles[prod]);
         for (i, cle) in cles.iter().enumerate().take(etat.quorum_a(h)) {
             b.signer_vote(i, cle);
@@ -1231,7 +1252,7 @@ mod tests {
             .map(|_| crypto::sig::SigKeypair::generate().public)
             .collect();
         let mut b =
-            crate::bloc::Bloc::sceller_changement(&etat.tete(), 1, nouvelle.clone()).unwrap();
+            crate::bloc::Bloc::sceller_changement(&etat.tete(), 1, nouvelle.clone(), 0).unwrap();
         b.signer_scellement(&cles[0]);
         for (i, c) in cles.iter().enumerate().take(3) {
             b.signer_vote(i, c);
@@ -1419,7 +1440,8 @@ mod tests {
     fn certificat_sur_chaine_ouverte_refuse() {
         let genese = crate::bloc::Bloc::genese();
         let mut etat = ProvedLedgerState::depuis_genese_depth(&genese, 4).expect("amorçage");
-        let mut bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new()).expect("scellement");
+        let mut bloc =
+            crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new(), 0).expect("scellement");
         bloc.signer_vote(0, &crypto::sig::SigKeypair::generate());
         assert!(matches!(
             etat.appliquer_bloc(&bloc),
@@ -1435,6 +1457,7 @@ mod tests {
             &etat.tete(),
             1,
             vec![crypto::sig::SigKeypair::generate().public],
+            0,
         )
         .unwrap();
         b.vue = 0; // chaîne ouverte : pas de scellement, pas de certificat
@@ -1512,6 +1535,7 @@ mod tests {
             &etat.tete(),
             u64::MAX,
             vec![crypto::sig::SigKeypair::generate().public],
+            0,
         )
         .unwrap();
         b.signer_scellement(&cles[((u64::MAX - 1) % 4) as usize]);
@@ -1537,7 +1561,7 @@ mod tests {
         etat.injecter_changement_pour_test(nouvelles.iter().map(|k| k.public.clone()).collect(), 1);
         // Bloc à la hauteur d'effet 1, jugé sous la NOUVELLE liste (producteur de (1,0)
         // = nouvelles[0]), mais seulement 2 votes alors que le quorum est 3.
-        let mut b = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new()).unwrap();
+        let mut b = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new(), 0).unwrap();
         b.signer_scellement(&nouvelles[0]);
         b.signer_vote(0, &nouvelles[0]);
         b.signer_vote(1, &nouvelles[1]);
@@ -1575,7 +1599,8 @@ mod tests {
         let encore: Vec<_> = (0..4)
             .map(|_| crypto::sig::SigKeypair::generate().public)
             .collect();
-        let mut b = crate::bloc::Bloc::sceller_changement(&etat.tete(), 1, encore.clone()).unwrap();
+        let mut b =
+            crate::bloc::Bloc::sceller_changement(&etat.tete(), 1, encore.clone(), 0).unwrap();
         b.signer_scellement(&nouvelles_cles[0]);
         for (i, cle) in nouvelles_cles.iter().enumerate().take(etat.quorum_a(1)) {
             b.signer_vote(i, cle);
@@ -1651,7 +1676,7 @@ mod tests {
         let (a, b, mut etat) = chaine_a_deux_autorites();
 
         // Non signé : refusé, et l'état n'a pas bougé.
-        let nu = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new()).unwrap();
+        let nu = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new(), 0).unwrap();
         assert!(matches!(
             etat.appliquer_bloc(&nu),
             Err(BlocRefus::ScellementManquant { hauteur: 1 })
@@ -1659,7 +1684,7 @@ mod tests {
         assert_eq!(etat.hauteur(), 0);
 
         // Signé par la MAUVAISE autorité (b, alors que la hauteur 1 revient à a).
-        let mut hors_tour = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new()).unwrap();
+        let mut hors_tour = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new(), 0).unwrap();
         hors_tour.signer_scellement(&b);
         assert!(matches!(
             etat.appliquer_bloc(&hors_tour),
@@ -1670,7 +1695,7 @@ mod tests {
         ));
 
         // Signé par un TIERS hors liste.
-        let mut tiers = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new()).unwrap();
+        let mut tiers = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new(), 0).unwrap();
         tiers.signer_scellement(&crypto::sig::SigKeypair::generate());
         assert!(matches!(
             etat.appliquer_bloc(&tiers),
@@ -1682,7 +1707,7 @@ mod tests {
         // doivent voter. Un producteur seul ne finalise plus rien — c'est
         // précisément la faille que la formule généralisée ferme.
         for (h, producteur) in [(1u64, &a), (2, &b), (3, &a)] {
-            let mut bloc = crate::bloc::Bloc::sceller(&etat.tete(), h, Vec::new()).unwrap();
+            let mut bloc = crate::bloc::Bloc::sceller(&etat.tete(), h, Vec::new(), 0).unwrap();
             bloc.signer_scellement(producteur);
             bloc.signer_vote(0, &a);
             bloc.signer_vote(1, &b);
@@ -1698,14 +1723,14 @@ mod tests {
     #[test]
     fn chaine_ouverte_refuse_un_scellement() {
         let mut etat = ProvedLedgerState::with_depth(DEPTH);
-        let mut signe = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new()).unwrap();
+        let mut signe = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new(), 0).unwrap();
         signe.signer_scellement(&crypto::sig::SigKeypair::generate());
         assert!(matches!(
             etat.appliquer_bloc(&signe),
             Err(BlocRefus::ScellementInattendu)
         ));
 
-        let nu = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new()).unwrap();
+        let nu = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new(), 0).unwrap();
         etat.appliquer_bloc(&nu)
             .expect("chaîne ouverte : bloc nu accepté");
     }
@@ -1748,7 +1773,7 @@ mod tests {
             "les autorités doivent survivre au dump"
         );
 
-        let nu = crate::bloc::Bloc::sceller(&relu.tete(), 1, Vec::new()).unwrap();
+        let nu = crate::bloc::Bloc::sceller(&relu.tete(), 1, Vec::new(), 0).unwrap();
         assert!(
             matches!(
                 relu.appliquer_bloc(&nu),
@@ -1757,7 +1782,7 @@ mod tests {
             "l'état rechargé doit encore exiger le scellement"
         );
         // n=2 ⇒ quorum 2 : les deux autorités votent.
-        let mut bon = crate::bloc::Bloc::sceller(&relu.tete(), 1, Vec::new()).unwrap();
+        let mut bon = crate::bloc::Bloc::sceller(&relu.tete(), 1, Vec::new(), 0).unwrap();
         bon.signer_scellement(&a);
         bon.signer_vote(0, &a);
         bon.signer_vote(1, &b);
@@ -2153,7 +2178,7 @@ mod tests {
         sabotee.output_commitments[0] = digest(1_234_567); // preuve invalidée
         let avant_racine = etat.tree.root();
 
-        let mut bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, vec![sabotee]).unwrap();
+        let mut bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, vec![sabotee], 0).unwrap();
         // Champs publics : on force l'émission comme le ferait un pair hostile.
         bloc.emissions = vec![crate::proved_wallet::emission_factice(&digest(5_000))];
 
@@ -2182,7 +2207,7 @@ mod tests {
     #[test]
     fn emission_prime_sur_le_refus_de_chainage() {
         let mut etat = ProvedLedgerState::with_depth(6);
-        let mut bloc = crate::bloc::Bloc::sceller(&[9u8; TAILLE_ID], 1, Vec::new()).unwrap();
+        let mut bloc = crate::bloc::Bloc::sceller(&[9u8; TAILLE_ID], 1, Vec::new(), 0).unwrap();
         bloc.emissions = vec![crate::proved_wallet::emission_factice(&digest(1))];
         assert!(matches!(
             etat.appliquer_bloc(&bloc),
@@ -2225,7 +2250,7 @@ mod tests {
     /// silencieusement faux.
     #[test]
     fn genese_malformee_refusee() {
-        let ordinaire = crate::bloc::Bloc::sceller(&[7u8; TAILLE_ID], 3, Vec::new()).unwrap();
+        let ordinaire = crate::bloc::Bloc::sceller(&[7u8; TAILLE_ID], 3, Vec::new(), 0).unwrap();
         assert!(matches!(
             ProvedLedgerState::depuis_genese_depth(&ordinaire, 6),
             Err(GeneseRefus::ParentPresent)
@@ -2298,14 +2323,14 @@ mod tests {
         assert_eq!(etat.hauteur(), 0);
 
         // Bloc chaîné ailleurs.
-        let orphelin = crate::bloc::Bloc::sceller(&[9u8; TAILLE_ID], 1, Vec::new()).unwrap();
+        let orphelin = crate::bloc::Bloc::sceller(&[9u8; TAILLE_ID], 1, Vec::new(), 0).unwrap();
         assert!(matches!(
             etat.appliquer_bloc(&orphelin),
             Err(BlocRefus::ParentInattendu)
         ));
 
         // Bon parent, mauvaise hauteur.
-        let saute = crate::bloc::Bloc::sceller(&etat.tete(), 5, Vec::new()).unwrap();
+        let saute = crate::bloc::Bloc::sceller(&etat.tete(), 5, Vec::new(), 0).unwrap();
         assert!(matches!(
             etat.appliquer_bloc(&saute),
             Err(BlocRefus::HauteurInattendue {
@@ -2315,7 +2340,7 @@ mod tests {
         ));
 
         // Le bloc suivant, lui, passe — et la tête avance.
-        let suivant = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new()).unwrap();
+        let suivant = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new(), 0).unwrap();
         let id = suivant.id();
         assert!(etat.appliquer_bloc(&suivant).is_ok());
         assert_eq!(etat.tete(), id);
@@ -2350,7 +2375,7 @@ mod tests {
         let avant_hauteur = etat.hauteur();
         let nf0 = tx.nullifiers[0];
 
-        let bloc = crate::bloc::Bloc::sceller(&avant_tete, 1, vec![tx, sabotee]).unwrap();
+        let bloc = crate::bloc::Bloc::sceller(&avant_tete, 1, vec![tx, sabotee], 0).unwrap();
         assert!(
             matches!(
                 etat.appliquer_bloc(&bloc),
@@ -2380,7 +2405,7 @@ mod tests {
     fn bloc_valide_applique_et_avance_la_tete() {
         let (mut etat, tx) = setup();
         let nf = tx.nullifiers[0];
-        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, vec![tx]).unwrap();
+        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, vec![tx], 0).unwrap();
         let id = bloc.id();
 
         let indices = etat.appliquer_bloc(&bloc).expect("bloc valide");
@@ -2470,7 +2495,7 @@ mod tests {
             "sous la borne de NOMBRE"
         );
         assert!(matches!(
-            crate::bloc::Bloc::sceller(&etat.tete(), 1, vingt),
+            crate::bloc::Bloc::sceller(&etat.tete(), 1, vingt, 0),
             Err(crate::bloc::BlocConstructionError::TropDOctets { .. })
         ));
     }
@@ -2482,7 +2507,7 @@ mod tests {
     fn position_dans_la_chaine_survit_au_dump() {
         let mut etat = ProvedLedgerState::with_depth(6);
         etat.mint(&digest(1)).unwrap();
-        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new()).unwrap();
+        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new(), 0).unwrap();
         etat.appliquer_bloc(&bloc).unwrap();
 
         let recharge = ProvedLedgerState::from_bytes(&etat.to_bytes()).expect("aller-retour");
@@ -2491,7 +2516,7 @@ mod tests {
 
         // Et il accepte bien la SUITE de la chaîne, pas autre chose.
         let mut recharge = recharge;
-        let suivant = crate::bloc::Bloc::sceller(&recharge.tete(), 2, Vec::new()).unwrap();
+        let suivant = crate::bloc::Bloc::sceller(&recharge.tete(), 2, Vec::new(), 0).unwrap();
         assert!(recharge.appliquer_bloc(&suivant).is_ok());
     }
 
@@ -2668,7 +2693,7 @@ mod tests {
     #[cfg_attr(debug_assertions, ignore = "sous-preuves gatées : --release")]
     fn historique_rejoue_reproduit_larbre_et_ses_racines() {
         let (mut etat, tx) = setup_avec(true);
-        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, vec![tx]).unwrap();
+        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, vec![tx], 0).unwrap();
         etat.appliquer_bloc(&bloc).expect("bloc valide");
 
         let h = etat.historique().expect("état archiviste");
@@ -2717,7 +2742,7 @@ mod tests {
     #[cfg_attr(debug_assertions, ignore = "sous-preuves gatées : --release")]
     fn historique_est_exactement_ce_que_le_bloc_engage() {
         let (mut etat, tx) = setup_avec(true);
-        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, vec![tx]).unwrap();
+        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, vec![tx], 0).unwrap();
         etat.appliquer_bloc(&bloc).expect("bloc valide");
 
         let servies = etat
@@ -2780,7 +2805,7 @@ mod tests {
         let avant_entrees = etat.historique().unwrap().len();
         let avant_tranches = etat.historique().unwrap().nombre_de_tranches();
 
-        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, vec![tx, sabotee]).unwrap();
+        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, vec![tx, sabotee], 0).unwrap();
         assert!(matches!(
             etat.appliquer_bloc(&bloc),
             Err(BlocRefus::Transaction { index: 1, .. })
@@ -2823,9 +2848,9 @@ mod tests {
         assert!(archiviste.historique().is_some());
 
         for hauteur in 1..=3u64 {
-            let b = crate::bloc::Bloc::sceller(&sobre.tete(), hauteur, Vec::new()).unwrap();
+            let b = crate::bloc::Bloc::sceller(&sobre.tete(), hauteur, Vec::new(), 0).unwrap();
             sobre.appliquer_bloc(&b).unwrap();
-            let b = crate::bloc::Bloc::sceller(&archiviste.tete(), hauteur, Vec::new()).unwrap();
+            let b = crate::bloc::Bloc::sceller(&archiviste.tete(), hauteur, Vec::new(), 0).unwrap();
             archiviste.appliquer_bloc(&b).unwrap();
         }
         assert_eq!(
@@ -2853,7 +2878,7 @@ mod tests {
         ])
         .unwrap();
         let mut etat = ProvedLedgerState::depuis_genese_depth_archivant(&genese, 6).unwrap();
-        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new()).unwrap();
+        let bloc = crate::bloc::Bloc::sceller(&etat.tete(), 1, Vec::new(), 0).unwrap();
         etat.appliquer_bloc(&bloc).unwrap();
 
         let octets_etat = etat.to_bytes();
@@ -2905,7 +2930,7 @@ mod tests {
             .unwrap()
             .to_bytes();
         let mut avance = ProvedLedgerState::depuis_genese_depth_archivant(&genese, 6).unwrap();
-        let b = crate::bloc::Bloc::sceller(&avance.tete(), 1, Vec::new()).unwrap();
+        let b = crate::bloc::Bloc::sceller(&avance.tete(), 1, Vec::new(), 0).unwrap();
         avance.appliquer_bloc(&b).unwrap();
         assert!(matches!(
             avance.adopter_historique(HistoriqueSorties::from_bytes(&vieux).unwrap()),

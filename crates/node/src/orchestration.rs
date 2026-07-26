@@ -620,13 +620,20 @@ impl Noeud {
             None => false, // chaîne ouverte
         };
 
+        // QUORUM DE LA HAUTEUR PRODUITE — pas celui de la tête : à la hauteur d'effet
+        // d'une reconfiguration, le comité actif est le NOUVEAU (`quorum_a`). C'est
+        // celui-là qui certifiera ce bloc, donc celui dont il faut réserver la place.
+        // `0` sur une chaîne ouverte : aucun certificat n'y existe.
+        let quorum = self.etat.quorum_a(prochaine);
+
         let (mut bloc, digests): (Bloc, Vec<[u8; 64]>) = if let Some(nouvelles) = changement {
             // RECONFIGURATION : bloc VIDE de transactions, changement attaché. Refusé
             // hors chaîne à autorités (rien à reconfigurer).
             if !a_autorites {
                 return None;
             }
-            let bloc = Bloc::sceller_changement(&self.etat.tete(), prochaine, nouvelles).ok()?;
+            let bloc =
+                Bloc::sceller_changement(&self.etat.tete(), prochaine, nouvelles, quorum).ok()?;
             (bloc, Vec::new())
         } else {
             let mut digests = self.mempool.digests();
@@ -638,7 +645,14 @@ impl Noeud {
             // s'arrête au premier dépassement plutôt que de continuer à chercher plus
             // petit : l'ordre est celui du digest, le fausser ici rendrait deux nœuds
             // divergents.
-            let mut octets = ledger::bloc::SURCOUT_BLOC_VIDE;
+            //
+            // Le budget réserve la place du CERTIFICAT dès la sélection, et pas
+            // seulement dans `Bloc::sceller` : sans cela le sélecteur proposait un lot
+            // que le constructeur refusait ensuite, et `sceller` rendant `None`, le
+            // nœud perdait son tour sans rien dire — une panne de liveness silencieuse
+            // là où l'ancien défaut en était une définitive.
+            let mut octets =
+                ledger::bloc::SURCOUT_BLOC_VIDE + ledger::bloc::cout_certificat(quorum);
             let mut transactions: Vec<circuit::ProvedTx> = Vec::new();
             let mut retenus: Vec<[u8; 64]> = Vec::new();
             for d in &digests {
@@ -666,7 +680,7 @@ impl Noeud {
             if transactions.is_empty() && !a_autorites {
                 return None;
             }
-            let bloc = Bloc::sceller(&self.etat.tete(), prochaine, transactions).ok()?;
+            let bloc = Bloc::sceller(&self.etat.tete(), prochaine, transactions, quorum).ok()?;
             (bloc, retenus)
         };
         // La vue entre dans l'identifiant : la fixer AVANT de signer.
@@ -1359,7 +1373,7 @@ mod tests {
         n.pairs.ajouter(p, adr);
         // vue_courante = 0. Une proposition à vue 2 (> 0 + FENETRE_VUE) est ignorée.
         // Producteur de (1,2) = autorites[(1-1+2) mod 4] = autorites[2].
-        let mut loin = ledger::bloc::Bloc::sceller(&n.etat.tete(), 1, Vec::new()).unwrap();
+        let mut loin = ledger::bloc::Bloc::sceller(&n.etat.tete(), 1, Vec::new(), 0).unwrap();
         loin.vue = 2;
         loin.signer_scellement(&cles[2]);
         assert!(n
@@ -1378,7 +1392,7 @@ mod tests {
         n.debut_vue_ms = 0;
         // Proposition légitime à vue 1 (producteur autorites[1]). On est l'autorité
         // 3, on n'a pas voté à h=1 : on vote et on adopte la vue 1.
-        let mut v1 = ledger::bloc::Bloc::sceller(&n.etat.tete(), 1, Vec::new()).unwrap();
+        let mut v1 = ledger::bloc::Bloc::sceller(&n.etat.tete(), 1, Vec::new(), 0).unwrap();
         v1.vue = 1;
         v1.signer_scellement(&cles[1]);
         let _ = n.traiter(p, Message::Proposition(Box::new(v1)), 500);
@@ -1500,7 +1514,7 @@ mod tests {
         n.calage_signale = true;
         n.votes_recus.insert([1u8; 64], Default::default());
         n.proposition_en_cours =
-            Some(ledger::bloc::Bloc::sceller(&n.etat.tete(), 1, Vec::new()).unwrap());
+            Some(ledger::bloc::Bloc::sceller(&n.etat.tete(), 1, Vec::new(), 0).unwrap());
 
         n.hauteur_avancee(999);
 
@@ -1769,14 +1783,15 @@ mod tests {
 
     /// Le bloc le plus LOURD qu'un producteur puisse sceller à cette hauteur : on
     /// ajoute des transactions jusqu'à ce que le constructeur refuse, comme le
-    /// sélecteur de mempool s'arrête au premier dépassement.
+    /// sélecteur de mempool s'arrête au premier dépassement. `quorum` est celui du
+    /// comité qui certifiera ce bloc — c'est lui que le budget doit réserver.
     #[cfg(test)]
-    fn bloc_rempli_au_plafond(parent: &[u8; 64], hauteur: u64) -> Bloc {
+    fn bloc_rempli_au_plafond(parent: &[u8; 64], hauteur: u64, quorum: usize) -> Bloc {
         let (_, tx) = noeud_avec_transaction();
         let octets = tx.to_bytes();
         let mut plein = None;
         for k in 1..=ledger::bloc::MAX_TX_PAR_BLOC {
-            match Bloc::sceller(parent, hauteur, copies_de_transaction(&octets, k)) {
+            match Bloc::sceller(parent, hauteur, copies_de_transaction(&octets, k), quorum) {
                 Ok(b) => plein = Some(b),
                 Err(_) => break,
             }
@@ -1804,7 +1819,7 @@ mod tests {
         let quorum = etat.quorum_a(1);
         assert_eq!(quorum, 43, "n = 64 ⇒ quorum ⌊2n/3⌋+1 = 43");
 
-        let mut bloc = bloc_rempli_au_plafond(&etat.tete(), 1);
+        let mut bloc = bloc_rempli_au_plafond(&etat.tete(), 1, quorum);
         certifier(&mut bloc, &cles, quorum);
         assert_eq!(
             bloc.certificat
@@ -1907,7 +1922,7 @@ mod tests {
 
         // Coût RÉEL du certificat de ce quorum : MESURÉ sur un bloc témoin, pas
         // recopié depuis une note.
-        let mut temoin = Bloc::sceller(&etat.tete(), 1, Vec::new()).expect("bloc vide");
+        let mut temoin = Bloc::sceller(&etat.tete(), 1, Vec::new(), quorum).expect("bloc vide");
         let vide = temoin.to_bytes().len();
         temoin.signer_scellement(&cles[0]);
         let scelle = temoin.to_bytes().len();
@@ -1925,6 +1940,9 @@ mod tests {
             ledger::bloc::cout_transaction(grande.len()),
             ledger::bloc::cout_transaction(petite.len()),
         );
+        // Budget SANS la place du certificat, à dessein : on fabrique le lot le plus
+        // lourd que l'ancienne règle laissait passer, et c'est au constructeur de le
+        // juger — pas au test de se donner d'avance la bonne réponse.
         let budget = ledger::bloc::MAX_OCTETS_BLOC - vide - ledger::bloc::TAILLE_SCELLEMENT_MAX;
         let mut meilleur = (0usize, 0usize, 0usize);
         for g in 0..=budget / cg {
@@ -1945,7 +1963,7 @@ mod tests {
 
         let mut transactions = copies_de_transaction(&grande, g);
         transactions.extend(copies_de_transaction(&petite, p));
-        match Bloc::sceller(&etat.tete(), 1, transactions) {
+        match Bloc::sceller(&etat.tete(), 1, transactions, quorum) {
             // La borne a fait son travail : rien d'indiffusable n'a été scellé.
             Err(ledger::bloc::BlocConstructionError::TropDOctets { .. }) => {}
             Ok(mut bloc) => {
@@ -1981,7 +1999,7 @@ mod tests {
     fn appliquer_bloc_refuse_hors_borne_avant_le_stark() {
         let (mut etat, cles) = chaine_a_autorites(64);
         let quorum = etat.quorum_a(1);
-        let mut bloc = bloc_rempli_au_plafond(&etat.tete(), 1);
+        let mut bloc = bloc_rempli_au_plafond(&etat.tete(), 1, quorum);
 
         // UNE transaction de trop, posée directement : c'est le bloc qu'un producteur
         // qui ne réserve pas la place de son certificat finirait par appliquer.
@@ -2061,12 +2079,12 @@ mod tests {
         n.pairs.ajouter(p, adr);
 
         // Sans scellement : refusé, sanctionné, jamais relayé.
-        let nu = ledger::bloc::Bloc::sceller(&n.etat.tete(), 1, Vec::new()).unwrap();
+        let nu = ledger::bloc::Bloc::sceller(&n.etat.tete(), 1, Vec::new(), 0).unwrap();
         assert!(n.traiter(p, Message::Bloc(Box::new(nu)), 0).is_empty());
         assert_eq!(n.pairs.get(&p).unwrap().score, PENALITE_BLOC_INVALIDE);
 
         // HORS TOUR : signé par `autre` alors que la hauteur 1 revient à `nous`.
-        let mut hors_tour = ledger::bloc::Bloc::sceller(&n.etat.tete(), 1, Vec::new()).unwrap();
+        let mut hors_tour = ledger::bloc::Bloc::sceller(&n.etat.tete(), 1, Vec::new(), 0).unwrap();
         hors_tour.signer_scellement(&autre);
         assert!(n
             .traiter(p, Message::Bloc(Box::new(hors_tour)), 0)
@@ -2082,7 +2100,7 @@ mod tests {
         let mut n = noeud_de_test();
         let (p, adr) = pair(1);
         n.pairs.ajouter(p, adr);
-        let mut signe = ledger::bloc::Bloc::sceller(&n.etat.tete(), 1, Vec::new()).unwrap();
+        let mut signe = ledger::bloc::Bloc::sceller(&n.etat.tete(), 1, Vec::new(), 0).unwrap();
         signe.signer_scellement(&SigKeypair::generate());
         assert!(n.traiter(p, Message::Bloc(Box::new(signe)), 0).is_empty());
         assert_eq!(n.pairs.get(&p).unwrap().score, PENALITE_BLOC_INVALIDE);
@@ -2110,7 +2128,8 @@ mod tests {
     #[cfg(test)]
     fn proposition_de(n: &Noeud, producteur: &SigKeypair) -> ledger::bloc::Bloc {
         let mut b =
-            ledger::bloc::Bloc::sceller(&n.etat.tete(), n.etat.hauteur() + 1, Vec::new()).unwrap();
+            ledger::bloc::Bloc::sceller(&n.etat.tete(), n.etat.hauteur() + 1, Vec::new(), 0)
+                .unwrap();
         b.signer_scellement(producteur);
         b
     }
@@ -2390,7 +2409,7 @@ mod tests {
         let (p, adr) = pair(1);
         n.pairs.ajouter(p, adr);
 
-        let etranger = Bloc::sceller(&[9u8; 64], 1, Vec::new()).unwrap();
+        let etranger = Bloc::sceller(&[9u8; 64], 1, Vec::new(), 0).unwrap();
         let actions = n.traiter(p, Message::Bloc(Box::new(etranger)), 0);
         assert!(
             actions.is_empty(),
@@ -2417,7 +2436,7 @@ mod tests {
         let (p, adr) = pair(1);
         n.pairs.ajouter(p, adr);
 
-        let bloc = Bloc::sceller(&n.etat.tete(), 1, vec![tx]).unwrap();
+        let bloc = Bloc::sceller(&n.etat.tete(), 1, vec![tx], 0).unwrap();
         n.traiter(p, Message::Bloc(Box::new(bloc)), 0);
         assert_eq!(n.pairs.get(&p).unwrap().score, PENALITE_BLOC_INVALIDE);
         assert_eq!(n.etat.hauteur(), 0, "aucune trace du bloc refusé");
@@ -2437,7 +2456,7 @@ mod tests {
         n.pairs.ajouter(p, adr);
 
         // Bien chaîné, bien numéroté — seule l'émission cloche.
-        let mut inflation = Bloc::sceller(&n.etat.tete(), 1, Vec::new()).unwrap();
+        let mut inflation = Bloc::sceller(&n.etat.tete(), 1, Vec::new(), 0).unwrap();
         inflation.emissions = vec![ledger::proved_wallet::emission_factice(
             &proved_hash::digest::Digest(core::array::from_fn(|i| {
                 proved_hash::felt::Felt::from_canonical_u64(1_000 + i as u64).unwrap()
@@ -2474,7 +2493,7 @@ mod tests {
         n.pairs.ajouter(p, adr);
 
         // Nous sommes à la hauteur 0 ; un pair diffuse un bloc de hauteur 4.
-        let avance = Bloc::sceller(&[9u8; 64], 4, Vec::new()).unwrap();
+        let avance = Bloc::sceller(&[9u8; 64], 4, Vec::new(), 0).unwrap();
         let actions = n.traiter(p, Message::Bloc(Box::new(avance)), 0);
         match actions.as_slice() {
             [Action::Envoyer(vers, Message::DemandeBloc { hauteur })] => {
@@ -2506,7 +2525,7 @@ mod tests {
         n.pairs.ajouter(p, adr);
 
         // Hauteur 1 = exactement celle qu'on attend, mais chaîné ailleurs.
-        let concurrent = Bloc::sceller(&[9u8; 64], 1, Vec::new()).unwrap();
+        let concurrent = Bloc::sceller(&[9u8; 64], 1, Vec::new(), 0).unwrap();
         let actions = n.traiter(p, Message::Bloc(Box::new(concurrent)), 0);
         assert!(
             actions.is_empty(),
@@ -2528,13 +2547,13 @@ mod tests {
         n.pairs.ajouter(p, adr);
 
         // 1er échange : bloc en avance → une demande part.
-        let avance = Bloc::sceller(&[9u8; 64], 5, Vec::new()).unwrap();
+        let avance = Bloc::sceller(&[9u8; 64], 5, Vec::new(), 0).unwrap();
         assert_eq!(n.traiter(p, Message::Bloc(Box::new(avance)), 0).len(), 1);
 
         // 2e échange : le pair sert la hauteur 1… d'une chaîne qui n'est pas la
         // nôtre. Elle est refusée, et surtout elle ne relance rien.
         for _ in 0..5 {
-            let reponse = Bloc::sceller(&[9u8; 64], 1, Vec::new()).unwrap();
+            let reponse = Bloc::sceller(&[9u8; 64], 1, Vec::new(), 0).unwrap();
             let actions = n.traiter(p, Message::Bloc(Box::new(reponse)), 0);
             assert!(actions.is_empty(), "aucune demande ne doit repartir");
         }

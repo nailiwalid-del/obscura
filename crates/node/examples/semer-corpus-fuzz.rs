@@ -48,14 +48,17 @@ fn main() {
         Bloc::genese_avec_autorites(Vec::new(), vec![a.public.clone(), b.public.clone()])
             .expect("genèse à autorités");
     graines.push(("genese-autorites", genese_aut.to_bytes()));
+    // Quorum du comité à deux : ⌊2·2/3⌋+1 = 2. Passé au scellement pour que les
+    // graines soient produites sous le MÊME budget qu'un bloc de production.
+    let quorum = 2;
 
     // 3. Bloc scellé, sans certificat — chemin `scellement présent, certificat absent`.
-    let mut scelle = Bloc::sceller(&genese_aut.id(), 1, Vec::new()).expect("scellement");
+    let mut scelle = Bloc::sceller(&genese_aut.id(), 1, Vec::new(), quorum).expect("scellement");
     scelle.signer_scellement(&a);
     graines.push(("scelle-sans-certificat", scelle.to_bytes()));
 
     // 4. Bloc scellé ET certifié à UN votant — masque à un bit.
-    let mut certifie1 = Bloc::sceller(&genese_aut.id(), 1, Vec::new()).expect("scellement");
+    let mut certifie1 = Bloc::sceller(&genese_aut.id(), 1, Vec::new(), quorum).expect("scellement");
     certifie1.signer_scellement(&a);
     certifie1.signer_vote(0, &a);
     graines.push(("certifie-1-votant", certifie1.to_bytes()));
@@ -64,14 +67,14 @@ fn main() {
     //    nombre de signatures qui doit CONCORDER avec le masque. C'est la graine
     //    la plus précieuse : cette concordance est ce qu'une mutation aveugle ne
     //    produira jamais.
-    let mut certifie2 = Bloc::sceller(&genese_aut.id(), 1, Vec::new()).expect("scellement");
+    let mut certifie2 = Bloc::sceller(&genese_aut.id(), 1, Vec::new(), quorum).expect("scellement");
     certifie2.signer_scellement(&a);
     certifie2.signer_vote(0, &a);
     certifie2.signer_vote(1, &b);
     graines.push(("certifie-2-votants", certifie2.to_bytes()));
 
     // 6. Bloc de VUE non nulle — le champ ajouté en 0x04.
-    let mut vue3 = Bloc::sceller(&genese_aut.id(), 1, Vec::new()).expect("scellement");
+    let mut vue3 = Bloc::sceller(&genese_aut.id(), 1, Vec::new(), quorum).expect("scellement");
     vue3.vue = 3;
     vue3.signer_scellement(&b);
     vue3.signer_vote(1, &b);

@@ -19,6 +19,22 @@ use zeroize::Zeroizing;
 
 pub const ED25519_SIG_LEN: usize = 64;
 
+/// Taille EXACTE d'une [`HybridSignature`] sérialisée : `version (1) ‖ ed25519 (64) ‖
+/// ml-dsa-65 (3309)` = 3 374 o.
+///
+/// # Pourquoi cette constante est publique
+///
+/// Le certificat de quorum d'un bloc porte `2f+1` de ces signatures, LINÉAIREMENT —
+/// aucune signature post-quantique ne s'agrège. Toute couche qui doit RÉSERVER la
+/// place d'un quorum dans un budget d'octets a donc besoin de la taille exacte, pas
+/// d'un majorant : à `MAX_AUTORITES = 64`, majorer coûterait un quart de la capacité
+/// d'un bloc en permanence (cf. `ledger::bloc::cout_certificat`).
+///
+/// [`HybridSignature::from_bytes`] valide contre CETTE constante : la valeur exposée
+/// et la valeur exigée ne peuvent pas diverger. Un test la confronte à la taille
+/// d'une signature réellement produite.
+pub const TAILLE_SIGNATURE_HYBRIDE: usize = 1 + ED25519_SIG_LEN + mldsa65::signature_bytes();
+
 /// Identifiant d'algorithme (versioning explicite, cf. kem.rs). `0x01` = round-3,
 /// PÉRIMÉ et refusé par son nom ; `0x02` = FIPS 204 (courant).
 pub const SIG_ALGO_ID: &str = "ed25519+mldsa65-fips204";
@@ -192,7 +208,7 @@ impl HybridSignature {
     }
     pub fn from_bytes(b: &[u8]) -> Result<Self, CryptoError> {
         verifier_version(b, "HybridSignature")?;
-        if b.len() != 1 + ED25519_SIG_LEN + mldsa65::signature_bytes() {
+        if b.len() != TAILLE_SIGNATURE_HYBRIDE {
             return Err(CryptoError::InvalidEncoding("HybridSignature"));
         }
         let mut e = [0u8; 64];
@@ -287,6 +303,26 @@ mod tests {
             HybridSignature::from_bytes(&sig_round3),
             Err(crate::CryptoError::AlgoPerime { version: 0x01, .. })
         ));
+    }
+
+    /// La constante exposée est la taille RÉELLE, pas une note à côté du code.
+    ///
+    /// C'est elle qui sert à réserver la place d'un quorum dans le budget d'un bloc :
+    /// une constante trop basse produirait un bloc indiffusable, et l'état étant
+    /// append-only, la panne serait définitive. Le test la confronte à une signature
+    /// effectivement produite — ce que la relecture d'une addition ne fait pas.
+    #[test]
+    fn taille_de_signature_epinglee() {
+        let kp = SigKeypair::generate();
+        assert_eq!(
+            kp.sign("test/v1", b"m").to_bytes().len(),
+            TAILLE_SIGNATURE_HYBRIDE,
+            "la constante doit valoir la taille d'une signature réelle"
+        );
+        assert_eq!(
+            TAILLE_SIGNATURE_HYBRIDE, 3_374,
+            "ed25519 + ML-DSA-65 (FIPS 204)"
+        );
     }
 
     #[test]

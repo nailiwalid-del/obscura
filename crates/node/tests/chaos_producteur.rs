@@ -292,9 +292,9 @@ fn le_redemarrage_ne_fait_pas_revoter() {
 
     // Deux propositions DISTINCTES à la hauteur 1, vue 0 : l'une vide, l'autre
     // portant la transaction. Contenus différents donc identifiants différents.
-    let mut bloc_a = Bloc::sceller(&genese.id(), 1, Vec::new()).expect("bloc A");
+    let mut bloc_a = Bloc::sceller(&genese.id(), 1, Vec::new(), 0).expect("bloc A");
     bloc_a.signer_scellement(&identite);
-    let mut bloc_b = Bloc::sceller(&genese.id(), 1, vec![tx]).expect("bloc B");
+    let mut bloc_b = Bloc::sceller(&genese.id(), 1, vec![tx], 0).expect("bloc B");
     bloc_b.signer_scellement(&identite);
     assert_ne!(
         bloc_a.id(),
@@ -376,9 +376,9 @@ fn pas_de_double_vote_a_travers_les_vues() {
     // A à (1, 0), B à (1, 1). La vue entre dans l'identifiant : ids distincts. À
     // n=1, le producteur de (1,0) ET de (1,1) est la même autorité, donc les deux
     // sont légitimement scellables par `identite`.
-    let mut bloc_a = Bloc::sceller(&genese.id(), 1, Vec::new()).expect("bloc A");
+    let mut bloc_a = Bloc::sceller(&genese.id(), 1, Vec::new(), 0).expect("bloc A");
     bloc_a.signer_scellement(&identite);
-    let mut bloc_b = Bloc::sceller(&genese.id(), 1, Vec::new()).expect("bloc B");
+    let mut bloc_b = Bloc::sceller(&genese.id(), 1, Vec::new(), 0).expect("bloc B");
     bloc_b.vue = 1;
     bloc_b.signer_scellement(&identite);
     assert_ne!(bloc_a.id(), bloc_b.id(), "vues distinctes, ids distincts");

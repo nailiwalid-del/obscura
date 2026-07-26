@@ -159,7 +159,12 @@ fn generer_la_fixture() {
     let genese_id = hex::encode(genese.id());
     let racine_genese = hex::encode(etat.tree.root().to_bytes());
 
-    let mut bloc1 = Bloc::sceller(&genese.id(), 1, Vec::new()).expect("scellement refusé");
+    // Le quorum de la hauteur produite entre dans le budget du scellement (place
+    // réservée au certificat) : le générateur scelle donc sous les mêmes contraintes
+    // qu'un producteur réel. Le contenu du bloc n'en dépend pas — les octets de la
+    // fixture sont inchangés.
+    let mut bloc1 =
+        Bloc::sceller(&genese.id(), 1, Vec::new(), etat.quorum_a(1)).expect("scellement refusé");
     bloc1.signer_scellement(&autorite);
     // CERTIFICAT DE QUORUM (ADR J1). À n = 1, f = 0 et le quorum vaut 1 : l'unique
     // autorité se certifie elle-même. Sans lui, le bloc serait refusé pour
