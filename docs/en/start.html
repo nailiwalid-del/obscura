@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Get started — fetch, build and run Obscura</title>
+<meta name="description" content="Fetch the Obscura source, build it, run a node and a wallet: a single-machine local testnet, with commands verified by actually running them.">
+<meta name="color-scheme" content="light dark">
+<link rel="alternate" hreflang="fr" href="../demarrer.html">
+<link rel="alternate" hreflang="en" href="start.html">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+
+<a class="skip" href="#content">Skip to content</a>
+
+<div class="topbar">
+  <div class="shell">
+    <a class="brand" href="index.html">Walid <span>Naili</span></a>
+    <nav class="topnav" aria-label="Main navigation">
+      <a href="index.html">Home</a>
+      <a href="obscura.html">Obscura</a>
+      <a href="start.html" aria-current="page">Get started</a>
+      <a href="qpol.html">QPoL</a>
+      <a class="ctrl" href="../demarrer.html" hreflang="fr" lang="fr">FR</a>
+      <button type="button" class="ctrl" data-theme-toggle aria-pressed="false">
+        theme <span data-theme-label>dark</span>
+      </button>
+    </nav>
+  </div>
+</div>
+
+<header class="hero">
+  <div class="shell">
+    <p class="eyebrow rise">Get started &middot; Node, wallet, local testnet</p>
+    <h1 class="title serif rise">Fetch the code, and <em>run it</em></h1>
+    <p class="lede rise">
+      Everything below was executed on 27 July 2026 on a Windows machine, in the order it is
+      written. No command here was copied from a document: they are transcribed from a real
+      run, all the way to a received payment.
+    </p>
+    <div class="warn rise">
+      <span class="ico" aria-hidden="true">▲</span>
+      <p>
+        <strong>Unaudited prototype, no value.</strong> There is no public Obscura chain, no
+        faucet and no explorer — <strong>by decision</strong>, not by omission. What you set
+        up here is a chain of your own, on your own machine.
+      </p>
+    </div>
+  </div>
+</header>
+
+<main id="content">
+
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Step 0</div>
+      <h2 class="serif">Fetch the source</h2>
+      <p class="sub">The repository is public, licensed MIT <em>or</em> Apache-2.0, at your option.</p>
+    </div>
+
+    <div class="col">
+      <div class="cmd">
+        <div class="cmd-head"><span class="t">git</span></div>
+<pre><code>git clone https://github.com/nailiwalid-del/obscura.git
+cd obscura</code></pre>
+      </div>
+
+      <p>Or, without <code>git</code>, an archive of the current state:</p>
+
+      <div class="cmd">
+        <div class="cmd-head"><span class="t">archive</span></div>
+<pre><code>curl -L -o obscura.tar.gz \
+  https://github.com/nailiwalid-del/obscura/archive/refs/heads/master.tar.gz</code></pre>
+      </div>
+
+      <div class="callout secret">
+        <span class="lab">Why there is no binary to download</span>
+        <p>
+          <strong>No binary release has been published to date</strong> — so this page does
+          not offer you one. The signed-release machinery does exist in the repository
+          (<code>deploiement/</code>), but publishing a release and opening a chain are
+          deliberate <em>operator gestures</em>, not by-products of a website. The
+          verification procedure is described <a href="#verify">further down</a>, for the day
+          it becomes relevant.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Step 1</div>
+      <h2 class="serif">Build</h2>
+      <p class="sub">Rust <strong>1.87</strong> minimum (2021 edition). Nothing else is required.</p>
+    </div>
+
+    <div class="col">
+      <div class="cmd">
+        <div class="cmd-head"><span class="t">build</span></div>
+<pre><code>cargo build --release -p node --bins</code></pre>
+      </div>
+
+      <p>Four binaries appear in <code>target/release/</code>:</p>
+
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Binary</th><th>Role</th></tr></thead>
+          <tbody>
+            <tr><td><code>obscura-genese</code></td><td>Builds a chain's initial block: allocations and, optionally, the list of authorities.</td></tr>
+            <tr><td><code>obscura-node</code></td><td>The node: networking, mempool, validation, and — by decision — block production and archiving.</td></tr>
+            <tr><td><code>obscura-wallet</code></td><td>The wallet: create, synchronise, check balance, pay, consolidate.</td></tr>
+            <tr><td><code>obscura-demo</code></td><td>A self-contained demonstration: two real nodes and one transaction, in a single command.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout">
+        <span class="lab"><code>--release</code> is not an optional optimisation</span>
+        <p>
+          STARK proofs are gated on building in <code>release</code>. In <code>debug</code>
+          the proving path is unavailable: it is not “slower”, it is absent.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Path A</div>
+      <h2 class="serif">Check that it works, in one command</h2>
+      <p class="sub">Two real nodes, one transaction issued and propagated. Nothing to configure.</p>
+    </div>
+    <div class="col">
+      <div class="cmd">
+        <div class="cmd-head"><span class="t">demo</span></div>
+<pre><code>cargo run --release --bin obscura-demo</code></pre>
+      </div>
+      <p>
+        That is the shortest answer to “does this thing actually work”. To set up a chain of
+        your own, move on to the next path.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Path B</div>
+      <h2 class="serif">A local testnet, end to end</h2>
+      <p class="sub">
+        One machine, an open chain, a wallet that receives and then pays. This is the
+        <strong>only path you can follow alone</strong> — joining a federation requires an
+        invitation.
+      </p>
+    </div>
+
+    <div class="col">
+      <ol class="steps">
+
+        <li>
+          <h4>Create a wallet and read its address</h4>
+          <p>
+            The passphrase is requested interactively, or supplied via the
+            <code>OBSCURA_WALLET_PHRASE</code> environment variable.
+          </p>
+          <div class="cmd">
+            <div class="cmd-head"><span class="t">wallet</span></div>
+<pre><code>obscura-wallet creer   --fichier mon.wallet
+obscura-wallet adresse --fichier mon.wallet</code></pre>
+          </div>
+          <p>
+            The address is roughly <strong>2,500 characters</strong> long. That is not a bug:
+            it carries post-quantum keys, which are bulky.
+          </p>
+        </li>
+
+        <li>
+          <h4>Build the genesis, allocating the initial supply to yourself</h4>
+          <p>
+            Without <code>--autorite</code>, the chain is <strong>open</strong>: any node
+            started with <code>--sceller</code> will produce blocks on it. That is what you
+            want locally, and never on a public network.
+          </p>
+          <div class="cmd">
+            <div class="cmd-head"><span class="t">genesis</span></div>
+<pre><code><span class="c"># replace obs1… with the address printed in the previous step</span>
+obscura-genese --sortie genese.bin --allocation obs1…:1000000</code></pre>
+          </div>
+          <p>
+            The command prints the chain's full identifier (128 hexadecimal characters). That
+            is the <em class="term">anchor</em>: with several operators, it is compared
+            <strong>in full</strong> before anyone starts. The short form is only a visual cue.
+          </p>
+        </li>
+
+        <li>
+          <h4>Start the node — sealer <em>and</em> archivist</h4>
+          <p>
+            <code>--archiver</code> retains history. With no archivist on the network, no
+            wallet can bootstrap.
+          </p>
+          <div class="cmd">
+            <div class="cmd-head"><span class="t">node</span></div>
+<pre><code>obscura-node --ecoute 0.0.0.0:9333 --genese genese.bin \
+             --donnees ./donnees --sceller 1000 --archiver</code></pre>
+          </div>
+          <p>At startup it states exactly what it is (log messages are in French):</p>
+          <div class="cmd">
+            <div class="cmd-head"><span class="t">observed output</span></div>
+<pre><code>INFO   archivage ACTIVÉ — 1 sorties conservées (≈1 Kio)
+INFO   genèse c2ca4023f3892057…70c9ee08 (1 émissions) — tête courante c2ca4023f3892057
+INFO   scellement ACTIVÉ toutes les 1000 ms
+AVERT  chaîne OUVERTE, aucune élection de producteur : ordre convenu, pas défendu
+INFO   écoute sur 0.0.0.0:9333</code></pre>
+          </div>
+        </li>
+
+        <li>
+          <h4>Synchronise, then read the balance</h4>
+          <p>The wallet <em>receives</em>: it replays history and recognises its own notes in it.</p>
+          <div class="cmd">
+            <div class="cmd-head"><span class="t">sync</span></div>
+<pre><code>obscura-wallet synchroniser --fichier mon.wallet --noeud 127.0.0.1:9333
+obscura-wallet solde        --fichier mon.wallet</code></pre>
+          </div>
+          <p>
+            Note how the result is phrased: “up to date <strong>according to this node</strong>”.
+            Without a witness, an omission on its part would stay invisible — see
+            <a href="#witness">below</a>.
+          </p>
+        </li>
+
+        <li>
+          <h4>Pay</h4>
+          <div class="cmd">
+            <div class="cmd-head"><span class="t">payment</span></div>
+<pre><code>obscura-wallet envoyer --fichier mon.wallet --a obs1…recipient \
+                       --montant 300 --noeud 127.0.0.1:9333</code></pre>
+          </div>
+          <p>On the test machine the proof took <strong>0.7 s</strong> for <strong>85.6 KiB</strong>, in 1-in / 2-out shape.</p>
+          <div class="callout">
+            <span class="lab">Change does not come back immediately</span>
+            <p>
+              Its index in the consensus tree does not exist until the transaction is sealed.
+              It reappears at the next <code>synchroniser</code> — it is encrypted to you, so
+              it is recognised on scan. The verified run: balance 1,000,000, send 300, then
+              <strong>999,700</strong> after resynchronising, and <strong>300</strong> at the
+              recipient.
+            </p>
+          </div>
+        </li>
+
+      </ol>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Understand before typing</div>
+      <h2 class="serif">Three options that are decisions</h2>
+      <p class="sub">They are off by default, and that is not a configuration oversight.</p>
+    </div>
+
+    <div class="col">
+      <h3 id="seal"><code>--sceller</code> — producing blocks</h3>
+      <p>
+        Off by default: producing blocks is an operator's decision. On a chain with
+        authorities, a node that is not one refuses to seal and says so.
+        <strong>Reducing a committee to three members or fewer sacrifices fault
+        tolerance</strong> — the quorum then equals the whole committee, and no absence is
+        tolerated.
+      </p>
+
+      <h3 id="archive"><code>--archiver</code> — serving history</h3>
+      <p>
+        Off by default, because it is a costly role: roughly 1.4 KiB per output, never pruned.
+        A node that does not enable it remains perfectly valid, but cannot bootstrap any
+        wallet.
+      </p>
+
+      <h3 id="witness"><code>--noeud-synchro</code> and <code>--temoin</code> — two different leaks</h3>
+      <p>
+        <strong>Synchronising and then paying through the same node identifies you as the
+        sender</strong>: a Dandelion++ relay has never just synchronised. Use
+        <code>--noeud-synchro</code> so the two differ — ideally on different networks. The
+        tool warns you when they coincide.
+      </p>
+      <p>
+        <code>--temoin</code> addresses a different problem: the node serving history can
+        <em>lie by omission</em>. The witness queries a second node at the same height and
+        compares roots; a disagreement halts everything before application. It is only worth
+        anything if chosen independently, and it does not say which of the two is lying.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Beyond local</div>
+      <h2 class="serif">Joining a federation</h2>
+      <p class="sub">By invitation. There is no public bootnode, no directory, and no button.</p>
+    </div>
+    <div class="col">
+      <p>
+        Each prospective sealer publishes the public key of <em>their</em> node. Nobody sends
+        their identity file — it holds the secret.
+      </p>
+      <div class="cmd">
+        <div class="cmd-head"><span class="t">identity</span></div>
+<pre><code>obscura-node --identite --donnees ./donnees</code></pre>
+      </div>
+      <p>
+        The resulting key goes to whoever builds the genesis, who burns it in with
+        <code>--autorite-hex</code>. Peer addresses are exchanged <strong>out of band</strong>,
+        then:
+      </p>
+      <div class="cmd">
+        <div class="cmd-head"><span class="t">federated node</span></div>
+<pre><code>obscura-node --ecoute 0.0.0.0:9333 --pair &lt;peer_address&gt; \
+             --genese genese.bin --donnees ./donnees</code></pre>
+      </div>
+      <div class="callout secret">
+        <span class="lab">Before anyone starts, with several operators</span>
+        <p>
+          Compare the <strong>full anchor</strong> (128 hexadecimal characters) between
+          operators. Two nodes booted on different genesis blocks reject all of each other's
+          blocks, and <strong>nothing in the error messages points at the cause</strong>.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">When the day comes</div>
+      <h2 class="serif" id="verify">Verifying a signed release</h2>
+      <p class="sub">
+        <strong>No release has been published to date.</strong> The procedure is described
+        here so it is known in advance, not because it applies today.
+      </p>
+    </div>
+    <div class="col">
+      <p>
+        The repository carries the release public key (<code>deploiement/release.pub</code>)
+        and the verification script. Signatures are <em>minisign</em>.
+      </p>
+      <div class="cmd">
+        <div class="cmd-head"><span class="t">verification</span></div>
+<pre><code>./deploiement/verifier-release.sh &lt;archive&gt; &lt;signature&gt;</code></pre>
+      </div>
+      <p>
+        A release key fetched from the same place as the archive proves nothing. The day a
+        release exists, compare the key against an independent source.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Check for yourself</div>
+      <h2 class="serif">Running the test suite</h2>
+    </div>
+    <div class="col">
+      <div class="cmd">
+        <div class="cmd-head"><span class="t">tests</span></div>
+<pre><code><span class="c"># CONSENSUS surface only: monolith, ProvedTx, proved ledger</span>
+cargo test --release
+
+<span class="c"># plus transparent dev mode and standalone sub-circuits</span>
+cargo test --release --all-features</code></pre>
+      </div>
+      <p>
+        By default only the <strong>consensus surface</strong> is compiled. Development paths
+        live behind features that are off by default, so they are not mistaken for the
+        consensus: the transparent ledger is explicitly non-private, and has no business in a
+        security evaluation.
+      </p>
+      <div class="linklist">
+        <a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/OPERATEUR.md">
+          <span class="n">Operations <span class="tag">FR</span></span>
+          <span class="d">Logging, systemd unit, non-root Docker image.</span>
+        </a>
+        <a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/TESTNET.md">
+          <span class="n">Testnet <span class="tag">FR</span></span>
+          <span class="d">Test-network scope and the liveness table by committee size.</span>
+        </a>
+        <a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/OUVERTURE.md">
+          <span class="n">Opening a chain <span class="tag">FR</span></span>
+          <span class="d">The opening runbook, and why it is a deliberate gesture.</span>
+        </a>
+        <a href="../obscura-atelier-pratique.html">
+          <span class="n">Practical workshop <span class="tag">FR</span></span>
+          <span class="d">The same walkthrough, annotated step by step.</span>
+        </a>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="shell">
+    <div class="bottom">
+      <span class="mono">Commands verified by real execution on 27 July 2026. Unaudited prototype, no value.</span>
+      <span class="mono"><a href="index.html">Home</a> &middot; MIT <em>or</em> Apache-2.0 &middot; <span data-year>2026</span></span>
+    </div>
+  </div>
+</footer>
+
+<script src="../assets/site.js"></script>
+</body>
+</html>

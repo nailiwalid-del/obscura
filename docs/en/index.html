@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Walid Naili — Obscura &amp; QPoL, applied cryptography</title>
+<meta name="description" content="Two applied-cryptography projects: Obscura, a prototype post-quantum currency designed for privacy (Rust, public code); QPoL, research into the scarce resource that protects a consensus.">
+<meta name="color-scheme" content="light dark">
+<link rel="alternate" hreflang="fr" href="../index.html">
+<link rel="alternate" hreflang="en" href="index.html">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+
+<a class="skip" href="#content">Skip to content</a>
+
+<div class="topbar">
+  <div class="shell">
+    <a class="brand" href="index.html">Walid <span>Naili</span></a>
+    <nav class="topnav" aria-label="Main navigation">
+      <a href="index.html" aria-current="page">Home</a>
+      <a href="obscura.html">Obscura</a>
+      <a href="start.html">Get started</a>
+      <a href="qpol.html">QPoL</a>
+      <a class="ctrl" href="../index.html" hreflang="fr" lang="fr">FR</a>
+      <button type="button" class="ctrl" data-theme-toggle aria-pressed="false">
+        theme <span data-theme-label>dark</span>
+      </button>
+    </nav>
+  </div>
+</div>
+
+<header class="hero">
+  <div class="shell">
+    <p class="eyebrow rise">Applied cryptography &middot; Two projects &middot; 2026</p>
+    <h1 class="title serif rise">Two projects, one question: <em>what</em> does a guarantee rest on?</h1>
+    <p class="lede rise">
+      A payment system promises privacy; a consensus promises it cannot be fooled. Those
+      promises always rest on something scarce and hard to forge. <strong>Obscura</strong>
+      bets on mathematics that would survive a quantum computer. <strong>QPoL</strong> asks
+      whether a <em>physical constraint</em> could play the same role.
+    </p>
+    <div class="warn rise">
+      <span class="ico" aria-hidden="true">▲</span>
+      <p>
+        <strong>Nothing here is a product.</strong> Obscura is an educational prototype with
+        <strong>no security audit</strong> — do not entrust it with anything of value.
+        QPoL is research: no published code, no network.
+      </p>
+    </div>
+    <div class="cta-row rise">
+      <a class="btn primary" href="obscura.html">Explore Obscura <span class="arr" aria-hidden="true">→</span></a>
+      <a class="btn" href="start.html">Run a node</a>
+    </div>
+  </div>
+</header>
+
+<main id="content">
+
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">The projects</div>
+      <h2 class="serif">Two very different stages of maturity</h2>
+      <p class="sub">
+        One compiles and runs today; the other is research with nothing published.
+        That asymmetry is shown, not smoothed over.
+      </p>
+    </div>
+
+    <div class="projects">
+
+      <article class="project">
+        <h3 class="serif">Obscura</h3>
+        <p class="tagline">
+          A digital currency where amounts, senders and recipients are <em>never</em>
+          published — and whose security rests on two independent families of mathematics.
+        </p>
+        <ul class="facts">
+          <li><span class="dot done" aria-hidden="true"></span><span><strong>Public code</strong>, in Rust, tested end to end</span></li>
+          <li><span class="dot done" aria-hidden="true"></span><span>Complete BFT consensus — finality, liveness, reconfigurable committee</span></li>
+          <li><span class="dot done" aria-hidden="true"></span><span>Runs locally: four binaries, a single-machine testnet</span></li>
+          <li><span class="dot attn" aria-hidden="true"></span><span><strong>Unaudited</strong> prototype — no public chain is open</span></li>
+        </ul>
+        <div class="foot">
+          <a class="btn primary" href="obscura.html">The project <span class="arr" aria-hidden="true">→</span></a>
+          <a class="btn" href="start.html">Get started</a>
+        </div>
+      </article>
+
+      <article class="project qpol-scope">
+        <h3 class="serif">QPoL</h3>
+        <p class="tagline">
+          Research: what if the scarce resource protecting a consensus were neither energy
+          nor capital, but a <em>physical constraint</em> that no budget can work around?
+        </p>
+        <ul class="facts">
+          <li><span class="dot done" aria-hidden="true"></span><span>Theory, simulator and prior-art review carried out</span></li>
+          <li><span class="dot todo" aria-hidden="true"></span><span><strong>No published code</strong>, no network, no token</span></li>
+          <li><span class="dot todo" aria-hidden="true"></span><span>Intellectual property under review</span></li>
+        </ul>
+        <div class="foot">
+          <a class="btn" href="qpol.html">What can be said about it <span class="arr" aria-hidden="true">→</span></a>
+        </div>
+      </article>
+
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">The common thread</div>
+      <h2 class="serif">A guarantee is worth exactly what its scarce resource is worth</h2>
+    </div>
+    <div class="col">
+      <p>
+        Every decentralised system ends up answering the same question: what stops someone
+        from cheating? The answer is always a resource that cannot be manufactured at will.
+        <em class="term">Mining</em> answers “energy”, and production concentrates wherever
+        electricity is cheap. <em class="term">Proof of stake</em> answers “capital”, and
+        concentration follows wealth.
+      </p>
+      <p>
+        The two projects here attack that same point from opposite ends. Obscura takes the
+        classical resource — mathematical hardness — and asks what survives a quantum
+        computer: the answer is one rule, <strong>every security function rests on two
+        primitives from independent families</strong>, and the whole holds if at least one
+        holds. QPoL asks whether a <em>physical</em> resource could replace them.
+      </p>
+      <p>
+        They share no code and do not depend on one another.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Obscura in numbers</div>
+      <h2 class="serif">What the repository contains</h2>
+      <p class="sub">Measured in the repository on 27 July 2026.</p>
+    </div>
+    <div class="stat-row">
+      <div class="stat"><b>7</b><span>Rust crates</span></div>
+      <div class="stat"><b>42,467</b><span>lines of code</span></div>
+      <div class="stat"><b>614</b><span>tests</span></div>
+      <div class="stat"><b>P1–P7</b><span>proved in circuit</span></div>
+      <div class="stat"><b>4</b><span>binaries</span></div>
+    </div>
+    <div class="linklist">
+      <a href="../obscura-overview.html">
+        <span class="n">Design note <span class="tag">in French</span></span>
+        <span class="d">The long document: plain-language introduction, then architecture, circuit, ledger and measurements.</span>
+      </a>
+      <a href="../obscura-atelier.html">
+        <span class="n">Workshop — understanding <span class="tag">in French</span></span>
+        <span class="d">How it works, step by step, with no cryptography background assumed.</span>
+      </a>
+      <a href="../obscura-atelier-pratique.html">
+        <span class="n">Workshop — the procedure <span class="tag">in French</span></span>
+        <span class="d">The practical walkthrough, command by command.</span>
+      </a>
+      <a href="https://github.com/nailiwalid-del/obscura">
+        <span class="n">The repository on GitHub</span>
+        <span class="d">Full source, licensed MIT or Apache-2.0, at your option.</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="shell">
+    <div class="cols">
+      <div>
+        <h5>Obscura</h5>
+        <ul>
+          <li><a href="obscura.html">Overview</a></li>
+          <li><a href="start.html">Get started</a></li>
+          <li><a href="../obscura-overview.html">Design note (FR)</a></li>
+          <li><a href="https://github.com/nailiwalid-del/obscura">GitHub repository</a></li>
+        </ul>
+      </div>
+      <div>
+        <h5>Documents <span class="tag">in French</span></h5>
+        <ul>
+          <li><a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/CONFORMITE.md">Conformance — start here</a></li>
+          <li><a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/PROTOCOL.md">Protocol specification</a></li>
+          <li><a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/THREAT_MODEL.md">Threat model</a></li>
+          <li><a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/STARK_STATEMENT.md">STARK statement</a></li>
+        </ul>
+      </div>
+      <div>
+        <h5>QPoL</h5>
+        <ul>
+          <li><a href="qpol.html">What can be said about it</a></li>
+          <li><a href="https://github.com/nailiwalid-del">Get in touch</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="bottom">
+      <span class="mono">Educational prototype — unaudited, no value. Invitation-only network: no faucet, no explorer.</span>
+      <span class="mono">MIT <em>or</em> Apache-2.0 &middot; <span data-year>2026</span></span>
+    </div>
+  </div>
+</footer>
+
+<script src="../assets/site.js"></script>
+</body>
+</html>
