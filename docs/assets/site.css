@@ -1,5 +1,5 @@
 /* ============================================================================
-   Site vitrine Obscura + QPoL — feuille partagée.
+   Site vitrine Obscura — feuille partagée.
 
    Les jetons (couleurs, typo, ombres) sont REPRIS de docs/obscura-overview.html
    pour qu'un visiteur qui passe du site à l'overview ne change pas d'univers
@@ -15,11 +15,7 @@
   --accent-soft:#d8f1eb; --secret:#a86f16; --secret-soft:#f4e9d3;
   --done:#0f8f6c; --pending:#8b94a2; --code-bg:#eef1f5;
   --shadow:0 1px 2px rgba(20,22,29,.06),0 8px 24px rgba(20,22,29,.05);
-  /* QPoL — teinte FROIDE, volontairement distincte du teal d'Obscura :
-     les deux projets ne partagent aucun code, la couleur ne doit pas
-     laisser croire que QPoL est un module d'Obscura. */
-  --qpol:#4c5fd7; --qpol-ink:#3547b8; --qpol-soft:#e0e4fb;
-  --on-accent:#06231d; --on-qpol:#ffffff;
+  --on-accent:#06231d;
 }
 @media (prefers-color-scheme:dark){
   :root{
@@ -28,8 +24,7 @@
     --accent-soft:#123029; --secret:#e2ac52; --secret-soft:#2b2415;
     --done:#33c99a; --pending:#69727f; --code-bg:#161a22;
     --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35);
-    --qpol:#8b9bff; --qpol-ink:#a6b2ff; --qpol-soft:#1a1e3a;
-    --on-accent:#06231d; --on-qpol:#0a0d1f;
+    --on-accent:#06231d;
   }
 }
 :root[data-theme="light"]{
@@ -38,8 +33,7 @@
   --accent-soft:#d8f1eb; --secret:#a86f16; --secret-soft:#f4e9d3;
   --done:#0f8f6c; --pending:#8b94a2; --code-bg:#eef1f5;
   --shadow:0 1px 2px rgba(20,22,29,.06),0 8px 24px rgba(20,22,29,.05);
-  --qpol:#4c5fd7; --qpol-ink:#3547b8; --qpol-soft:#e0e4fb;
-  --on-accent:#06231d; --on-qpol:#ffffff;
+  --on-accent:#06231d;
 }
 :root[data-theme="dark"]{
   --ink:#e7eaf1; --paper:#0c0e13; --surface:#14171f; --surface-2:#1b1f2a;
@@ -47,12 +41,8 @@
   --accent-soft:#123029; --secret:#e2ac52; --secret-soft:#2b2415;
   --done:#33c99a; --pending:#69727f; --code-bg:#161a22;
   --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35);
-  --qpol:#8b9bff; --qpol-ink:#a6b2ff; --qpol-soft:#1a1e3a;
-    --on-accent:#06231d; --on-qpol:#0a0d1f;
+  --on-accent:#06231d;
 }
-
-/* Portée QPoL : bascule l'accent local sans dupliquer les composants. */
-.qpol-scope{--accent:var(--qpol); --accent-ink:var(--qpol-ink); --accent-soft:var(--qpol-soft); --on-accent:var(--on-qpol)}
 
 *{box-sizing:border-box}
 html{scroll-behavior:smooth}
@@ -161,9 +151,9 @@ h1.title em{font-style:normal; color:var(--accent)}
   box-shadow:var(--shadow); line-height:1.3;
 }
 .btn:hover{border-color:var(--accent)}
-/* La couleur du TEXTE sur fond accentué suit la palette, elle n'est pas figée :
-   le teal d'Obscura est clair et veut de l'encre sombre, l'indigo de QPoL est
-   sombre et veut du blanc. Un `color` en dur ici tombait à 3,1:1 sur QPoL. */
+/* La couleur du TEXTE sur fond accentué passe par une variable plutôt que d'être
+   figée : le teal veut de l'encre sombre, une palette plus foncée voudrait du
+   blanc. Un `color` en dur ne survit pas à un changement d'accent. */
 .btn.primary{background:var(--accent); border-color:var(--accent); color:var(--on-accent)}
 .btn.primary:hover{filter:brightness(1.06)}
 .btn .arr{font-size:1.05em; line-height:1}

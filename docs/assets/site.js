@@ -1,5 +1,5 @@
 /* ============================================================================
-   Site vitrine Obscura + QPoL — comportements.
+   Site vitrine Obscura — comportements.
 
    Règle : le JS n'ajoute que du CONFORT, jamais du contenu. Le site doit rester
    lisible et navigable sans lui — le lien de langue est un <a href> réel, le

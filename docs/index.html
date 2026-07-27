@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Walid Naili — Obscura &amp; QPoL, cryptographie appliquée</title>
-<meta name="description" content="Deux projets de cryptographie appliquée : Obscura, prototype de monnaie post-quantique conçue pour la confidentialité (Rust, code public) ; QPoL, recherche sur la ressource rare qui protège un consensus.">
+<title>Obscura — monnaie numérique post-quantique conçue pour la confidentialité</title>
+<meta name="description" content="Obscura : prototype Rust d'une monnaie numérique où montants, expéditeurs et destinataires ne sont jamais publiés, bâtie sur la défense en profondeur et un circuit STARK qui définit le consensus.">
 <meta name="color-scheme" content="light dark">
 <link rel="alternate" hreflang="en" href="en/index.html">
 <link rel="alternate" hreflang="fr" href="index.html">
@@ -16,12 +16,11 @@
 
 <div class="topbar">
   <div class="shell">
-    <a class="brand" href="index.html">Walid <span>Naili</span></a>
+    <a class="brand" href="index.html">Obs<span>cura</span></a>
     <nav class="topnav" aria-label="Navigation principale">
       <a href="index.html" aria-current="page">Accueil</a>
-      <a href="obscura.html">Obscura</a>
+      <a href="obscura.html">Le projet</a>
       <a href="demarrer.html">Démarrer</a>
-      <a href="qpol.html">QPoL</a>
       <a class="ctrl" href="en/index.html" hreflang="en" lang="en">EN</a>
       <button type="button" class="ctrl" data-theme-toggle aria-pressed="false">
         thème <span data-theme-label>sombre</span>
@@ -32,26 +31,32 @@
 
 <header class="hero">
   <div class="shell">
-    <p class="eyebrow rise">Cryptographie appliquée &middot; Deux projets &middot; 2026</p>
-    <h1 class="title serif rise">Deux projets, une même question : <em>sur quoi</em> une garantie tient-elle&nbsp;?</h1>
+    <p class="eyebrow rise">Prototype de recherche Rust &middot; v0.2 &middot; 2026</p>
+    <h1 class="title serif rise">Une monnaie numérique <em>post-quantique</em>, conçue pour la <em>confidentialité</em></h1>
     <p class="lede rise">
-      Un système de paiement promet la confidentialité, un consensus promet qu'on ne peut
-      pas le tromper. Ces promesses reposent toujours sur quelque chose de rare et de
-      difficile à falsifier. <strong>Obscura</strong> mise sur des mathématiques qui
-      résisteraient à un ordinateur quantique. <strong>QPoL</strong> se demande si la
-      <em>contrainte physique</em> pourrait tenir ce rôle.
+      Sur une blockchain classique, chaque paiement est public et gravé pour toujours.
+      Obscura publie l'inverse : rien. Ni les montants, ni les expéditeurs, ni les
+      destinataires — et sa sécurité est construite pour survivre à un ordinateur quantique.
     </p>
     <div class="warn rise">
       <span class="ico" aria-hidden="true">▲</span>
       <p>
-        <strong>Rien ici n'est un produit.</strong> Obscura est un prototype pédagogique
-        <strong>sans audit de sécurité</strong> — ne lui confiez aucune valeur réelle.
-        QPoL est un travail de recherche, sans code publié ni réseau.
+        <strong>Prototype pédagogique, sans audit de sécurité.</strong> Le code est complet et
+        testé de bout en bout, mais rien n'a été soumis à un cryptanalyste.
+        <strong>Ne lui confiez aucune valeur réelle.</strong> Il n'existe aucune chaîne
+        publique : ni faucet, ni explorateur, <strong>par décision</strong>.
       </p>
     </div>
     <div class="cta-row rise">
-      <a class="btn primary" href="obscura.html">Découvrir Obscura <span class="arr" aria-hidden="true">→</span></a>
-      <a class="btn" href="demarrer.html">Faire tourner un nœud</a>
+      <a class="btn primary" href="demarrer.html">Le faire tourner <span class="arr" aria-hidden="true">→</span></a>
+      <a class="btn" href="obscura.html">Comprendre le projet</a>
+    </div>
+    <div class="stat-row rise">
+      <div class="stat"><b>7</b><span>crates Rust</span></div>
+      <div class="stat"><b>42&nbsp;467</b><span>lignes de code</span></div>
+      <div class="stat"><b>614</b><span>tests</span></div>
+      <div class="stat"><b>P1–P7</b><span>prouvés en circuit</span></div>
+      <div class="stat"><b>4</b><span>binaires</span></div>
     </div>
   </div>
 </header>
@@ -61,82 +66,52 @@
 <section class="band">
   <div class="shell">
     <div class="band-head">
-      <div class="k">Les projets</div>
-      <h2 class="serif">Deux états d'avancement très différents</h2>
-      <p class="sub">
-        L'un se compile et s'exécute aujourd'hui ; l'autre est une recherche
-        dont rien n'est publié. Cette asymétrie est affichée, pas gommée.
-      </p>
+      <div class="k">En bref</div>
+      <h2 class="serif">Quatre choses à savoir avant de creuser</h2>
     </div>
-
-    <div class="projects">
-
-      <article class="project">
-        <h3 class="serif">Obscura</h3>
-        <p class="tagline">
-          Une monnaie numérique où les montants, les expéditeurs et les destinataires
-          ne sont <em>jamais</em> publiés — et dont la sécurité repose sur deux familles
-          mathématiques indépendantes.
+    <div class="cards">
+      <div class="card">
+        <div class="ico" aria-hidden="true">◈</div>
+        <h4>Confidentialité totale</h4>
+        <p>
+          Sur la chaîne, uniquement des engagements et des annulateurs. Montants,
+          expéditeurs et destinataires ne sont jamais publiés.
         </p>
-        <ul class="facts">
-          <li><span class="dot done" aria-hidden="true"></span><span><strong>Code public</strong>, en Rust, testé de bout en bout</span></li>
-          <li><span class="dot done" aria-hidden="true"></span><span>Consensus BFT complet — finalité, liveness, comité reconfigurable</span></li>
-          <li><span class="dot done" aria-hidden="true"></span><span>Exécutable en local : quatre binaires, un testnet à une machine</span></li>
-          <li><span class="dot attn" aria-hidden="true"></span><span>Prototype <strong>non audité</strong> — aucune chaîne publique ouverte</span></li>
-        </ul>
-        <div class="foot">
-          <a class="btn primary" href="obscura.html">Le projet <span class="arr" aria-hidden="true">→</span></a>
-          <a class="btn" href="demarrer.html">Démarrer</a>
-        </div>
-      </article>
-
-      <article class="project qpol-scope">
-        <h3 class="serif">QPoL</h3>
-        <p class="tagline">
-          Une recherche : et si la ressource rare qui protège un consensus n'était ni
-          l'énergie ni le capital, mais une <em>contrainte physique</em> qu'aucun budget
-          ne permet de contourner&nbsp;?
+      </div>
+      <div class="card">
+        <div class="ico" aria-hidden="true">◱</div>
+        <h4>Défense en profondeur</h4>
+        <p>
+          Chaque fonction de sécurité repose sur deux primitives de familles
+          indépendantes. L'ensemble tient si au moins une tient.
         </p>
-        <ul class="facts">
-          <li><span class="dot done" aria-hidden="true"></span><span>Travail théorique, simulateur et revue d'antériorité menés</span></li>
-          <li><span class="dot todo" aria-hidden="true"></span><span><strong>Aucun code publié</strong>, aucun réseau, aucun token</span></li>
-          <li><span class="dot todo" aria-hidden="true"></span><span>Propriété intellectuelle en cours d'examen</span></li>
-        </ul>
-        <div class="foot">
-          <a class="btn" href="qpol.html">Ce qui peut en être dit <span class="arr" aria-hidden="true">→</span></a>
-        </div>
-      </article>
-
-    </div>
-  </div>
-</section>
-
-<section class="band">
-  <div class="shell">
-    <div class="band-head">
-      <div class="k">Le fil commun</div>
-      <h2 class="serif">Une garantie vaut ce que vaut sa ressource rare</h2>
+      </div>
+      <div class="card">
+        <div class="ico" aria-hidden="true">◎</div>
+        <h4>Le STARK est le consensus</h4>
+        <p>
+          L'énoncé du circuit n'accompagne pas la règle : il <em>est</em> la règle. Il
+          n'existe pas de seconde définition avec laquelle diverger.
+        </p>
+      </div>
+      <div class="card">
+        <div class="ico" aria-hidden="true">◔</div>
+        <h4>Finalité, pas minage</h4>
+        <p>
+          Un comité d'autorités produit les blocs, avec un certificat de quorum vérifié
+          avant toute preuve. Une autorité absente est contournée.
+        </p>
+      </div>
     </div>
     <div class="col">
       <p>
-        Tout système décentralisé finit par répondre à la même question : qu'est-ce qui
-        empêche quelqu'un de tricher&nbsp;? La réponse est toujours une ressource qu'on ne
-        peut pas fabriquer à volonté. Le <em class="term">minage</em> répond « de l'énergie »,
-        et la production se concentre là où l'électricité est bon marché. La
-        <em class="term">preuve d'enjeu</em> répond « du capital », et la concentration suit
-        la richesse.
+        Le détail de chacun de ces points, et surtout <strong>les cinq limites connues du
+        prototype</strong>, sont sur la page du projet — affichées en pleine page, pas
+        reléguées en note.
       </p>
-      <p>
-        Les deux projets présentés ici attaquent ce même point par deux bouts opposés.
-        Obscura prend la ressource classique — la difficulté mathématique — et demande ce
-        qu'il en reste face à un ordinateur quantique : la réponse tient en une règle,
-        <strong>chaque fonction de sécurité repose sur deux primitives de familles
-        indépendantes</strong>, et l'ensemble tient si au moins une tient. QPoL demande si
-        une ressource <em>physique</em> pourrait remplacer les précédentes.
-      </p>
-      <p>
-        Ils ne partagent aucun code et ne dépendent pas l'un de l'autre.
-      </p>
+      <div class="cta-row">
+        <a class="btn" href="obscura.html">Le projet en détail <span class="arr" aria-hidden="true">→</span></a>
+      </div>
     </div>
   </div>
 </section>
@@ -144,21 +119,61 @@
 <section class="band">
   <div class="shell">
     <div class="band-head">
-      <div class="k">Obscura en chiffres</div>
-      <h2 class="serif">Ce que le dépôt contient</h2>
-      <p class="sub">Relevé dans le dépôt le 27 juillet 2026.</p>
+      <div class="k">Essayer</div>
+      <h2 class="serif">Ce que vous pouvez faire tourner aujourd'hui</h2>
+      <p class="sub">
+        Il n'y a pas de binaire à télécharger : aucune release n'est publiée. On récupère
+        la source et on la compile — Rust 1.87 suffit.
+      </p>
     </div>
-    <div class="stat-row">
-      <div class="stat"><b>7</b><span>crates Rust</span></div>
-      <div class="stat"><b>42&nbsp;467</b><span>lignes de code</span></div>
-      <div class="stat"><b>614</b><span>tests</span></div>
-      <div class="stat"><b>P1–P7</b><span>prouvés en circuit</span></div>
-      <div class="stat"><b>4</b><span>binaires</span></div>
+    <div class="col">
+      <div class="cmd">
+        <div class="cmd-head"><span class="t">en trois commandes</span></div>
+<pre><code>git clone https://github.com/nailiwalid-del/obscura.git
+cd obscura
+cargo run --release --bin obscura-demo</code></pre>
+      </div>
+      <p>
+        Cette dernière commande lance deux nœuds réels et fait passer une transaction entre
+        eux. Pour monter une chaîne à vous, avec votre propre genèse, votre nœud scelleur et
+        un portefeuille qui paie, la marche à suivre complète est sur la page
+        <a href="demarrer.html">Démarrer</a> — chaque commande y a été vérifiée par exécution
+        réelle, jusqu'au paiement reçu.
+      </p>
+      <div class="callout secret">
+        <span class="lab">Réseau sur invitation</span>
+        <p>
+          Le seul parcours suivable seul est le <strong>testnet local</strong>. Rejoindre une
+          fédération suppose une invitation et un échange de clés hors bande : il n'y a ni
+          bootnode public, ni annuaire, ni bouton « rejoindre ».
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Aller plus loin</div>
+      <h2 class="serif">Lire le projet</h2>
+      <p class="sub">
+        Cette page et la page projet vulgarisent. En cas de divergence, ce sont les
+        documents du dépôt qui ont raison.
+      </p>
     </div>
     <div class="linklist">
+      <a href="obscura.html">
+        <span class="n">Le projet</span>
+        <span class="d">Présentation en couches : pour tous, puis le principe, le circuit, le consensus et les limites.</span>
+      </a>
+      <a href="demarrer.html">
+        <span class="n">Démarrer</span>
+        <span class="d">Source, build, testnet local de bout en bout, nœud et portefeuille.</span>
+      </a>
       <a href="obscura-overview.html">
         <span class="n">Note de conception</span>
-        <span class="d">Le document long : vulgarisation, puis architecture, circuit, ledger et mesures.</span>
+        <span class="d">Le document long : architecture, circuit, ledger, mesures, feuille de route.</span>
       </a>
       <a href="obscura-atelier.html">
         <span class="n">Atelier — comprendre</span>
@@ -182,12 +197,11 @@
   <div class="shell">
     <div class="cols">
       <div>
-        <h5>Obscura</h5>
+        <h5>Le site</h5>
         <ul>
-          <li><a href="obscura.html">Présentation</a></li>
+          <li><a href="obscura.html">Le projet</a></li>
           <li><a href="demarrer.html">Démarrer</a></li>
-          <li><a href="obscura-overview.html">Note de conception</a></li>
-          <li><a href="https://github.com/nailiwalid-del/obscura">Dépôt GitHub</a></li>
+          <li><a href="en/index.html" hreflang="en" lang="en">English version</a></li>
         </ul>
       </div>
       <div>
@@ -200,10 +214,11 @@
         </ul>
       </div>
       <div>
-        <h5>QPoL</h5>
+        <h5>Exploitation</h5>
         <ul>
-          <li><a href="qpol.html">Ce qui peut en être dit</a></li>
-          <li><a href="https://github.com/nailiwalid-del">Prendre contact</a></li>
+          <li><a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/OPERATEUR.md">Faire tourner un nœud</a></li>
+          <li><a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/TESTNET.md">Testnet</a></li>
+          <li><a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/OUVERTURE.md">Ouvrir une chaîne</a></li>
         </ul>
       </div>
     </div>
