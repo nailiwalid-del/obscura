@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Démarrer — récupérer, compiler et faire tourner Obscura</title>
+<meta name="description" content="Récupérer le code d'Obscura, le compiler, lancer un nœud et un portefeuille : testnet local en une machine, commandes vérifiées par exécution réelle.">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<a class="skip" href="#contenu">Aller au contenu</a>
+
+<div class="topbar">
+  <div class="shell">
+    <a class="brand" href="index.html">Walid <span>Naili</span></a>
+    <nav class="topnav" aria-label="Navigation principale">
+      <a href="index.html">Accueil</a>
+      <a href="obscura.html">Obscura</a>
+      <a href="demarrer.html" aria-current="page">Démarrer</a>
+      <a href="qpol.html">QPoL</a>
+      <button type="button" class="ctrl" data-theme-toggle aria-pressed="false">
+        thème <span data-theme-label>sombre</span>
+      </button>
+    </nav>
+  </div>
+</div>
+
+<header class="hero">
+  <div class="shell">
+    <p class="eyebrow rise">Démarrer &middot; Nœud, portefeuille, testnet local</p>
+    <h1 class="title serif rise">Récupérer le code, et le <em>faire tourner</em></h1>
+    <p class="lede rise">
+      Tout ce qui suit a été exécuté le 27 juillet 2026 sur une machine Windows, dans
+      l'ordre où c'est écrit. Aucune commande n'est recopiée d'un document : elles sont
+      transcrites d'un déroulé réel, jusqu'au paiement reçu.
+    </p>
+    <div class="warn rise">
+      <span class="ico" aria-hidden="true">▲</span>
+      <p>
+        <strong>Prototype non audité, sans valeur.</strong> Il n'existe aucune chaîne
+        publique Obscura, aucun faucet et aucun explorateur — <strong>par décision</strong>,
+        pas par manque. Ce que vous montez ici est une chaîne à vous, sur votre machine.
+      </p>
+    </div>
+  </div>
+</header>
+
+<main id="contenu">
+
+<!-- =========================================================== récupérer -->
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Étape 0</div>
+      <h2 class="serif">Récupérer la source</h2>
+      <p class="sub">
+        Le dépôt est public, sous licence MIT <em>ou</em> Apache-2.0, au choix de
+        l'utilisateur.
+      </p>
+    </div>
+
+    <div class="col">
+      <div class="cmd">
+        <div class="cmd-head"><span class="t">git</span></div>
+<pre><code>git clone https://github.com/nailiwalid-del/obscura.git
+cd obscura</code></pre>
+      </div>
+
+      <p>Ou, sans <code>git</code>, une archive du dernier état :</p>
+
+      <div class="cmd">
+        <div class="cmd-head"><span class="t">archive</span></div>
+<pre><code>curl -L -o obscura.tar.gz \
+  https://github.com/nailiwalid-del/obscura/archive/refs/heads/master.tar.gz</code></pre>
+      </div>
+
+      <div class="callout secret">
+        <span class="lab">Pourquoi pas de binaire à télécharger</span>
+        <p>
+          <strong>Aucune release binaire n'est publiée à ce jour</strong> — la page ne vous
+          en propose donc pas. La machinerie de release signée existe bien dans le dépôt
+          (<code>deploiement/</code>), mais publier une release et ouvrir une chaîne sont
+          des <em>gestes d'opérateur</em> délibérés, pas des sous-produits d'un site.
+          La procédure de vérification est décrite <a href="#verifier">plus bas</a>, pour le
+          jour où elle servira.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ compiler -->
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Étape 1</div>
+      <h2 class="serif">Compiler</h2>
+      <p class="sub">Rust <strong>1.87</strong> minimum (édition 2021). Rien d'autre n'est requis.</p>
+    </div>
+
+    <div class="col">
+      <div class="cmd">
+        <div class="cmd-head"><span class="t">build</span></div>
+<pre><code>cargo build --release -p node --bins</code></pre>
+      </div>
+
+      <p>Quatre binaires apparaissent dans <code>target/release/</code> :</p>
+
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Binaire</th><th>Rôle</th></tr></thead>
+          <tbody>
+            <tr><td><code>obscura-genese</code></td><td>Fabrique le bloc initial d'une chaîne : allocations et, éventuellement, la liste des autorités.</td></tr>
+            <tr><td><code>obscura-node</code></td><td>Le nœud : réseau, mempool, validation, et — sur décision — production de blocs et archivage.</td></tr>
+            <tr><td><code>obscura-wallet</code></td><td>Le portefeuille : créer, synchroniser, consulter le solde, payer, consolider.</td></tr>
+            <tr><td><code>obscura-demo</code></td><td>Une démonstration autonome : deux nœuds réels et une transaction, en une commande.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout">
+        <span class="lab">Le <code>--release</code> n'est pas une optimisation facultative</span>
+        <p>
+          Les preuves STARK sont conditionnées à la compilation en <code>release</code>.
+          En <code>debug</code>, le chemin de preuve n'est pas disponible : ce n'est pas
+          « plus lent », c'est absent.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================== express -->
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Chemin A</div>
+      <h2 class="serif">Vérifier que ça marche, en une commande</h2>
+      <p class="sub">Deux nœuds réels, une transaction émise et propagée. Rien à configurer.</p>
+    </div>
+    <div class="col">
+      <div class="cmd">
+        <div class="cmd-head"><span class="t">démonstration</span></div>
+<pre><code>cargo run --release --bin obscura-demo</code></pre>
+      </div>
+      <p>
+        C'est la réponse la plus courte à « est-ce que ce truc fonctionne vraiment ». Pour
+        monter une chaîne à vous, passez au chemin suivant.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================== testnet local -->
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Chemin B</div>
+      <h2 class="serif">Un testnet local, de bout en bout</h2>
+      <p class="sub">
+        Une seule machine, une chaîne ouverte, un portefeuille qui reçoit puis paie.
+        C'est le <strong>seul parcours suivable en solo</strong> — rejoindre une fédération
+        suppose une invitation.
+      </p>
+    </div>
+
+    <div class="col">
+      <ol class="steps">
+
+        <li>
+          <h4>Créer un portefeuille et lire son adresse</h4>
+          <p>
+            La phrase de passe est demandée à l'invite, ou fournie par la variable
+            d'environnement <code>OBSCURA_WALLET_PHRASE</code>.
+          </p>
+          <div class="cmd">
+            <div class="cmd-head"><span class="t">portefeuille</span></div>
+<pre><code>obscura-wallet creer   --fichier mon.wallet
+obscura-wallet adresse --fichier mon.wallet</code></pre>
+          </div>
+          <p>
+            L'adresse fait environ <strong>2 500 caractères</strong>. Ce n'est pas une
+            anomalie : elle porte des clés post-quantiques, qui sont volumineuses.
+          </p>
+        </li>
+
+        <li>
+          <h4>Fabriquer la genèse, en s'allouant la monnaie initiale</h4>
+          <p>
+            Sans <code>--autorite</code>, la chaîne est <strong>ouverte</strong> : n'importe
+            quel nœud lancé avec <code>--sceller</code> y produira des blocs. C'est ce qu'on
+            veut en local, et jamais sur un réseau public.
+          </p>
+          <div class="cmd">
+            <div class="cmd-head"><span class="t">genèse</span></div>
+<pre><code><span class="c"># remplacez obs1… par l'adresse imprimée à l'étape précédente</span>
+obscura-genese --sortie genese.bin --allocation obs1…:1000000</code></pre>
+          </div>
+          <p>
+            La commande imprime l'identifiant complet de la chaîne (128 caractères
+            hexadécimaux). C'est l'<em class="term">ancre</em> : à plusieurs, elle se compare
+            <strong>en entier</strong> entre opérateurs avant tout démarrage. La forme courte
+            n'est qu'un repère visuel.
+          </p>
+        </li>
+
+        <li>
+          <h4>Lancer le nœud — scelleur <em>et</em> archiviste</h4>
+          <p>
+            <code>--archiver</code> conserve l'historique. Sans archiviste sur le réseau,
+            aucun portefeuille ne peut s'amorcer.
+          </p>
+          <div class="cmd">
+            <div class="cmd-head"><span class="t">nœud</span></div>
+<pre><code>obscura-node --ecoute 0.0.0.0:9333 --genese genese.bin \
+             --donnees ./donnees --sceller 1000 --archiver</code></pre>
+          </div>
+          <p>Au démarrage, il dit exactement ce qu'il est :</p>
+          <div class="cmd">
+            <div class="cmd-head"><span class="t">sortie observée</span></div>
+<pre><code>INFO   archivage ACTIVÉ — 1 sorties conservées (≈1 Kio)
+INFO   genèse c2ca4023f3892057…70c9ee08 (1 émissions) — tête courante c2ca4023f3892057
+INFO   scellement ACTIVÉ toutes les 1000 ms
+AVERT  chaîne OUVERTE, aucune élection de producteur : ordre convenu, pas défendu
+INFO   écoute sur 0.0.0.0:9333</code></pre>
+          </div>
+        </li>
+
+        <li>
+          <h4>Synchroniser, puis lire le solde</h4>
+          <p>Le portefeuille <em>reçoit</em> : il rejoue l'historique et y reconnaît ses notes.</p>
+          <div class="cmd">
+            <div class="cmd-head"><span class="t">synchronisation</span></div>
+<pre><code>obscura-wallet synchroniser --fichier mon.wallet --noeud 127.0.0.1:9333
+obscura-wallet solde        --fichier mon.wallet</code></pre>
+          </div>
+          <p>
+            Notez la formulation du résultat : « à jour <strong>selon ce nœud</strong> ».
+            Sans témoin, une omission de sa part resterait invisible — voir
+            <a href="#temoin">plus bas</a>.
+          </p>
+        </li>
+
+        <li>
+          <h4>Payer</h4>
+          <div class="cmd">
+            <div class="cmd-head"><span class="t">paiement</span></div>
+<pre><code>obscura-wallet envoyer --fichier mon.wallet --a obs1…destinataire \
+                       --montant 300 --noeud 127.0.0.1:9333</code></pre>
+          </div>
+          <p>Sur la machine d'essai, la preuve a été produite en <strong>0,7 s</strong> pour <strong>85,6 Kio</strong>, en forme 1 entrée / 2 sorties.</p>
+          <div class="callout">
+            <span class="lab">La monnaie rendue ne revient pas tout de suite</span>
+            <p>
+              Son index dans l'arbre du consensus n'existe qu'une fois la transaction
+              scellée. Elle réapparaît à la <code>synchroniser</code> suivante — elle est
+              chiffrée vers vous, donc reconnue au scan. Le déroulé vérifié : solde
+              1 000 000, envoi de 300, puis <strong>999 700</strong> après resynchronisation,
+              et <strong>300</strong> chez le destinataire.
+            </p>
+          </div>
+        </li>
+
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- ====================================================== avertissements -->
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">À comprendre avant de taper</div>
+      <h2 class="serif">Trois options qui sont des décisions</h2>
+      <p class="sub">
+        Elles sont désactivées par défaut, et ce n'est pas un oubli de configuration.
+      </p>
+    </div>
+
+    <div class="col">
+      <h3 id="sceller"><code>--sceller</code> — produire des blocs</h3>
+      <p>
+        Désactivé par défaut : produire des blocs est une décision d'opérateur. Sur une
+        chaîne à autorités, un nœud qui n'en est pas une refuse de sceller et le dit.
+        <strong>Réduire un comité à trois membres ou moins sacrifie la tolérance aux
+        fautes</strong> — le quorum vaut alors la totalité du comité, et aucune absence
+        n'est tolérée.
+      </p>
+
+      <h3 id="archiver"><code>--archiver</code> — servir l'historique</h3>
+      <p>
+        Désactivé par défaut, parce que c'est un rôle coûteux : environ 1,4 Kio par sortie,
+        jamais élagué. Un nœud qui ne l'active pas reste parfaitement valide, mais ne peut
+        amorcer aucun portefeuille.
+      </p>
+
+      <h3 id="temoin"><code>--noeud-synchro</code> et <code>--temoin</code> — deux fuites différentes</h3>
+      <p>
+        <strong>Se synchroniser puis payer par le même nœud vous désigne comme
+        l'émetteur</strong> : un relais Dandelion++ ne vient jamais de se synchroniser.
+        Utilisez <code>--noeud-synchro</code> pour que les deux diffèrent — idéalement sur
+        des réseaux distincts. L'outil vous avertit quand ils coïncident.
+      </p>
+      <p>
+        <code>--temoin</code> répond à un autre problème : le nœud qui sert l'historique
+        peut <em>mentir par omission</em>. Le témoin interroge un second nœud à la même
+        hauteur et compare les racines ; un désaccord arrête tout avant application. Il ne
+        vaut que choisi indépendamment, et ne dit pas lequel des deux ment.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ========================================================== fédération -->
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Au-delà du local</div>
+      <h2 class="serif">Rejoindre une fédération</h2>
+      <p class="sub">
+        Sur invitation. Il n'y a ni bootnode public, ni annuaire, ni bouton.
+      </p>
+    </div>
+    <div class="col">
+      <p>
+        Chaque futur scelleur publie la clé publique de <em>son</em> nœud. Personne ne
+        transmet son fichier d'identité — il contient le secret.
+      </p>
+      <div class="cmd">
+        <div class="cmd-head"><span class="t">identité</span></div>
+<pre><code>obscura-node --identite --donnees ./donnees</code></pre>
+      </div>
+      <p>
+        La clé obtenue est transmise à qui fabrique la genèse, qui la grave avec
+        <code>--autorite-hex</code>. Les adresses de pairs s'échangent
+        <strong>hors bande</strong>, puis :
+      </p>
+      <div class="cmd">
+        <div class="cmd-head"><span class="t">nœud fédéré</span></div>
+<pre><code>obscura-node --ecoute 0.0.0.0:9333 --pair &lt;adresse_du_pair&gt; \
+             --genese genese.bin --donnees ./donnees</code></pre>
+      </div>
+      <div class="callout secret">
+        <span class="lab">Avant tout démarrage à plusieurs</span>
+        <p>
+          Comparez l'<strong>ancre complète</strong> (128 hexadécimaux) entre opérateurs.
+          Deux nœuds amorcés sur des genèses différentes se refusent tous leurs blocs, et
+          <strong>rien dans les messages d'erreur ne désigne la cause</strong>.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =========================================================== vérifier -->
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Le jour venu</div>
+      <h2 class="serif" id="verifier">Vérifier une release signée</h2>
+      <p class="sub">
+        <strong>Aucune release n'est publiée à ce jour.</strong> La procédure est décrite
+        ici pour qu'elle soit connue d'avance, pas parce qu'elle s'applique aujourd'hui.
+      </p>
+    </div>
+    <div class="col">
+      <p>
+        Le dépôt porte la clé publique de release (<code>deploiement/release.pub</code>) et
+        le script de vérification. La signature est <em>minisign</em>.
+      </p>
+      <div class="cmd">
+        <div class="cmd-head"><span class="t">vérification</span></div>
+<pre><code>./deploiement/verifier-release.sh &lt;archive&gt; &lt;signature&gt;</code></pre>
+      </div>
+      <p>
+        Une clé de release récupérée depuis le même endroit que l'archive ne prouve rien.
+        Le jour où une release existera, comparez la clé avec une source indépendante.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================== tests -->
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Contrôler soi-même</div>
+      <h2 class="serif">Lancer la suite de tests</h2>
+    </div>
+    <div class="col">
+      <div class="cmd">
+        <div class="cmd-head"><span class="t">tests</span></div>
+<pre><code><span class="c"># surface CONSENSUS seule : monolithe, ProvedTx, ledger prouvé</span>
+cargo test --release
+
+<span class="c"># + mode transparent (dev) et sous-circuits autonomes</span>
+cargo test --release --all-features</code></pre>
+      </div>
+      <p>
+        Par défaut, seule la <strong>surface consensus</strong> est compilée. Les chemins de
+        développement vivent derrière des <em>features</em> désactivées par défaut, pour
+        qu'on ne les confonde pas avec le consensus : le ledger transparent est
+        explicitement non privé, et n'a rien à faire dans une évaluation de sécurité.
+      </p>
+      <div class="linklist">
+        <a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/OPERATEUR.md">
+          <span class="n">Exploitation</span>
+          <span class="d">Journalisation, unité systemd, image Docker non-root.</span>
+        </a>
+        <a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/TESTNET.md">
+          <span class="n">Testnet</span>
+          <span class="d">Cadrage du réseau d'essai et table de liveness selon la taille du comité.</span>
+        </a>
+        <a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/OUVERTURE.md">
+          <span class="n">Ouverture</span>
+          <span class="d">Le runbook d'ouverture d'une chaîne, et pourquoi c'est un geste délibéré.</span>
+        </a>
+        <a href="obscura-atelier-pratique.html">
+          <span class="n">Atelier pratique</span>
+          <span class="d">Le même déroulé, commenté pas à pas.</span>
+        </a>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="shell">
+    <div class="bottom">
+      <span class="mono">Commandes vérifiées par exécution réelle le 27 juillet 2026. Prototype non audité, sans valeur.</span>
+      <span class="mono"><a href="index.html">Accueil</a> &middot; MIT <em>ou</em> Apache-2.0 &middot; <span data-year>2026</span></span>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>

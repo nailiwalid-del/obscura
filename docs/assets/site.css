@@ -1,0 +1,347 @@
+/* ============================================================================
+   Site vitrine Obscura + QPoL — feuille partagée.
+
+   Les jetons (couleurs, typo, ombres) sont REPRIS de docs/obscura-overview.html
+   pour qu'un visiteur qui passe du site à l'overview ne change pas d'univers
+   visuel. Ne pas les diverger sans changer les deux.
+
+   Aucune dépendance externe : polices système uniquement, aucun CDN, aucun
+   @import distant. Le site doit s'ouvrir en file:// comme en https://.
+   ========================================================================= */
+
+:root{
+  --ink:#14161d; --paper:#f2f3f6; --surface:#ffffff; --surface-2:#e9ebf0;
+  --muted:#59616f; --line:#d8dce3; --accent:#0f9a82; --accent-ink:#0b6f5e;
+  --accent-soft:#d8f1eb; --secret:#a86f16; --secret-soft:#f4e9d3;
+  --done:#0f8f6c; --pending:#8b94a2; --code-bg:#eef1f5;
+  --shadow:0 1px 2px rgba(20,22,29,.06),0 8px 24px rgba(20,22,29,.05);
+  /* QPoL — teinte FROIDE, volontairement distincte du teal d'Obscura :
+     les deux projets ne partagent aucun code, la couleur ne doit pas
+     laisser croire que QPoL est un module d'Obscura. */
+  --qpol:#4c5fd7; --qpol-ink:#3547b8; --qpol-soft:#e0e4fb;
+  --on-accent:#06231d; --on-qpol:#ffffff;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --ink:#e7eaf1; --paper:#0c0e13; --surface:#14171f; --surface-2:#1b1f2a;
+    --muted:#98a2b2; --line:#272c38; --accent:#2fd0b0; --accent-ink:#54e0c4;
+    --accent-soft:#123029; --secret:#e2ac52; --secret-soft:#2b2415;
+    --done:#33c99a; --pending:#69727f; --code-bg:#161a22;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35);
+    --qpol:#8b9bff; --qpol-ink:#a6b2ff; --qpol-soft:#1a1e3a;
+    --on-accent:#06231d; --on-qpol:#0a0d1f;
+  }
+}
+:root[data-theme="light"]{
+  --ink:#14161d; --paper:#f2f3f6; --surface:#ffffff; --surface-2:#e9ebf0;
+  --muted:#59616f; --line:#d8dce3; --accent:#0f9a82; --accent-ink:#0b6f5e;
+  --accent-soft:#d8f1eb; --secret:#a86f16; --secret-soft:#f4e9d3;
+  --done:#0f8f6c; --pending:#8b94a2; --code-bg:#eef1f5;
+  --shadow:0 1px 2px rgba(20,22,29,.06),0 8px 24px rgba(20,22,29,.05);
+  --qpol:#4c5fd7; --qpol-ink:#3547b8; --qpol-soft:#e0e4fb;
+  --on-accent:#06231d; --on-qpol:#ffffff;
+}
+:root[data-theme="dark"]{
+  --ink:#e7eaf1; --paper:#0c0e13; --surface:#14171f; --surface-2:#1b1f2a;
+  --muted:#98a2b2; --line:#272c38; --accent:#2fd0b0; --accent-ink:#54e0c4;
+  --accent-soft:#123029; --secret:#e2ac52; --secret-soft:#2b2415;
+  --done:#33c99a; --pending:#69727f; --code-bg:#161a22;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35);
+  --qpol:#8b9bff; --qpol-ink:#a6b2ff; --qpol-soft:#1a1e3a;
+    --on-accent:#06231d; --on-qpol:#0a0d1f;
+}
+
+/* Portée QPoL : bascule l'accent local sans dupliquer les composants. */
+.qpol-scope{--accent:var(--qpol); --accent-ink:var(--qpol-ink); --accent-soft:var(--qpol-soft); --on-accent:var(--on-qpol)}
+
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+body{
+  margin:0; background:var(--paper); color:var(--ink); min-height:100vh;
+  font-family:-apple-system,system-ui,"Segoe UI",Roboto,sans-serif;
+  font-size:17px; line-height:1.65; -webkit-font-smoothing:antialiased;
+}
+.serif{font-family:Georgia,"Iowan Old Style","Times New Roman",serif}
+.mono{font-family:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace}
+.shell{max-width:1180px; margin:0 auto; padding:0 clamp(18px,4vw,40px)}
+.col{max-width:70ch}
+img{max-width:100%; height:auto}
+
+a{color:var(--accent-ink)}
+a:hover{text-decoration-thickness:2px}
+:focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:3px}
+
+/* Saut au contenu — premier élément focusable, invisible jusqu'au focus. */
+.skip{
+  position:absolute; left:-9999px; top:0; z-index:100;
+  background:var(--surface); color:var(--ink); padding:10px 16px;
+  border:1px solid var(--accent); border-radius:0 0 10px 0;
+}
+.skip:focus{left:0}
+
+/* ---------------------------------------------------------------- chrome -- */
+.topbar{
+  position:sticky; top:0; z-index:50;
+  background:color-mix(in srgb,var(--paper) 88%,transparent);
+  backdrop-filter:saturate(180%) blur(12px);
+  border-bottom:1px solid var(--line);
+}
+.topbar .shell{display:flex; align-items:center; gap:18px; min-height:58px; flex-wrap:wrap}
+.brand{
+  font-family:Georgia,serif; font-weight:700; font-size:1.06rem;
+  text-decoration:none; color:var(--ink); letter-spacing:-.01em; margin-right:2px;
+}
+.brand span{color:var(--accent)}
+.topnav{display:flex; gap:2px; flex-wrap:wrap; margin-left:auto; align-items:center}
+.topnav a{
+  text-decoration:none; color:var(--muted); font-size:14.5px;
+  padding:7px 11px; border-radius:8px; line-height:1.2;
+}
+.topnav a:hover{color:var(--ink); background:var(--surface-2)}
+.topnav a[aria-current="page"]{color:var(--accent-ink); background:var(--accent-soft)}
+.topnav a.off{color:var(--pending); cursor:default}
+.topnav a.off:hover{background:transparent; color:var(--pending)}
+
+.ctrl{
+  font-family:ui-monospace,Menlo,monospace; font-size:12px; letter-spacing:.06em;
+  background:var(--surface); color:var(--muted); border:1px solid var(--line);
+  border-radius:8px; padding:6px 10px; cursor:pointer; line-height:1.2;
+  text-decoration:none; display:inline-flex; align-items:center; gap:6px;
+}
+.ctrl:hover{color:var(--ink); border-color:var(--accent)}
+
+/* ------------------------------------------------------------------ hero -- */
+header.hero{
+  border-bottom:1px solid var(--line);
+  background:
+    radial-gradient(1100px 400px at 78% -8%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 60%),
+    var(--paper);
+}
+.hero .shell{padding-top:clamp(40px,8vw,84px); padding-bottom:clamp(32px,5vw,52px)}
+.eyebrow{
+  font-family:ui-monospace,Menlo,monospace; font-size:12.5px; letter-spacing:.22em;
+  text-transform:uppercase; color:var(--accent-ink); margin:0 0 22px;
+  display:flex; align-items:center; gap:12px;
+}
+.eyebrow::before{content:""; width:26px; height:1px; background:var(--accent); flex:none}
+h1.title{
+  font-family:Georgia,serif; font-weight:700; letter-spacing:-.015em;
+  font-size:clamp(2.1rem,5.6vw,3.9rem); line-height:1.05; margin:0; text-wrap:balance;
+}
+h1.title em{font-style:normal; color:var(--accent)}
+.lede{
+  font-size:clamp(1.06rem,2.1vw,1.3rem); color:var(--muted);
+  max-width:64ch; margin:20px 0 0; line-height:1.5;
+}
+
+/* Bandeau d'avertissement — en HERO, jamais en pied de page. C'est une
+   contrainte de cadrage (prototype non audité), pas une décoration. */
+.warn{
+  display:flex; gap:12px; align-items:flex-start; margin:26px 0 0;
+  background:var(--secret-soft); border:1px solid color-mix(in srgb,var(--secret) 35%,var(--line));
+  border-left:3px solid var(--secret); border-radius:10px; padding:14px 18px;
+  max-width:72ch;
+}
+.warn .ico{color:var(--secret); font-size:1.1rem; line-height:1.5; flex:none}
+.warn p{margin:0; font-size:15px; line-height:1.55}
+.warn strong{color:var(--secret)}
+
+.stat-row{display:flex; flex-wrap:wrap; gap:14px; margin-top:32px}
+.stat{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:14px 18px; box-shadow:var(--shadow); min-width:118px}
+.stat b{display:block; font-family:Georgia,serif; font-size:1.7rem; line-height:1; font-variant-numeric:tabular-nums}
+.stat span{font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted)}
+.stat small{font-size:.5em; font-family:-apple-system,system-ui,sans-serif}
+
+.cta-row{display:flex; flex-wrap:wrap; gap:12px; margin-top:30px}
+.btn{
+  display:inline-flex; align-items:center; gap:9px; text-decoration:none;
+  border-radius:11px; padding:12px 20px; font-size:15px; font-weight:600;
+  border:1px solid var(--line); background:var(--surface); color:var(--ink);
+  box-shadow:var(--shadow); line-height:1.3;
+}
+.btn:hover{border-color:var(--accent)}
+/* La couleur du TEXTE sur fond accentué suit la palette, elle n'est pas figée :
+   le teal d'Obscura est clair et veut de l'encre sombre, l'indigo de QPoL est
+   sombre et veut du blanc. Un `color` en dur ici tombait à 3,1:1 sur QPoL. */
+.btn.primary{background:var(--accent); border-color:var(--accent); color:var(--on-accent)}
+.btn.primary:hover{filter:brightness(1.06)}
+.btn .arr{font-size:1.05em; line-height:1}
+
+/* ----------------------------------------------------------------- corps -- */
+main{padding-bottom:80px; min-width:0}
+section.band{padding:clamp(44px,7vw,76px) 0; border-bottom:1px solid var(--line)}
+section.band:last-of-type{border-bottom:none}
+.band-head{margin-bottom:26px; max-width:72ch}
+.band-head .k{font-family:ui-monospace,Menlo,monospace; font-size:12px; letter-spacing:.2em; text-transform:uppercase; color:var(--accent-ink)}
+.band-head h2{font-family:Georgia,serif; font-weight:700; font-size:clamp(1.6rem,3.6vw,2.35rem); margin:.15em 0 0; letter-spacing:-.01em; text-wrap:balance}
+.band-head .sub{color:var(--muted); margin:.5em 0 0; max-width:66ch}
+
+h3{font-family:Georgia,serif; font-weight:700; font-size:1.4rem; margin:40px 0 4px; letter-spacing:-.01em; scroll-margin-top:74px}
+h4{font-size:1.05rem; margin:24px 0 2px; font-weight:650}
+p{margin:14px 0}
+ul,ol{padding-left:1.3em} li{margin:7px 0}
+.col p,.col ul,.col ol{max-width:70ch}
+em.term{font-style:normal; font-weight:600; color:var(--ink); border-bottom:1.5px dotted var(--accent)}
+code{font-family:ui-monospace,Menlo,monospace; font-size:.86em; background:var(--code-bg); padding:.12em .4em; border-radius:5px; border:1px solid var(--line)}
+
+/* --------------------------------------------------------------- cartes --- */
+.cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(min(230px,100%),1fr)); gap:16px; margin:24px 0}
+.card{background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:20px; box-shadow:var(--shadow)}
+.card .ico{font-size:1.5rem; line-height:1}
+.card h4{margin:12px 0 2px; font-family:Georgia,serif; font-size:1.15rem}
+.card p{margin:6px 0 0; font-size:15px; color:var(--muted); line-height:1.55}
+
+/* Carte de projet — l'élément central du hub. */
+.projects{display:grid; grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr)); gap:22px; margin:8px 0 0}
+.project{
+  position:relative; display:flex; flex-direction:column;
+  background:var(--surface); border:1px solid var(--line); border-radius:18px;
+  padding:26px 26px 24px; box-shadow:var(--shadow); overflow:hidden;
+}
+.project::before{content:""; position:absolute; inset:0 0 auto 0; height:3px; background:var(--accent)}
+.project h3{margin:0; font-size:1.75rem}
+.project .tagline{color:var(--muted); margin:8px 0 0; font-size:15.5px; line-height:1.55}
+.project .facts{list-style:none; padding:0; margin:18px 0 0}
+.project .facts li{display:flex; gap:10px; align-items:baseline; font-size:14.5px; margin:8px 0}
+.project .facts .dot{width:8px; height:8px; border-radius:50%; flex:none; transform:translateY(-1px)}
+.project .foot{margin-top:auto; padding-top:22px; display:flex; gap:10px; flex-wrap:wrap}
+
+/* -------------------------------------------------------------- callouts -- */
+.callout{border:1px solid var(--line); border-left:3px solid var(--accent); background:var(--surface); border-radius:10px; padding:16px 20px; margin:22px 0; box-shadow:var(--shadow); max-width:72ch}
+.callout.secret{border-left-color:var(--secret)}
+.callout .lab{font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--accent-ink); display:block; margin-bottom:6px}
+.callout.secret .lab{color:var(--secret)}
+.callout p:first-of-type{margin-top:0} .callout p:last-child{margin-bottom:0}
+
+/* ------------------------------------------------------------------ code -- */
+.cmd{position:relative; margin:18px 0; max-width:none}
+.cmd-head{
+  display:flex; align-items:center; gap:10px; justify-content:space-between;
+  background:var(--surface-2); border:1px solid var(--line); border-bottom:none;
+  border-radius:12px 12px 0 0; padding:8px 12px 8px 15px;
+}
+.cmd-head .t{font-family:ui-monospace,Menlo,monospace; font-size:11.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted)}
+.cmd pre{
+  margin:0; overflow-x:auto; background:var(--code-bg);
+  border:1px solid var(--line); border-radius:0 0 12px 12px;
+  padding:16px 18px; font-size:13.6px; line-height:1.65;
+}
+.cmd pre code{background:none; border:none; padding:0; font-size:inherit; white-space:pre}
+.cmd pre .c{color:var(--muted)}                   /* commentaire */
+.cmd pre .p{color:var(--accent-ink); font-weight:600} /* nom de binaire */
+.copy{
+  font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.06em;
+  background:var(--surface); color:var(--muted); border:1px solid var(--line);
+  border-radius:7px; padding:5px 10px; cursor:pointer; flex:none;
+}
+.copy:hover{color:var(--accent-ink); border-color:var(--accent)}
+.copy[data-done="1"]{color:var(--done); border-color:var(--done)}
+
+/* --------------------------------------------------------------- tableau -- */
+.tbl-wrap{overflow-x:auto; margin:22px 0; border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow)}
+table{border-collapse:collapse; width:100%; font-size:14.5px; background:var(--surface)}
+th,td{text-align:left; padding:11px 15px; border-bottom:1px solid var(--line); vertical-align:top}
+th{font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); background:var(--surface-2)}
+tr:last-child td{border-bottom:none}
+td code{white-space:nowrap}
+
+/* ---------------------------------------------------------------- limites -- */
+.limits{counter-reset:lim; margin:24px 0; display:grid; gap:14px}
+.limit{
+  position:relative; background:var(--surface); border:1px solid var(--line);
+  border-radius:13px; padding:18px 20px 18px 58px; box-shadow:var(--shadow); max-width:74ch;
+}
+.limit::before{
+  counter-increment:lim; content:counter(lim);
+  position:absolute; left:18px; top:18px;
+  font-family:Georgia,serif; font-size:1.3rem; font-weight:700; line-height:1;
+  color:var(--secret); width:26px; text-align:center;
+}
+.limit h4{margin:0 0 4px; font-size:1.02rem}
+.limit p{margin:0; font-size:14.8px; color:var(--muted); line-height:1.6}
+.limit p + p{margin-top:8px}
+
+/* ------------------------------------------------------------------ tags -- */
+.tag{display:inline-block; font-family:ui-monospace,Menlo,monospace; font-size:11px; padding:2px 9px; border-radius:20px; border:1px solid var(--line); background:var(--surface-2); color:var(--muted); letter-spacing:.05em}
+.tag.ok{color:var(--done); border-color:color-mix(in srgb,var(--done) 40%,var(--line))}
+.tag.wip{color:var(--secret); border-color:color-mix(in srgb,var(--secret) 40%,var(--line))}
+.dot{width:9px; height:9px; border-radius:50%; flex:none; display:inline-block}
+.dot.done{background:var(--done)} .dot.todo{background:var(--pending)}
+/* `attn`, PAS `warn` : `.warn` est le bandeau d'avertissement du hero
+   (display:flex + padding) et écraserait la taille de la pastille. */
+.dot.attn{background:var(--secret)}
+
+.steps{counter-reset:st; list-style:none; padding:0; margin:24px 0; display:grid; gap:0}
+/* min-width:0 — un élément de grille vaut `min-width:auto` par défaut et refuse
+   donc de descendre sous la taille min-content de son contenu. Sans ça, un bloc
+   de commande long élargit la ligne et fait défiler LA PAGE au lieu du bloc. */
+.steps > li{position:relative; padding:0 0 26px 42px; border-left:2px solid var(--line); margin:0; min-width:0}
+.steps > li > *{min-width:0}
+.steps > li:last-child{border-left-color:transparent; padding-bottom:0}
+.steps > li::before{
+  counter-increment:st; content:counter(st);
+  position:absolute; left:-15px; top:-2px; width:28px; height:28px;
+  border-radius:50%; background:var(--surface); border:1px solid var(--accent);
+  color:var(--accent-ink); font-family:ui-monospace,Menlo,monospace; font-size:12.5px;
+  display:flex; align-items:center; justify-content:center; font-weight:700;
+}
+.steps > li h4{margin:0 0 2px; font-size:1.06rem}
+.steps > li > p{margin:6px 0}
+
+/* ----------------------------------------------------------------- liens -- */
+.linklist{display:grid; grid-template-columns:repeat(auto-fit,minmax(min(250px,100%),1fr)); gap:12px; margin:22px 0}
+.linklist a{
+  display:block; text-decoration:none; background:var(--surface);
+  border:1px solid var(--line); border-radius:12px; padding:15px 17px; box-shadow:var(--shadow);
+}
+.linklist a:hover{border-color:var(--accent)}
+.linklist .n{display:block; color:var(--ink); font-weight:650; font-size:15px}
+.linklist .d{display:block; color:var(--muted); font-size:13.5px; margin-top:3px; line-height:1.5}
+
+/* ------------------------------------------------------------------ pied -- */
+.footer{border-top:1px solid var(--line); padding:34px 0 64px; color:var(--muted); font-size:14px; background:var(--surface-2)}
+.footer .cols{display:grid; grid-template-columns:repeat(auto-fit,minmax(min(210px,100%),1fr)); gap:26px}
+.footer h5{margin:0 0 8px; font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink); font-weight:600}
+.footer ul{list-style:none; padding:0; margin:0}
+.footer li{margin:5px 0}
+.footer a{color:var(--muted); text-decoration:none}
+.footer a:hover{color:var(--accent-ink); text-decoration:underline}
+.footer .bottom{margin-top:28px; padding-top:18px; border-top:1px solid var(--line); display:flex; gap:14px; flex-wrap:wrap; align-items:center; justify-content:space-between}
+.footer .mono{font-size:12.5px}
+
+/* ---------------------------------------------------------------- motion -- */
+/* Une seule orchestration au chargement : révélation décalée du hero.
+   Rien d'autre ne bouge — le reste du site est un document, pas une démo. */
+@media (prefers-reduced-motion:no-preference){
+  .rise{animation:rise .62s cubic-bezier(.2,.7,.3,1) backwards}
+  .rise:nth-child(1){animation-delay:.02s}
+  .rise:nth-child(2){animation-delay:.10s}
+  .rise:nth-child(3){animation-delay:.18s}
+  .rise:nth-child(4){animation-delay:.26s}
+  .rise:nth-child(5){animation-delay:.34s}
+  @keyframes rise{from{opacity:0; transform:translateY(9px)}to{opacity:1; transform:none}}
+  .project{transition:transform .22s ease, border-color .22s ease, box-shadow .22s ease}
+  .project:hover{transform:translateY(-3px); border-color:var(--accent)}
+  .btn,.linklist a,.copy{transition:border-color .18s ease, background .18s ease, color .18s ease}
+}
+
+/* --------------------------------------------------------------- responsive */
+@media(max-width:640px){
+  body{font-size:16px}
+  .topbar .shell{min-height:52px; gap:10px; padding-top:8px; padding-bottom:8px}
+  .topnav{width:100%; margin-left:0; order:3}
+  .topnav a{padding:6px 9px; font-size:14px}
+  .project{padding:22px 20px}
+  .limit{padding:16px 17px 16px 50px}
+  .limit::before{left:15px; top:16px}
+}
+
+/* ---------------------------------------------------------------- impression */
+@media print{
+  .topbar,.cta-row,.copy,.skip{display:none}
+  body{background:#fff; color:#000; font-size:11pt}
+  .project,.card,.callout,.limit,.cmd pre{box-shadow:none}
+  section.band{padding:18px 0; break-inside:avoid}
+  a[href^="http"]::after{content:" (" attr(href) ")"; font-size:.8em; color:#555}
+}

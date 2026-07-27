@@ -202,7 +202,10 @@ Chaque bloc de commande porte un bouton « copier ».
    simulateur, revue d'antériorité, analyse FTO en cours de revue par un conseil.
 4. **Ce que ce n'est pas** — pas de réseau, pas de code publié, pas de token, aucune
    date. Symétrique de l'honnêteté affichée pour Obscura.
-5. **Contact** — pour en discuter sous accord de confidentialité.
+5. **Contact** — **profil GitHub `nailiwalid-del` uniquement** (décision du
+   2026-07-27). Aucune adresse e-mail en clair : elle serait moissonnée, et le lien
+   GitHub est de toute façon déjà public via le dépôt `obscura`. Formulé comme une
+   prise de contact préalable à toute discussion sous accord de confidentialité.
 
 ## Commandes — source d'autorité
 
@@ -240,7 +243,20 @@ obscura-wallet envoyer --fichier mon.wallet --a obs1…dest --montant 300 \
 
 Répertoire `en/`, une URL par langue (meilleur pour l'envoi d'un lien et pour
 l'indexation qu'une bascule en JS). Chaque page porte `<link rel="alternate"
-hreflang>` vers son équivalent. La bascule de langue conserve la page courante.
+hreflang>` vers son équivalent.
+
+Les noms de fichiers diffèrent entre langues ; la bascule s'appuie donc sur une
+**table explicite**, pas sur une transformation du chemin :
+
+| FR | EN |
+|---|---|
+| `index.html` | `en/index.html` |
+| `obscura.html` | `en/obscura.html` |
+| `demarrer.html` | `en/start.html` |
+| `qpol.html` | `en/qpol.html` |
+
+Chaque page déclare sa contrepartie dans un attribut `data-alt` sur `<html>` ; le JS
+ne fait que suivre ce lien, et le `<link rel="alternate">` le rend valable sans JS.
 
 **Ordre de rédaction : le français en entier d'abord, l'anglais ensuite.** Mener les
 deux de front produirait huit pages à moitié faites. L'anglais est une traduction,
@@ -275,8 +291,19 @@ confort, jamais du contenu.
 4. **Les deux thèmes et 320 px** vérifiés visuellement.
 5. **Parité FR/EN** : même structure de sections, aucun contenu présent d'un seul côté.
 6. **`qpol.html` relu contre la liste d'interdits** ci-dessus, ligne à ligne.
-7. **`qpol.html` non mis en ligne** tant que le conseil PI n'a pas relu. Le reste du
-   site peut être publié sans lui : le lien QPoL du hub reste inactif d'ici là.
+7. **`qpol.html` non publié** tant que le conseil PI n'a pas relu.
+
+   ⚠️ **Le verrou est le `git push`, pas le déploiement Pages.** Le dépôt
+   `nailiwalid-del/obscura` est **public** : y pousser un commit contenant
+   `qpol.html` le rend lisible par tous, que Pages le serve ou non, et qu'une page
+   y renvoie ou non. Une page « non liée » sur un dépôt public reste une
+   divulgation. Ne pas compter sur l'absence de lien comme protection.
+
+   Conséquence pratique : le travail reste sur la branche locale `site-vitrine`,
+   non poussée, jusqu'à la relecture. Deux sorties possibles ensuite :
+   - relecture faite → pousser la branche entière ;
+   - publier Obscura d'abord → pousser un sous-ensemble **sans** `qpol.html`,
+     `en/qpol.html`, ni la carte QPoL du hub.
 
 ## Hors périmètre
 
