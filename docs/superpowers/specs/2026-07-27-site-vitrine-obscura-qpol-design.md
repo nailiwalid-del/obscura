@@ -9,7 +9,7 @@
 Un site qui **présente deux projets distincts** et donne un point d'entrée unique :
 
 - **Obscura** — prototype de monnaie post-quantique privée, code public, exécutable.
-- **QPoL** — recherche sur un consensus ancré dans la position physique, **sans code
+- **QPoL** — recherche sur une autre ressource rare pour protéger un consensus, **sans code
   publié** et **sans dépôt de brevet à ce jour**.
 
 Il doit servir quatre publics sans page dédiée à chacun, par **mise en couches** :
@@ -53,29 +53,37 @@ Ce ne sont pas des manques, ce sont des **décisions** :
 ## Contraintes propres à QPoL
 
 **Aucune demande prioritaire n'est déposée** (état déclaré par l'auteur le
-2026-07-27). Or `patent/dossier-invention-v0.md` porte des revendications R1–R15 et
-`patent/fto-qpol-v0.md` attend la revue du conseil PI.
+2026-07-27). Or un dossier d'invention rédigé porte déjà des revendications, et
+l'analyse de liberté d'exploitation attend la revue du conseil PI. Ces pièces vivent
+hors de ce dépôt et n'y sont pas référencées.
 
 Conséquence retenue : **la page QPoL est non habilitante.** Elle énonce le *problème*
 et l'*ambition*, jamais le *comment*.
 
-Interdits explicites sur `qpol.html` :
+Interdits sur `qpol.html`, formulés **par renvoi** :
 
-- aucune description de cérémonie QPV, d'ordonnancement, d'agrégation ou de seuil ;
-- aucun paramètre (nombre de rounds, seuil d'erreur, budget d'intrication, granularité) ;
-- aucun schéma ni figure tirés de `patent/figures/`, `paper/`, `prototypes/` ;
-- aucun lien vers `QPOL-*.md`, `QPOP-ANALYSIS.md`, `GPOS-DISSECTION.md`,
-  `presentation/QPoL-presentation.html` — **cette dernière décrit le mécanisme et
-  reste non publiée** ;
-- le dépôt `cryptoscope` n'est pas publié et le site n'y renvoie pas.
+- **aucun élément de mécanisme** — rien de ce que décrivent les documents de
+  conception et le dossier d'invention du projet de recherche : ni étapes, ni
+  ordonnancement, ni composition, ni grandeurs caractéristiques ;
+- **aucun paramètre chiffré**, de quelque nature que ce soit ;
+- **aucun schéma ni figure** repris des dossiers de recherche ou de brevet ;
+- **aucun lien** vers les documents de conception, la note de présentation, le
+  simulateur ou le dépôt qui les héberge — **aucun d'eux n'est publié** ;
+- **aucune reprise** de la terminologie technique propre au mécanisme.
+
+> ⚠️ **Ce fichier est lui-même publiable.** Il vit sous `docs/`, dans un dépôt
+> public. Énumérer *nommément* les termes interdits reviendrait à les divulguer
+> dans le document censé les proscrire — c'est pourquoi la liste ci-dessus renvoie
+> aux dossiers de recherche au lieu de les citer. La liste nominative reste dans le
+> dossier d'invention, hors de ce dépôt. Ne pas « préciser » cette section.
 
 Ce qui est autorisé : le constat public que tout consensus repose sur une ressource
 rare et que PoW/PoS centralisent (énergie bon marché, capital) ; l'existence d'un
 travail de recherche ; l'état d'avancement en termes non techniques ; un contact.
 
 > **Réserve.** Rédigé sans compétence juridique ; ceci n'est pas un avis juridique.
-> Même bornée ainsi, l'association publique du nom « Quantum Proof-of-Location » et
-> de « consensus anti-Sybil » signale la combinaison revendiquée en R1.
+> Même bornée ainsi, la mise en regard publique du nom du projet et de sa finalité
+> annoncée signale déjà la combinaison revendiquée.
 > **`qpol.html` ne doit pas être mis en ligne avant relecture par le conseil PI.**
 > Porté par la barre de vérification ci-dessous.
 
@@ -130,7 +138,7 @@ que QPoL est un module d'Obscura. Ce sont deux projets sans lien de code.
      aujourd'hui. → `obscura.html`, `demarrer.html`
    - *QPoL* — recherche, pas de code publié, pas de réseau. → `qpol.html`
 3. **Ce qui relie les deux** — une thèse courte : les deux interrogent la ressource
-   sur laquelle une garantie repose (mathématique post-quantique / position physique).
+   sur laquelle une garantie repose (mathématique post-quantique d'un côté, contrainte physique de l'autre).
 4. **Pied** — statut, licence (MIT OR Apache-2.0), bascule de langue.
 
 ### `obscura.html` — présentation en couches
@@ -314,5 +322,6 @@ Cut délibérément, et pourquoi :
 - **Explorateur, faucet, statistiques réseau** — contraires au cadrage « sur
   invitation », et il n'y a pas de chaîne publique.
 - **Nœud ou wallet en navigateur** — non viable, et le prototype n'est pas audité.
-- **Publier le dépôt `cryptoscope`** — décision indépendante, bloquée par la PI.
+- **Publier le dépôt qui héberge les travaux de recherche** — décision indépendante,
+  bloquée par la PI.
 - **Analytics, formulaires, backend** — le site reste statique et sans collecte.
