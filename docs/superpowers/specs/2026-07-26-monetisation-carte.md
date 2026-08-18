@@ -384,9 +384,10 @@ trois propres au registre commercial.
    obligatoire en visa phase 2), pas « l'échéance 2030 » ; les « trois phases » de
    l'ANSSI concernent la **délivrance des visas**, pas la transition nationale ; et
    NIST IR 8547 est **toujours un brouillon**, donc son calendrier 2030/2035 n'est pas
-   arrêté. **Reste à vérifier dans le texte** : l'affirmation, non confirmée par les
-   sources officielles, selon laquelle COM(2026) 13 inscrirait une obligation PQC dans
-   NIS2.
+   arrêté. Et un fait nouveau, **vérifié dans le texte** : COM(2026) 13 (proposition du
+   20 janvier 2026) ajoute à l'article 7(2) de NIS2 un point (k) « for the transition
+   to post-quantum cryptography » — obligation portant sur les **États membres**, et
+   proposition encore en procédure, non du droit en vigueur.
 2. **Le coût réel d'un audit n'est pas chiffré ici.** Aucun devis n'a été demandé — et
    ne doit pas l'être avant B (carte A, interdit 1). L'ordre de grandeur reste donc
    inconnu, ce qui rend le dimensionnement de S3 approximatif.

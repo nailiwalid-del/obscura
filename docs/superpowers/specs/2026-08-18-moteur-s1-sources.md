@@ -14,8 +14,10 @@ affirmation porte sa source et sa date.
 
 ## Ce que la vérification a changé
 
-Trois choses, dont deux corrigent la formulation spontanée de l'argumentaire.
+Quatre choses, dont trois corrigent la formulation spontanée de l'argumentaire.
 
+0. **L'obligation PQC entre dans le texte de NIS2** — proposition COM(2026) 13,
+   article 7(2) point (k). Vérifié dans le texte, pas repris d'un commentaire.
 1. **Le levier fort n'est pas « l'échéance 2030 ».** C'est l'entrée en qualification
    ANSSI **à partir de 2027**, et le fait que l'hybridation soit **obligatoire** dans
    l'évaluation de visa de sécurité de phase 2. Une échéance de conformité datée, pas
@@ -60,20 +62,55 @@ les rançongiciels, supervision transfrontalière, rôle renforcé de l'ENISA.
 
 ---
 
-## NON établi — à vérifier avant tout usage
+## Établi — l'obligation PQC entre dans le texte de NIS2
 
-Plusieurs sources secondaires affirment que **COM(2026) 13 insère une obligation PQC
-directement dans NIS2**, sous la forme d'un nouvel article 7(2)(k) imposant aux États
-membres une politique de transition PQC dans leur stratégie nationale.
+**Vérifié dans le texte le 2026-08-18.** COM(2026) 13 final, transmis au Conseil le
+21 janvier 2026 (doc. Conseil 5627/26, dossier interinstitutionnel **2026/0012 (COD)**),
+*Proposal for a Directive … amending Directive (EU) 2022/2555 as regards simplification
+measures…*. Les 18 pages ont été extraites et lues.
 
-**Ni la description officielle de COM(2026) 13, ni la page PQC de la Commission ne le
-confirment.** La seconde ne contient aucune référence à un amendement de NIS2.
+L'article modificatif, mot pour mot :
 
-C'est un point à fort rendement s'il est vrai — une obligation dans le texte de la
-directive, et non dans une recommandation, change la nature de la contrainte. **Il
-faut le lire dans le texte de COM(2026) 13 avant de s'en servir**, et non le reprendre
-d'un billet de blog. Tant que ce n'est pas fait, cette affirmation ne doit pas entrer
-dans un argumentaire.
+> « (5) in Article 7(2), the following point (k) is added:
+> ‘(k) **for the transition to post-quantum cryptography**, taking into account the
+> transition timelines and relevant requirements set out in applicable Union legal
+> acts and policies.’ »
+
+L'exposé des motifs le range parmi les modifications de fond :
+
+> « the requirement for Member States to adopt policies for the migration to
+> post-quantum cryptography (PQC) as part of their national cybersecurity strategy »
+
+Et le considérant 8 en donne le fondement, en nommant explicitement le modèle de
+menace :
+
+> « The possibility of ‘harvest now — decrypt later attacks’, **likely occurring
+> already now**, and the future risks induced by quantum attacks on forging
+> signatures, as well as the planned deprecation of certain algorithm implementations
+> and full disallowance of current public-key cryptographic algorithms, increase the
+> urgency of initiating actions for the migration to post-quantum cryptography. »
+
+### Trois précisions qui changent l'usage qu'on peut en faire
+
+1. **C'est une proposition, pas du droit.** Procédure législative ordinaire en cours
+   depuis janvier 2026. Dire « NIS2 impose la PQC » reste faux aujourd'hui ; « la
+   Commission propose de l'inscrire dans NIS2 » est exact.
+2. **L'obligation porte sur les États membres**, pas directement sur les entités : une
+   politique de migration PQC dans la *stratégie nationale de cybersécurité*. La
+   contrainte sur les entités en découle, elle n'est pas écrite ici.
+3. **Le considérant 8 nomme un débouché.** Il évoque le soutien à
+   « the emergence and uptake of **formally verified and evaluated European PQC
+   solutions** adhering to compliance frameworks ». C'est, littéralement, la catégorie
+   que vise V1 — et cela figure dans l'exposé des motifs d'un texte européen, pas dans
+   une plaquette.
+
+### Note de méthode
+
+Un premier balayage par mot-clé de ce PDF a renvoyé **zéro** occurrence de
+« post-quantum », ce qui aurait conduit à conclure l'inverse. L'extraction insère une
+coupure — « post - quantum », « post -quantum » — qu'un motif exact manque. La
+conclusion vient de la lecture des contextes, pas du comptage. À retenir pour toute
+vérification ultérieure sur PDF officiel.
 
 ---
 
@@ -168,7 +205,8 @@ constaté ce que ça casse.
 
 - « la transition ANSSI en 3 phases » — ce sont les visas, pas la transition ;
 - « le NIST interdit RSA en 2035 » — c'est un brouillon non finalisé ;
-- « NIS2 impose la PQC » — non vérifié, voir la section NON établi ;
+- « NIS2 impose la PQC » — **pas encore** : c'est une proposition de janvier 2026,
+  en procédure ; et l'obligation vise les États membres, pas les entités ;
 - « notre implémentation PQ » — interdit n° 3 de la carte de monétisation, et faux :
   le dépôt s'appuie sur `pqcrypto`, dette documentée dans `BACKEND_PQ.md`.
 
@@ -179,6 +217,7 @@ constaté ce que ça casse.
 - Il **ne tranche** aucune piste de la carte de monétisation et n'en rouvre aucune.
 - Il **n'engage** ni dépense, ni démarchage, ni posture publique. Les garde-fous de la
   carte des décisions A restent intégralement en vigueur.
-- Il **ne vérifie pas** le contenu de COM(2026) 13 — c'est le travail restant, et il
-  se fait dans le texte, pas dans les commentaires.
+- Il **ne suit pas** la procédure législative de COM(2026) 13. Le texte cité est la
+  proposition de la Commission ; il peut être amendé au Parlement et au Conseil. À
+  revérifier avant tout usage engageant.
 - Il **ne chiffre pas** le marché. Aucune de ces échéances n'est un client.
