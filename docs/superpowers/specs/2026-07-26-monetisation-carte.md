@@ -377,9 +377,16 @@ trois propres au registre commercial.
 
 # Résidus, écrits et non résolus
 
-1. **Le moteur commercial de S1 n'est pas vérifié dans ce document.** Le calendrier
-   européen de transition PQC et la position ANSSI sur l'hybridation y sont cités de
-   mémoire. **À vérifier aux textes-sources avant d'en faire un argumentaire.**
+1. ~~**Le moteur commercial de S1 n'est pas vérifié dans ce document.**~~ ✅ **SOLDÉ
+   le 2026-08-18** par [`2026-08-18-moteur-s1-sources.md`](2026-08-18-moteur-s1-sources.md).
+   Les échéances sont désormais sourcées et datées. Trois corrections en sont sorties :
+   le levier fort est l'entrée en qualification ANSSI **à partir de 2027** (hybridation
+   obligatoire en visa phase 2), pas « l'échéance 2030 » ; les « trois phases » de
+   l'ANSSI concernent la **délivrance des visas**, pas la transition nationale ; et
+   NIST IR 8547 est **toujours un brouillon**, donc son calendrier 2030/2035 n'est pas
+   arrêté. **Reste à vérifier dans le texte** : l'affirmation, non confirmée par les
+   sources officielles, selon laquelle COM(2026) 13 inscrirait une obligation PQC dans
+   NIS2.
 2. **Le coût réel d'un audit n'est pas chiffré ici.** Aucun devis n'a été demandé — et
    ne doit pas l'être avant B (carte A, interdit 1). L'ordre de grandeur reste donc
    inconnu, ce qui rend le dimensionnement de S3 approximatif.
