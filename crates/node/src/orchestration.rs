@@ -1074,11 +1074,23 @@ impl Noeud {
             // retard sans rattrapage. On tranche sur les hauteurs, qui sont la même
             // information dans les deux cas.
             Err(refus) => {
-                self.blocs_desaccordes += 1;
                 let recue = match refus {
                     BlocRefus::HauteurInattendue { recue, .. } => recue,
                     _ => bloc.hauteur,
                 };
+                // NE COMPTER QUE LES VRAIS DÉSACCORDS. `blocs_desaccordes` a un seul
+                // rôle : rendre visible un nœud FIGÉ, qui — en retard — refuse des
+                // hauteurs qu'il n'a pas encore et sert un historique tronqué mais
+                // cohérent (cf. `archive.rs`). Un tel nœud reçoit toujours des blocs
+                // STRICTEMENT au-dessus de sa hauteur : chaîne concurrente à la
+                // hauteur suivante, ou blocs à venir. Un rejeu d'une hauteur `≤` la
+                // nôtre est l'inverse — un doublon bénin (un pair qui archive puis
+                // RELAIE un bloc qu'on tient déjà). Le compter teinterait en
+                // permanence le statut d'une chaîne parfaitement saine où les blocs
+                // circulent en boucle de relais, sans que rien ne diverge.
+                if recue > self.etat.hauteur() {
+                    self.blocs_desaccordes += 1;
+                }
                 if recue > self.etat.hauteur().saturating_add(1) {
                     if let Some(demande) = self.demander_suivant(de) {
                         return vec![demande];
@@ -2684,6 +2696,57 @@ mod tests {
             "un bloc concurrent ne doit RIEN déclencher : ni relais, ni demande"
         );
         assert_eq!(n.pairs.get(&p).unwrap().score, 0);
+    }
+
+    /// UN DOUBLON BÉNIN NE TEINTE PAS LE STATUT.
+    ///
+    /// Le cas observé en atelier : un pair qui archive puis RELAIE nous renvoie un
+    /// bloc qu'on a déjà appliqué. Comme la tête a avancé, il échoue à se rechaîner
+    /// (`ParentInattendu`) — mais à une hauteur qu'on tient DÉJÀ. Rien ne diverge.
+    ///
+    /// `blocs_desaccordes` existe pour rendre visible un nœud FIGÉ (en retard, il
+    /// refuse des blocs À VENIR) ; un tel nœud reçoit toujours des hauteurs
+    /// STRICTEMENT au-dessus de la sienne. Un rejeu d'une hauteur `≤` la nôtre ne
+    /// peut donc jamais être ce signal : le compter ne ferait que teinter le statut
+    /// d'une chaîne saine où les blocs circulent en boucle de relais.
+    #[test]
+    fn doublon_relaye_ne_teinte_pas_le_statut() {
+        let mut n = noeud_de_test();
+        let (p, adr) = pair(1);
+        n.pairs.ajouter(p, adr);
+
+        // Un bloc sain, bien chaîné sur notre tête, à la hauteur suivante. Encodé une
+        // fois puis re-décodé à chaque envoi : `Bloc` n'est pas `Clone`, et c'est
+        // BIT À BIT le même bloc qui revient — exactement ce que fait un relais.
+        let octets = Bloc::sceller(&n.etat.tete(), 1, Vec::new(), 0)
+            .unwrap()
+            .to_bytes();
+
+        // 1er envoi : il s'applique et la tête avance.
+        let bloc = Bloc::from_bytes(&octets).unwrap();
+        let _ = n.traiter(p, Message::Bloc(Box::new(bloc)), 0);
+        assert_eq!(n.etat.hauteur(), 1, "le bloc s'applique");
+        assert_eq!(n.blocs_desaccordes(), 0, "aucun désaccord à l'application");
+
+        // 2e envoi : le MÊME bloc revient (le pair l'a archivé puis rediffusé). On
+        // est déjà à cette hauteur — c'est un doublon, pas une divergence.
+        let doublon = Bloc::from_bytes(&octets).unwrap();
+        let actions = n.traiter(p, Message::Bloc(Box::new(doublon)), 0);
+        assert!(
+            actions.is_empty(),
+            "un doublon ne relaie ni ne demande rien"
+        );
+        assert_eq!(n.etat.hauteur(), 1, "toujours à la même hauteur");
+        assert_eq!(
+            n.blocs_desaccordes(),
+            0,
+            "un doublon bénin ne doit PAS teinter le statut"
+        );
+        assert_eq!(
+            n.pairs.get(&p).unwrap().score,
+            0,
+            "et n'est la faute de personne"
+        );
     }
 
     /// UN RATTRAPAGE QUI ÉCHOUE S'ARRÊTE AU PREMIER PAS.
