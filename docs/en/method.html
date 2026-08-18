@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Method — how a p = 0.019 becomes a p = 0.39</title>
+<meta name="description" content="A case study: a significant deviation across three quantum-processor campaigns, explained by estimator bias rather than physics. Proof discipline applied to a result we wanted to keep.">
+<meta name="color-scheme" content="light dark">
+<link rel="alternate" hreflang="fr" href="../methode.html">
+<link rel="alternate" hreflang="en" href="method.html">
+<link rel="stylesheet" href="../assets/site.css">
+<style>
+  .fig{margin:26px 0; max-width:900px}
+  .fig .plot{background:var(--surface); border:1px solid var(--line);
+    border-radius:12px; box-shadow:var(--shadow); padding:16px 10px 8px}
+  .fig svg{display:block; width:100%; height:auto; overflow:visible}
+  .fig figcaption{color:var(--muted); font-size:14.5px; margin-top:12px; max-width:72ch}
+  .fig figcaption b{color:var(--ink)}
+  .leg{display:flex; flex-wrap:wrap; gap:18px; padding:8px 6px 0;
+    font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--muted)}
+  .leg span{display:inline-flex; align-items:center; gap:7px}
+  .leg i{width:15px; height:2px; border-radius:1px; flex:none}
+  .leg i.pt{width:9px; height:9px; border-radius:50%; border:1.5px solid var(--muted)}
+  .tick{font-family:ui-monospace,Menlo,monospace; font-size:10px; fill:var(--muted);
+    font-variant-numeric:tabular-nums}
+  .dlab{font-family:ui-monospace,Menlo,monospace; font-size:10.5px; font-weight:500}
+  .verdicts{display:grid; gap:16px; grid-template-columns:repeat(auto-fit,minmax(240px,1fr));
+    margin:24px 0; max-width:760px}
+  .vd{background:var(--surface); border:1px solid var(--line); border-radius:14px;
+    padding:20px; box-shadow:var(--shadow)}
+  .vd .lab{font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--muted); display:block}
+  .vd .big{font-family:ui-monospace,Menlo,monospace; font-size:2rem; line-height:1.1;
+    margin:.25em 0 .1em; font-variant-numeric:tabular-nums}
+  .vd.a .big{color:var(--serie-a)}
+  .vd.b .big{color:var(--serie-b)}
+  .vd .sub{color:var(--muted); font-size:14px; margin:0}
+  td.sa{color:var(--serie-a)}
+  td.sb{color:var(--serie-b)}
+  table.num td{font-variant-numeric:tabular-nums; white-space:nowrap}
+</style>
+</head>
+<body>
+
+<a class="skip" href="#content">Skip to content</a>
+
+<div class="topbar">
+  <div class="shell">
+    <a class="brand" href="index.html">Obs<span>cura</span></a>
+    <nav class="topnav" aria-label="Main navigation">
+      <a href="index.html">Home</a>
+      <a href="obscura.html">The project</a>
+      <a href="start.html">Get started</a>
+      <a href="method.html" aria-current="page">Method</a>
+      <a class="ctrl" href="../methode.html" hreflang="fr" lang="fr">FR</a>
+      <button type="button" class="ctrl" data-theme-toggle aria-pressed="false">
+        theme <span data-theme-label>dark</span>
+      </button>
+    </nav>
+  </div>
+</div>
+
+<header class="hero">
+  <div class="shell">
+    <p class="eyebrow rise">Method &middot; case study</p>
+    <h1 class="title serif rise">How a <em>p&nbsp;=&nbsp;0.019</em> becomes a <em>p&nbsp;=&nbsp;0.39</em></h1>
+    <p class="lede rise">
+      Obscura separates what is <strong>proved</strong> from what is
+      <strong>assumed</strong>. That is easy to write down. Here is what the discipline
+      looks like when it costs us a result we wanted to keep — on a different project,
+      under the same rules.
+    </p>
+  </div>
+</header>
+
+<main id="content">
+
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">The result that was not there</div>
+      <h2 class="serif">Three campaigns, two machines, one significant deviation</h2>
+    </div>
+    <div class="col">
+      <p>
+        An information-theoretic quantity <span class="mono">Ξ</span> has, for a qubit, an
+        analytic maximum at <span class="mono">η* = 0.5643766</span>. The experimental
+        question was simple: does the measured peak land there?
+      </p>
+      <p>
+        Three campaigns — two on IBM Marrakesh at <span class="mono">8192</span> shots, one
+        on IQM Garnet at <span class="mono">512</span>. X/Y/Z tomography, density-matrix
+        reconstruction, a <span class="mono">10,000</span>-iteration binomial bootstrap of
+        the raw counts, then inverse-variance meta-analysis.
+      </p>
+      <p>
+        Combined result: <span class="mono">0.5586666</span>, 95% CI
+        <span class="mono">[0.5539090, 0.5634242]</span>. The theoretical value falls
+        outside. <span class="mono">p = 0.019</span>. Zero heterogeneity across campaigns.
+        A small deviation — clean, and reproduced on two independent machines.
+      </p>
+
+      <div class="callout secret">
+        <span class="lab">Why it was tempting</span>
+        <p>
+          A consistent deviation across platforms does not have many comfortable
+          explanations: either physics the model did not contain, or a hardware
+          calibration drift. A dedicated campaign was ready to test the second. It ran out
+          of credits halfway — and that interruption is what forced a cold re-reading of
+          the analysis.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">The mistake</div>
+      <h2 class="serif">The estimator followed one curve; we tested it against another</h2>
+    </div>
+    <div class="col">
+      <p>
+        The estimator for <span class="mono">Ξ</span> consumes the reference state
+        <em>as measured</em>. That state is not pure: its Bloch radius is
+        <span class="mono">0.983</span> in the first IBM campaign.
+      </p>
+      <p>
+        The value <span class="mono">0.5643766</span>, on the other hand, assumes a
+        <em>perfectly pure</em> reference. For radius <span class="mono">x &lt; 1</span>
+        the path gives <span class="mono">Ξ(η) = (1−η) x artanh(ηx)</span>, whose maximum
+        sits elsewhere — by an amount that is fully computable before any measurement.
+      </p>
+    </div>
+
+    <figure class="fig">
+      <div class="plot"><svg id="fig" viewBox="0 0 760 400" role="img"
+        data-ylab="Ξ measured" data-xlab="η measured"
+        data-lab-a="pure ref." data-lab-b="measured ref." data-decimal="."
+        aria-label="Two curves of Xi against eta: a pure reference peaking at 0.5644, and the measured reference peaking at 0.5608. The twenty IBM campaign points follow the second."></svg></div>
+      <div class="leg">
+        <span><i style="background:var(--serie-a)"></i>pure reference — the null we used</span>
+        <span><i style="background:var(--serie-b)"></i>measured reference, |r| = 0.983</span>
+        <span><i class="pt"></i>IBM Marrakesh, campaign 1</span>
+      </div>
+      <figcaption>
+        Zoomed on the peak region; the vertical axis spans <span class="mono">0.253</span>
+        to <span class="mono">0.280</span>. Both curves are predictions, not fits. The
+        twenty points are raw campaign data with 1&nbsp;σ bootstrap error bars.
+        <b>They follow the measured-reference curve, sitting <span class="mono">0.010</span>
+        below the pure-reference one — and that offset is exactly what moves the fitted
+        peak.</b>
+      </figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">The correction</div>
+      <h2 class="serif">One null per campaign, derived from its own reference</h2>
+    </div>
+
+    <div class="tbl-wrap">
+      <table class="num">
+        <thead><tr>
+          <th>Campaign</th><th>|r_ref|</th><th>Null used</th><th>Correct null</th>
+          <th>Predicted shift</th><th>Observed shift</th>
+        </tr></thead>
+        <tbody>
+          <tr><td>IBM 1</td><td>0.98313</td><td class="sa">0.5643766</td>
+              <td class="sb">0.5608243</td><td>−0.00355</td><td>−0.00612</td></tr>
+          <tr><td>IBM 2</td><td>0.98098</td><td class="sa">0.5643766</td>
+              <td class="sb">0.5603681</td><td>−0.00401</td><td>−0.00365</td></tr>
+          <tr><td>IQM 3</td><td>0.99889</td><td class="sa">0.5643766</td>
+              <td class="sb">0.5641337</td><td>−0.00024</td><td>−0.01566</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="verdicts">
+      <div class="vd a">
+        <span class="lab">Against the pure null</span>
+        <div class="big">p = 0.0187</div>
+        <p class="sub">z = −2.352 — “a significant deviation, to be explained”</p>
+      </div>
+      <div class="vd b">
+        <span class="lab">Against the corrected null</span>
+        <div class="big">p = 0.3904</div>
+        <p class="sub">z = −0.859 — nothing to explain</p>
+      </div>
+    </div>
+
+    <div class="col">
+      <p>
+        Reference impurity accounts for <strong>63%</strong> of the shift on its own; the
+        residual, <span class="mono">−0.0021</span>, sits well inside the combined standard
+        error (<span class="mono">0.0024</span>).
+      </p>
+      <p>
+        So I do not claim to have explained the shift to the last decimal. I claim there is
+        nothing significant left to explain — a weaker statement, and a sufficient one.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Three signs readable earlier</div>
+      <h2 class="serif">What a clean pipeline does not protect you from</h2>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <div class="ico" aria-hidden="true">◈</div>
+        <h4>The residual had a sign</h4>
+        <p>
+          Negative across all three campaigns, at every value of
+          <span class="mono">η</span>. When a residual's mean equals its RMS, there is no
+          noise there — only bias.
+        </p>
+      </div>
+      <div class="card">
+        <div class="ico" aria-hidden="true">◈</div>
+        <h4>The bootstrap could not see it</h4>
+        <p>
+          It resampled shot noise, the only source we had modelled. It tightened the
+          intervals around a biased centre — the worst of both worlds.
+        </p>
+      </div>
+      <div class="card">
+        <div class="ico" aria-hidden="true">◈</div>
+        <h4>The follow-up was underpowered</h4>
+        <p>
+          At 512 shots, 1&nbsp;σ on a Bloch component is 0.044. The drift we were hunting
+          sat below that threshold. The campaign could not have settled anything.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">The rule</div>
+      <h2 class="serif">And why it applies to a protocol too</h2>
+    </div>
+    <div class="col">
+      <div class="callout">
+        <span class="lab">Rule</span>
+        <p>
+          The null hypothesis must be computed under the same conditions as the estimator.
+          If the estimator consumes measured quantities, the null must consume them too.
+        </p>
+      </div>
+      <p>
+        Testing a measured-input estimator against an ideal-input prediction manufactures
+        significance. And the smaller the error bars, the more convincing the false
+        positive: rigour downstream protects nothing if the comparison point upstream is
+        wrong. It makes things worse.
+      </p>
+      <p>
+        This is the same reason the
+        <a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/STARK_STATEMENT.md">STARK
+        statement</a> sorts its claims into three registers — <em class="term">proved</em>,
+        <em class="term">assumed</em>, <em class="term">out of model</em> — and why the
+        proved register is replayed by a command rather than asserted:
+      </p>
+      <div class="cmd">
+        <div class="cmd-head"><span>verify the claims</span></div>
+        <pre><code>./verification/verifier.sh --complet</code></pre>
+      </div>
+      <p>
+        Seventeen claims, exit code 1 if any one of them falls. On its very first run this
+        harness found that eight of the relevant tests were
+        <span class="mono">#[ignore]</span>d in debug builds: an auditor running the obvious
+        <span class="mono">cargo test</span> would have seen a green suite without those
+        claims ever being evaluated.
+      </p>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="shell">
+    <p>
+      Research prototype. <a href="index.html">Home</a> &middot;
+      <a href="obscura.html">The project</a> &middot;
+      <a href="../methode.html" hreflang="fr" lang="fr">Version française</a>
+    </p>
+  </div>
+</footer>
+
+<script src="../assets/site.js"></script>
+<script src="../assets/methode-fig.js"></script>
+</body>
+</html>

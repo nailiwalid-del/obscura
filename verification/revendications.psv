@@ -1,0 +1,37 @@
+# Carte revendication -> preuve, registre PROUVÉ de docs/STARK_STATEMENT.md
+#
+# Ce fichier est l'artefact auditable : il se lit et se recoupe avec la spec
+# SANS rien exécuter. `verifier.sh` ne fait que l'appliquer.
+#
+# Format : id | revendication | genre | cible | attendu
+#
+#   genre = const   -> une constante doit valoir exactement `attendu`
+#           assert  -> l'assertion `attendu` doit être présente dans `cible`
+#           test    -> le test `cible` doit exister, et passer en mode --complet
+#           ancre   -> `attendu` doit apparaître dans le doc `cible` (la spec
+#                      dit bien ce que la carte prétend qu'elle dit)
+#
+# Toute ligne ajoutée ici est une revendication de plus à tenir. Retirer une
+# ligne parce qu'elle échoue est un mensonge ; la corriger, non.
+
+P1|Périmètre révélé : q=48 requêtes, b=56 lignes de blinding|const|crates/circuit/src/lib.rs|REQUETES_CONSENSUS: usize = 48
+P1|Périmètre révélé : q=48 requêtes, b=56 lignes de blinding|const|crates/circuit/src/monolith/seg_layout.rs|BLIND_ROWS: usize = 56
+P1|Périmètre révélé : q=48 requêtes, b=56 lignes de blinding|ancre|docs/STARK_STATEMENT.md|q + 2 = 50
+
+P2|Comptage exact par colonne : le système reste sous-déterminé|assert|crates/circuit/src/monolith/seg_air.rs|BLIND_ROWS >= options.num_queries() + 4
+P2|Comptage exact par colonne : le système reste sous-déterminé|assert|crates/circuit/src/monolith/seg_layout.rs|const _: () = assert!(BLIND_ROWS >= crate::REQUETES_CONSENSUS + 4)
+P2|Comptage exact par colonne : le système reste sous-déterminé|test|blind_off_eteint_la_region_de_blinding|circuit
+P2|Comptage exact par colonne : le système reste sous-déterminé|test|region_de_blinding_aleatoire_region_utile_deterministe|circuit
+P2|Comptage exact par colonne : le système reste sous-déterminé|test|deux_preuves_meme_tx_disjointes|circuit
+
+P3|Liaison de forme et soundness sous forme variable (C2-T4 / D7)|test|d7_1_forme_liee_aux_publics|circuit
+P3|Liaison de forme et soundness sous forme variable (C2-T4 / D7)|test|d7_2_equilibre_scelle_a_la_fin_variable|circuit
+P3|Liaison de forme et soundness sous forme variable (C2-T4 / D7)|test|d7_3_ordre_publics_segments_lie|circuit
+P3|Liaison de forme et soundness sous forme variable (C2-T4 / D7)|test|forme_2_2_identique_aux_constantes|circuit
+P3|Liaison de forme et soundness sous forme variable (C2-T4 / D7)|test|bijection_largeur_forme|circuit
+
+P4|Masquage re-vérifié sous formes variables (1/1, 2/2, 4/4)|test|masquage_sous_formes_variables|circuit
+P4|Masquage re-vérifié sous formes variables (1/1, 2/2, 4/4)|test|masquage_porteuses_sous_segments|circuit
+P4|Masquage re-vérifié sous formes variables (1/1, 2/2, 4/4)|test|forges_existantes_sous_forme_4_4|circuit
+
+P5|Forges à reconstruction rejetées à la profondeur consensus (D8)|test|forges_a_reconstruction_rejetees_a_la_profondeur_consensus|circuit

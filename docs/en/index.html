@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Obscura — a post-quantum digital currency designed for privacy</title>
+<meta name="description" content="Obscura: a Rust prototype of a digital currency where amounts, senders and recipients are never published, built on defence in depth and a STARK circuit that defines the consensus.">
+<meta name="color-scheme" content="light dark">
+<link rel="alternate" hreflang="fr" href="../index.html">
+<link rel="alternate" hreflang="en" href="index.html">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+
+<a class="skip" href="#content">Skip to content</a>
+
+<div class="topbar">
+  <div class="shell">
+    <a class="brand" href="index.html">Obs<span>cura</span></a>
+    <nav class="topnav" aria-label="Main navigation">
+      <a href="index.html" aria-current="page">Home</a>
+      <a href="obscura.html">The project</a>
+      <a href="start.html">Get started</a>
+      <a href="method.html">Method</a>
+      <a class="ctrl" href="../index.html" hreflang="fr" lang="fr">FR</a>
+      <button type="button" class="ctrl" data-theme-toggle aria-pressed="false">
+        theme <span data-theme-label>dark</span>
+      </button>
+    </nav>
+  </div>
+</div>
+
+<header class="hero">
+  <div class="shell">
+    <p class="eyebrow rise">Rust research prototype &middot; v0.2 &middot; 2026</p>
+    <h1 class="title serif rise">A <em>post-quantum</em> digital currency, designed for <em>privacy</em></h1>
+    <p class="lede rise">
+      On a conventional blockchain, every payment is public and recorded forever. Obscura
+      publishes the opposite: nothing. Not the amounts, not the senders, not the recipients —
+      and its security is built to survive a quantum computer.
+    </p>
+    <div class="warn rise">
+      <span class="ico" aria-hidden="true">▲</span>
+      <p>
+        <strong>Educational prototype, with no security audit.</strong> The code is complete
+        and tested end to end, but nothing has been reviewed by a cryptanalyst.
+        <strong>Do not entrust it with anything of value.</strong> There is no public chain:
+        no faucet and no explorer, <strong>by decision</strong>.
+      </p>
+    </div>
+    <div class="cta-row rise">
+      <a class="btn primary" href="start.html">Run it <span class="arr" aria-hidden="true">→</span></a>
+      <a class="btn" href="obscura.html">Understand the project</a>
+    </div>
+    <div class="stat-row rise">
+      <div class="stat"><b>7</b><span>Rust crates</span></div>
+      <div class="stat"><b>42,467</b><span>lines of code</span></div>
+      <div class="stat"><b>614</b><span>tests</span></div>
+      <div class="stat"><b>P1–P7</b><span>proved in circuit</span></div>
+      <div class="stat"><b>4</b><span>binaries</span></div>
+    </div>
+  </div>
+</header>
+
+<main id="content">
+
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">In brief</div>
+      <h2 class="serif">Four things to know before digging in</h2>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <div class="ico" aria-hidden="true">◈</div>
+        <h4>Complete privacy</h4>
+        <p>
+          On chain there are only commitments and nullifiers. Amounts, senders and
+          recipients are never published.
+        </p>
+      </div>
+      <div class="card">
+        <div class="ico" aria-hidden="true">◱</div>
+        <h4>Defence in depth</h4>
+        <p>
+          Every security function rests on two primitives from independent families. The
+          whole holds if at least one holds.
+        </p>
+      </div>
+      <div class="card">
+        <div class="ico" aria-hidden="true">◎</div>
+        <h4>The STARK is the consensus</h4>
+        <p>
+          The circuit statement does not accompany the rule: it <em>is</em> the rule. There
+          is no second definition to drift away from.
+        </p>
+      </div>
+      <div class="card">
+        <div class="ico" aria-hidden="true">◔</div>
+        <h4>Finality, not mining</h4>
+        <p>
+          A committee of authorities produces blocks, with a quorum certificate checked
+          before any proof. An absent authority is routed around.
+        </p>
+      </div>
+    </div>
+    <div class="col">
+      <p>
+        The detail behind each of these, and above all <strong>the five known limitations of
+        the prototype</strong>, are on the project page — shown in the body of the page, not
+        relegated to a footnote.
+      </p>
+      <div class="cta-row">
+        <a class="btn" href="obscura.html">The project in detail <span class="arr" aria-hidden="true">→</span></a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Try it</div>
+      <h2 class="serif">What you can run today</h2>
+      <p class="sub">
+        There is no binary to download: no release has been published. You fetch the source
+        and build it — Rust 1.87 is enough.
+      </p>
+    </div>
+    <div class="col">
+      <div class="cmd">
+        <div class="cmd-head"><span class="t">three commands</span></div>
+<pre><code>git clone https://github.com/nailiwalid-del/obscura.git
+cd obscura
+cargo run --release --bin obscura-demo</code></pre>
+      </div>
+      <p>
+        That last command starts two real nodes and passes a transaction between them. To set
+        up a chain of your own — your genesis, your sealing node, a wallet that pays — the
+        full walkthrough is on the <a href="start.html">Get started</a> page, where every
+        command was verified by real execution, all the way to a received payment.
+      </p>
+      <div class="callout secret">
+        <span class="lab">Invitation-only network</span>
+        <p>
+          The only path you can follow alone is the <strong>local testnet</strong>. Joining a
+          federation requires an invitation and an out-of-band key exchange: there is no
+          public bootnode, no directory, and no “join” button.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Going further</div>
+      <h2 class="serif">Reading the project</h2>
+      <p class="sub">
+        This page and the project page popularise. Where they diverge, the repository
+        documents are right. Most of them are written in French.
+      </p>
+    </div>
+    <div class="linklist">
+      <a href="obscura.html">
+        <span class="n">The project</span>
+        <span class="d">A layered overview: for everyone, then the principle, the circuit, the consensus and the limitations.</span>
+      </a>
+      <a href="start.html">
+        <span class="n">Get started</span>
+        <span class="d">Source, build, a local testnet end to end, node and wallet.</span>
+      </a>
+      <a href="../obscura-overview.html">
+        <span class="n">Design note <span class="tag">FR</span></span>
+        <span class="d">The long document: architecture, circuit, ledger, measurements, roadmap.</span>
+      </a>
+      <a href="../obscura-atelier.html">
+        <span class="n">Workshop — understanding <span class="tag">FR</span></span>
+        <span class="d">How it works, step by step, with no cryptography background assumed.</span>
+      </a>
+      <a href="../obscura-atelier-pratique.html">
+        <span class="n">Workshop — the procedure <span class="tag">FR</span></span>
+        <span class="d">The practical walkthrough, command by command.</span>
+      </a>
+      <a href="https://github.com/nailiwalid-del/obscura">
+        <span class="n">The repository on GitHub</span>
+        <span class="d">Full source, licensed MIT or Apache-2.0, at your option.</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="shell">
+    <div class="cols">
+      <div>
+        <h5>This site</h5>
+        <ul>
+          <li><a href="obscura.html">The project</a></li>
+          <li><a href="start.html">Get started</a></li>
+          <li><a href="../index.html" hreflang="fr" lang="fr">Version française</a></li>
+        </ul>
+      </div>
+      <div>
+        <h5>Documents <span class="tag">in French</span></h5>
+        <ul>
+          <li><a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/CONFORMITE.md">Conformance — start here</a></li>
+          <li><a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/PROTOCOL.md">Protocol specification</a></li>
+          <li><a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/THREAT_MODEL.md">Threat model</a></li>
+          <li><a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/STARK_STATEMENT.md">STARK statement</a></li>
+        </ul>
+      </div>
+      <div>
+        <h5>Operations <span class="tag">in French</span></h5>
+        <ul>
+          <li><a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/OPERATEUR.md">Running a node</a></li>
+          <li><a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/TESTNET.md">Testnet</a></li>
+          <li><a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/OUVERTURE.md">Opening a chain</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="bottom">
+      <span class="mono">Educational prototype — unaudited, no value. Invitation-only network: no faucet, no explorer.</span>
+      <span class="mono">MIT <em>or</em> Apache-2.0 &middot; <span data-year>2026</span></span>
+    </div>
+  </div>
+</footer>
+
+<script src="../assets/site.js"></script>
+</body>
+</html>

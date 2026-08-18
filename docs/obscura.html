@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Obscura — monnaie post-quantique conçue pour la confidentialité</title>
+<meta name="description" content="Obscura : prototype Rust d'une monnaie numérique où montants, expéditeurs et destinataires ne sont jamais publiés, bâti sur la défense en profondeur et un circuit STARK qui définit le consensus.">
+<meta name="color-scheme" content="light dark">
+<link rel="alternate" hreflang="en" href="en/obscura.html">
+<link rel="alternate" hreflang="fr" href="obscura.html">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<a class="skip" href="#contenu">Aller au contenu</a>
+
+<div class="topbar">
+  <div class="shell">
+    <a class="brand" href="index.html">Obs<span>cura</span></a>
+    <nav class="topnav" aria-label="Navigation principale">
+      <a href="index.html">Accueil</a>
+      <a href="obscura.html" aria-current="page">Le projet</a>
+      <a href="demarrer.html">Démarrer</a>
+      <a href="methode.html">Méthode</a>
+      <a class="ctrl" href="en/obscura.html" hreflang="en" lang="en">EN</a>
+      <button type="button" class="ctrl" data-theme-toggle aria-pressed="false">
+        thème <span data-theme-label>sombre</span>
+      </button>
+    </nav>
+  </div>
+</div>
+
+<header class="hero">
+  <div class="shell">
+    <p class="eyebrow rise">Obscura &middot; Prototype Rust &middot; v0.2</p>
+    <h1 class="title serif rise">Une monnaie où l'on paie <em>sans être lu</em></h1>
+    <p class="lede rise">
+      Sur une blockchain classique, chaque paiement est public et gravé pour toujours.
+      Obscura publie l'inverse : rien. Ni les montants, ni les expéditeurs, ni les
+      destinataires. Et sa sécurité est construite pour survivre à un ordinateur quantique.
+    </p>
+    <div class="warn rise">
+      <span class="ico" aria-hidden="true">▲</span>
+      <p>
+        <strong>Prototype pédagogique, sans audit de sécurité.</strong> Le code est complet
+        et testé de bout en bout, mais rien n'a été soumis à un cryptanalyste.
+        <strong>Ne lui confiez aucune valeur réelle.</strong>
+      </p>
+    </div>
+    <div class="cta-row rise">
+      <a class="btn primary" href="demarrer.html">Le faire tourner <span class="arr" aria-hidden="true">→</span></a>
+      <a class="btn" href="obscura-overview.html">La note de conception</a>
+    </div>
+  </div>
+</header>
+
+<main id="contenu">
+
+<!-- ====================================================== couche 1 : pour tous -->
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Pour tous</div>
+      <h2 class="serif">Le problème : l'argent numérique est un livre ouvert</h2>
+    </div>
+    <div class="col">
+      <p>
+        On croit souvent que le Bitcoin est anonyme. C'est l'inverse : chaque transaction
+        est publique et permanente. N'importe qui peut lire quelle adresse a envoyé combien
+        à quelle autre, et un peu d'analyse suffit à relier ces adresses à des personnes.
+        C'est un relevé bancaire affiché sur la place publique.
+      </p>
+      <p>
+        Obscura part d'un autre point de départ : <strong>ne rien publier du tout</strong>.
+        Le réseau ne voit passer que des empreintes qui ne disent ni le montant, ni qui
+        paie, ni qui reçoit — et il peut malgré tout vérifier que la transaction est
+        valide. C'est le rôle de la <em class="term">preuve à divulgation nulle</em> :
+        démontrer qu'une règle est respectée sans montrer les données qui le prouvent.
+      </p>
+      <p>
+        Le second objectif est de tenir dans la durée. Les ordinateurs quantiques
+        casseraient les signatures utilisées aujourd'hui par la quasi-totalité des
+        cryptomonnaies. Obscura est bâtie pour que cela ne suffise pas à la faire tomber.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================ couche 2 : deux serrures -->
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Le principe</div>
+      <h2 class="serif">Défense en profondeur : deux serrures, jamais une</h2>
+      <p class="sub">
+        Chaque fonction de sécurité combine <strong>deux primitives de familles
+        mathématiques indépendantes</strong>. La sécurité tient si au moins une des deux tient.
+      </p>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>Fonction</th><th>Primitive 1</th><th>Primitive 2</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Échange de clés</td>
+            <td>X25519 <span class="tag">courbes elliptiques</span></td>
+            <td>ML-KEM-768 <span class="tag">FIPS&nbsp;203 · réseaux euclidiens</span></td>
+          </tr>
+          <tr>
+            <td>Signatures</td>
+            <td>Ed25519</td>
+            <td>ML-DSA-65 <span class="tag">FIPS&nbsp;204 · les <em>deux</em> exigées</span></td>
+          </tr>
+          <tr>
+            <td>Chiffrement</td>
+            <td>AES-256-GCM</td>
+            <td>XChaCha20-Poly1305 <span class="tag">en cascade</span></td>
+          </tr>
+          <tr>
+            <td>Hachage</td>
+            <td>BLAKE3</td>
+            <td>SHA3-256 <span class="tag">concaténés, jamais tronqués</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="col">
+      <p>
+        L'intérêt n'est pas d'empiler pour empiler. Une percée cryptanalytique frappe
+        rarement deux familles mathématiques à la fois : casser les courbes elliptiques
+        ne dit rien des réseaux euclidiens, et réciproquement. Exiger les
+        <strong>deux</strong> signatures rend une transaction invalide dès qu'il en manque
+        une — un attaquant doit donc briser les deux mondes, pas le plus faible.
+      </p>
+      <div class="callout">
+        <span class="lab">Une décision qui mérite d'être connue</span>
+        <p>
+          Les algorithmes portent une <strong>version explicite</strong> sur le fil :
+          <code>0x02</code> désigne les versions FIPS, seule version courante. Le round-3
+          pré-FIPS (<code>0x01</code>) est refusé <strong>par son nom</strong> — les deux
+          n'ont jamais coexisté. Une négociation de version est une surface d'attaque ;
+          un refus franc n'en est pas une.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================ couche 3 : confidentialité -->
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Confidentialité</div>
+      <h2 class="serif">Ce que la chaîne contient réellement</h2>
+    </div>
+    <div class="col">
+      <p>
+        Le modèle suit la lignée <em class="term">Zerocash</em>. Sur la chaîne, il n'y a que
+        deux sortes d'objets :
+      </p>
+      <ul>
+        <li>des <strong>engagements</strong> (<em>commitments</em>, 64 octets) — l'empreinte
+          d'une pièce dont la valeur et le propriétaire restent cachés ;</li>
+        <li>des <strong>annulateurs</strong> (<em>nullifiers</em>, 32 octets) — la marque
+          qu'une pièce a été dépensée, sans dire laquelle.</li>
+      </ul>
+      <p>
+        Montants, expéditeurs, destinataires : <strong>jamais publiés</strong>. Le
+        destinataire retrouve ses pièces en parcourant la chaîne avec sa clé de réception,
+        qui seule permet de déchiffrer les notes qui lui sont destinées.
+      </p>
+      <p>
+        C'est aussi ce qui explique une contrainte plus loin dans la page : puisque le
+        montant est ce que le chiffrement cache, aucune règle ne peut <em>borner</em> une
+        récompense de production. D'où l'absence de <em class="term">coinbase</em>.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ==================================================== couche 4 : le STARK -->
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Le cœur</div>
+      <h2 class="serif">Le circuit STARK n'est pas une option : c'est le consensus</h2>
+    </div>
+    <div class="col">
+      <p>
+        Dans beaucoup de projets, la preuve est une couche ajoutée par-dessus des règles
+        écrites ailleurs. Ici, l'énoncé du circuit <strong>est</strong> la règle de
+        consensus. Ce que le circuit prouve — sept propriétés notées <code>P1</code> à
+        <code>P7</code> — définit ce qu'est une transaction valide ; il n'existe pas de
+        seconde définition avec laquelle il pourrait diverger.
+      </p>
+      <p>
+        Le circuit est un <strong>monolithe</strong> de forme variable : de 1 à 4 entrées
+        et de 1 à 4 sorties. Un portefeuille qui ne détient qu'une seule note peut payer,
+        et la commande <code>consolider</code> regroupe les notes éparses. La
+        <em>forme</em> employée (2 entrées / 2 sorties par défaut) reste publique — ce
+        point est traité dans le modèle d'adversaire.
+      </p>
+      <div class="callout">
+        <span class="lab">Ce qui est prouvé, et avec quelle réserve</span>
+        <p>
+          Depuis la révision 3z-b1, la preuve de consensus est <strong>witness-hiding</strong>
+          (HVZK dans le modèle de l'oracle aléatoire). La réserve est explicite et
+          assumée : il s'agit du modèle <em>honnête-vérifieur</em>, sur un prototype non
+          audité. Le détail de l'argument est dans
+          <a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/STARK_STATEMENT.md">l'énoncé du circuit</a>.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ====================================================== couche 5 : le BFT -->
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Consensus</div>
+      <h2 class="serif">La finalité, et ce qui la produit</h2>
+    </div>
+    <div class="col">
+      <p>
+        Obscura ne mine pas. Les blocs sont produits à tour de rôle par un
+        <strong>comité d'autorités</strong> (au plus 64) : pour une hauteur et une vue
+        données, le producteur légitime est désigné mécaniquement, et son bloc n'est valide
+        que muni d'un <strong>certificat de quorum <code>2f+1</code></strong>, avec
+        <code>n = 3f+1</code>.
+      </p>
+      <p>
+        L'ordre de vérification n'est pas un détail d'implémentation : le certificat est
+        contrôlé <strong>avant toute vérification STARK</strong>. Un bloc mal certifié est
+        rejeté sans qu'on ait payé le coût d'une preuve.
+      </p>
+      <p>
+        C'est ce qui donne la <em class="term">finalité</em> : contredire un bloc certifié
+        exigerait que <code>f+1</code> participants signent deux blocs à la même hauteur —
+        une faute <em>prouvable</em>, pas une simple divergence. Une autorité absente n'est
+        plus un blocage : passé un délai, les autres passent à la vue suivante et la
+        contournent. Le comité lui-même est <strong>reconfigurable sur la même chaîne</strong>,
+        un changement certifié par le quorum devenant effectif quelques blocs plus tard.
+      </p>
+      <div class="callout secret">
+        <span class="lab">Le coût, et sa borne définitive</span>
+        <p>
+          <strong>Le certificat ne s'agrège pas</strong> — aucune signature post-quantique
+          ne le permet aujourd'hui. Son poids croît donc linéairement avec la taille du
+          comité : environ <strong>1&nbsp;% du bloc à 4 autorités</strong>, mais
+          <strong>13,9&nbsp;% à 64</strong>, où un bloc ne porte plus que 8 transactions au
+          lieu de 9. La taille du comité est ainsi bornée par le budget du bloc, et cette
+          borne est structurelle.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================= couche 6 : les limites -->
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Honnêteté</div>
+      <h2 class="serif">Les cinq limites connues</h2>
+      <p class="sub">
+        Elles sont ici, en pleine page, et non reléguées en note de bas de document.
+        Un prototype dont on cache les limites ne se laisse pas évaluer.
+      </p>
+    </div>
+
+    <div class="limits">
+      <div class="limit">
+        <h4>L'autorité de sceller est fédérée, pas décentralisée</h4>
+        <p>
+          La production de blocs appartient à une liste d'autorités gravée à la genèse,
+          désormais reconfigurable sur la même chaîne. Une genèse <em>sans</em> autorités
+          donne une chaîne ouverte, où l'ordre est <em>convenu</em> entre participants
+          coopératifs mais jamais <em>défendu</em> : bon pour un testnet local, pas pour un
+          réseau public. Réduire le comité à trois membres ou moins sacrifie la tolérance
+          aux fautes — le quorum vaut alors la totalité du comité, et aucune absence n'est
+          tolérée.
+        </p>
+      </div>
+
+      <div class="limit">
+        <h4>Le nœud qui sert l'historique en apprend long</h4>
+        <p>
+          Il voit l'adresse IP du portefeuille, la cadence de ses demandes et sa position
+          dans la chaîne. Taire une sortie lui permettait de présenter une chaîne
+          parfaitement cohérente dont le paiement omis restait invisible.
+        </p>
+        <p>
+          L'option <code>--temoin</code> interroge un <strong>second nœud</strong> à la même
+          hauteur et compare les racines : un désaccord arrête tout <em>avant</em>
+          application. Trois réserves demeurent — le témoin ne vaut que s'il est choisi
+          indépendamment (deux nœuds d'un même opérateur n'en valent qu'un, et le protocole
+          ne peut pas le vérifier) ; un désaccord ne dit pas <em>lequel</em> des deux ment ;
+          et l'option est <strong>désactivée par défaut</strong>.
+        </p>
+      </div>
+
+      <div class="limit">
+        <h4>La monnaie ne naît qu'à la genèse</h4>
+        <p>
+          La règle de consensus est sans nuance : au-delà de la hauteur zéro, aucune
+          émission. C'est ce qui empêche une inflation d'être diffusée <em>et acceptée</em>.
+          Une chaîne s'amorce donc sur un bloc initial paramétré, et sa monnaie est fixée
+          une fois pour toutes. Récompenser un producteur supposerait d'abord une règle qui
+          <em>borne</em> le montant émis — or ce montant est précisément ce que le
+          chiffrement cache.
+        </p>
+      </div>
+
+      <div class="limit">
+        <h4>La soundness annoncée est de 78 bits</h4>
+        <p>
+          Le vérifieur exige une borne <strong>prouvée</strong>, et non une borne
+          conjecturée qui donnerait un chiffre plus flatteur pour la même preuve.
+          78 bits est un niveau de <em>prototype</em> : il faudrait le relever avant tout
+          usage sérieux, au prix de preuves plus volumineuses.
+        </p>
+      </div>
+
+      <div class="limit">
+        <h4>La dette de backend post-quantique est ouverte et assumée</h4>
+        <p>
+          Toute la famille de bibliothèques qui fournit les primitives post-quantiques est
+          marquée <em>non maintenue</em> en amont, y compris les variantes FIPS.
+          L'évaluation des alternatives conclut à <strong>ne pas migrer maintenant</strong> :
+          aucune n'est meilleure que le statu quo, et « non maintenu » n'est pas
+          « vulnérable ». Les critères de déclenchement sont écrits d'avance, à relire avant
+          tout gel de genèse publique.
+        </p>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="callout secret">
+        <span class="lab">Une conséquence structurelle</span>
+        <p>
+          <strong>Aucune réorganisation n'est possible.</strong> L'état est
+          <em>append-only</em> de bout en bout. Supporter les réorganisations exigerait de
+          redessiner le ledger — pas d'ajouter une fonction.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ pour aller plus loin -->
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Aller plus loin</div>
+      <h2 class="serif">Les documents qui font autorité</h2>
+      <p class="sub">
+        Cette page vulgarise. En cas de divergence, ce sont ces documents qui ont raison —
+        et la divergence est un défaut à corriger ici.
+      </p>
+    </div>
+    <div class="linklist">
+      <a href="obscura-overview.html">
+        <span class="n">Note de conception</span>
+        <span class="d">Le document long : architecture, circuit, ledger, mesures, feuille de route.</span>
+      </a>
+      <a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/CONFORMITE.md">
+        <span class="n">Conformité</span>
+        <span class="d">Par où commencer, et où fait autorité quoi.</span>
+      </a>
+      <a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/PROTOCOL.md">
+        <span class="n">Protocole</span>
+        <span class="d">Formats et règles : bloc, vue, transaction, Merkle, versioning.</span>
+      </a>
+      <a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/ARCHITECTURE.md">
+        <span class="n">Architecture</span>
+        <span class="d">Rôles et invariants par crate, et ce qu'il ne faut pas régresser.</span>
+      </a>
+      <a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/THREAT_MODEL.md">
+        <span class="n">Modèle d'adversaire</span>
+        <span class="d">Adversaires, garanties, périmètre, canaux auxiliaires.</span>
+      </a>
+      <a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/STARK_STATEMENT.md">
+        <span class="n">Énoncé STARK</span>
+        <span class="d">Les propriétés P1–P7 et l'argument witness-hiding.</span>
+      </a>
+      <a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/POST_QUANTIQUE.md">
+        <span class="n">Post-quantique</span>
+        <span class="d">Ce que le terme veut dire ici — et ce qu'il ne dit pas.</span>
+      </a>
+      <a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/OPERATEUR.md">
+        <span class="n">Exploitation</span>
+        <span class="d">Faire tourner un nœud : journalisation, unité systemd, image Docker.</span>
+      </a>
+    </div>
+    <div class="col">
+      <div class="cta-row">
+        <a class="btn primary" href="demarrer.html">Faire tourner Obscura <span class="arr" aria-hidden="true">→</span></a>
+        <a class="btn" href="https://github.com/nailiwalid-del/obscura">Le dépôt</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="shell">
+    <div class="bottom">
+      <span class="mono">Prototype pédagogique — non audité, sans valeur. Réseau sur invitation : ni faucet, ni explorateur.</span>
+      <span class="mono"><a href="index.html">Accueil</a> &middot; MIT <em>ou</em> Apache-2.0 &middot; <span data-year>2026</span></span>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>

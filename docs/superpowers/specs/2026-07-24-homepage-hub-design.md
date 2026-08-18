@@ -1,6 +1,14 @@
 # Homepage hub Obscura — design
 
-> Statut : design validé (brainstorming), prêt pour plan d'implémentation
+> **Statut : SUPERSÉDÉ le 2026-07-27** par
+> `2026-07-27-site-vitrine-obscura-qpol-design.md`, qui en absorbe le contenu et
+> l'étend à deux projets (Obscura + QPoL) et deux langues. Jamais implémenté :
+> `docs/index.html` n'existait pas à la date de reprise. **Tout son cadrage honnête
+> (réseau sur invitation, disclaimer en hero, testnet local comme seul parcours solo,
+> pas de nœud en navigateur) est conservé tel quel** dans le design successeur.
+> Conservé ici comme trace de décision.
+
+> Statut d'origine : design validé (brainstorming), prêt pour plan d'implémentation
 > (`writing-plans`). Livrable : une page statique autonome `docs/index.html`.
 
 ## But

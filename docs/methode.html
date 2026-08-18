@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Méthode — comment un p = 0,019 devient p = 0,39</title>
+<meta name="description" content="Étude de cas : un écart significatif dans trois campagnes sur processeurs quantiques, expliqué par un biais d'estimateur et non par la physique. La discipline de preuve appliquée à un résultat qu'on voulait garder.">
+<meta name="color-scheme" content="light dark">
+<link rel="alternate" hreflang="en" href="en/method.html">
+<link rel="alternate" hreflang="fr" href="methode.html">
+<link rel="stylesheet" href="assets/site.css">
+<style>
+  .fig{margin:26px 0; max-width:900px}
+  .fig .plot{background:var(--surface); border:1px solid var(--line);
+    border-radius:12px; box-shadow:var(--shadow); padding:16px 10px 8px}
+  .fig svg{display:block; width:100%; height:auto; overflow:visible}
+  .fig figcaption{color:var(--muted); font-size:14.5px; margin-top:12px; max-width:72ch}
+  .fig figcaption b{color:var(--ink)}
+  .leg{display:flex; flex-wrap:wrap; gap:18px; padding:8px 6px 0;
+    font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--muted)}
+  .leg span{display:inline-flex; align-items:center; gap:7px}
+  .leg i{width:15px; height:2px; border-radius:1px; flex:none}
+  .leg i.pt{width:9px; height:9px; border-radius:50%; border:1.5px solid var(--muted)}
+  .tick{font-family:ui-monospace,Menlo,monospace; font-size:10px; fill:var(--muted);
+    font-variant-numeric:tabular-nums}
+  .dlab{font-family:ui-monospace,Menlo,monospace; font-size:10.5px; font-weight:500}
+  .verdicts{display:grid; gap:16px; grid-template-columns:repeat(auto-fit,minmax(240px,1fr));
+    margin:24px 0; max-width:760px}
+  .vd{background:var(--surface); border:1px solid var(--line); border-radius:14px;
+    padding:20px; box-shadow:var(--shadow)}
+  .vd .lab{font-family:ui-monospace,Menlo,monospace; font-size:11px; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--muted); display:block}
+  .vd .big{font-family:ui-monospace,Menlo,monospace; font-size:2rem; line-height:1.1;
+    margin:.25em 0 .1em; font-variant-numeric:tabular-nums}
+  .vd.a .big{color:var(--serie-a)}
+  .vd.b .big{color:var(--serie-b)}
+  .vd .sub{color:var(--muted); font-size:14px; margin:0}
+  td.sa{color:var(--serie-a)}
+  td.sb{color:var(--serie-b)}
+  table.num td{font-variant-numeric:tabular-nums; white-space:nowrap}
+</style>
+</head>
+<body>
+
+<a class="skip" href="#contenu">Aller au contenu</a>
+
+<div class="topbar">
+  <div class="shell">
+    <a class="brand" href="index.html">Obs<span>cura</span></a>
+    <nav class="topnav" aria-label="Navigation principale">
+      <a href="index.html">Accueil</a>
+      <a href="obscura.html">Le projet</a>
+      <a href="demarrer.html">Démarrer</a>
+      <a href="methode.html" aria-current="page">Méthode</a>
+      <a class="ctrl" href="en/method.html" hreflang="en" lang="en">EN</a>
+      <button type="button" class="ctrl" data-theme-toggle aria-pressed="false">
+        thème <span data-theme-label>sombre</span>
+      </button>
+    </nav>
+  </div>
+</div>
+
+<header class="hero">
+  <div class="shell">
+    <p class="eyebrow rise">Méthode &middot; étude de cas</p>
+    <h1 class="title serif rise">Comment un <em>p&nbsp;=&nbsp;0,019</em> devient un <em>p&nbsp;=&nbsp;0,39</em></h1>
+    <p class="lede rise">
+      Obscura sépare ce qui est <strong>prouvé</strong> de ce qui est <strong>supposé</strong>.
+      C'est facile à écrire. Voici ce que cette discipline donne quand elle coûte un
+      résultat qu'on voulait garder — sur un autre projet, avec les mêmes règles.
+    </p>
+  </div>
+</header>
+
+<main id="contenu">
+
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Le résultat qui n'existait pas</div>
+      <h2 class="serif">Trois campagnes, deux matériels, un écart significatif</h2>
+    </div>
+    <div class="col">
+      <p>
+        Une quantité informationnelle <span class="mono">Ξ</span> possède, pour un qubit,
+        un maximum analytique en <span class="mono">η* = 0,5643766</span>. La question
+        était&nbsp;: le pic mesuré tombe-t-il là&nbsp;?
+      </p>
+      <p>
+        Trois campagnes — deux sur IBM Marrakesh à <span class="mono">8192</span> tirs, une
+        sur IQM Garnet à <span class="mono">512</span>. Tomographie X/Y/Z, reconstruction de
+        la matrice densité, bootstrap à <span class="mono">10&nbsp;000</span>
+        rééchantillonnages binomiaux, méta-analyse à variance inverse.
+      </p>
+      <p>
+        Résultat combiné&nbsp;: <span class="mono">0,5586666</span>, IC95
+        <span class="mono">[0,5539090 ; 0,5634242]</span>. La valeur théorique hors
+        intervalle. <span class="mono">p = 0,019</span>. Hétérogénéité nulle entre
+        campagnes. Un petit décalage, propre, reproductible sur deux matériels
+        indépendants.
+      </p>
+
+      <div class="callout secret">
+        <span class="lab">Ce qui rendait la chose tentante</span>
+        <p>
+          Un écart cohérent entre plateformes n'a pas beaucoup d'explications avenantes&nbsp;:
+          soit quelque chose de physique que le modèle ne contenait pas, soit une dérive de
+          calibration du matériel. Une campagne dédiée était prête à partir pour tester la
+          seconde. Elle s'est arrêtée faute de crédits — et c'est cette interruption qui a
+          forcé à reprendre l'analyse à froid.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">L'erreur</div>
+      <h2 class="serif">L'estimateur suivait une courbe, on le testait contre une autre</h2>
+    </div>
+    <div class="col">
+      <p>
+        L'estimateur de <span class="mono">Ξ</span> consomme l'état de référence
+        <em>tel qu'il a été mesuré</em>. Or cet état n'est pas pur&nbsp;: son rayon de Bloch
+        vaut <span class="mono">0,983</span> sur la première campagne IBM.
+      </p>
+      <p>
+        La valeur <span class="mono">0,5643766</span>, elle, suppose une référence
+        <em>parfaitement pure</em>. Pour un rayon <span class="mono">x &lt; 1</span>, le
+        chemin donne <span class="mono">Ξ(η) = (1−η) x artanh(ηx)</span>, dont le maximum
+        est ailleurs — d'une quantité entièrement calculable avant toute mesure.
+      </p>
+    </div>
+
+    <figure class="fig">
+      <div class="plot"><svg id="fig" viewBox="0 0 760 400" role="img"
+        data-ylab="Ξ mesuré" data-xlab="η mesuré"
+        data-lab-a="réf. pure" data-lab-b="réf. mesurée" data-decimal=","
+        aria-label="Deux courbes de Xi en fonction de eta : référence pure de pic 0,5644, référence mesurée de pic 0,5608. Les vingt points de la campagne IBM suivent la seconde."></svg></div>
+      <div class="leg">
+        <span><i style="background:var(--serie-a)"></i>référence pure — le null utilisé</span>
+        <span><i style="background:var(--serie-b)"></i>référence mesurée, |r| = 0,983</span>
+        <span><i class="pt"></i>IBM Marrakesh, campagne 1</span>
+      </div>
+      <figcaption>
+        Zoom sur la région du pic&nbsp;; l'axe vertical couvre <span class="mono">0,253</span>
+        à <span class="mono">0,280</span>. Les deux courbes sont des prédictions, pas des
+        ajustements. Les vingt points sont les données brutes, barres d'erreur bootstrap à
+        1&nbsp;σ. <b>Ils suivent la courbe de la référence mesurée, à
+        <span class="mono">0,010</span> sous celle de la référence pure — et c'est cet écart
+        qui déplace le pic ajusté.</b>
+      </figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">La correction</div>
+      <h2 class="serif">Un null par campagne, dérivé de sa propre référence</h2>
+    </div>
+
+    <div class="tbl-wrap">
+      <table class="num">
+        <thead><tr>
+          <th>Campagne</th><th>|r_ref|</th><th>Null utilisé</th><th>Null correct</th>
+          <th>Décalage prédit</th><th>Décalage observé</th>
+        </tr></thead>
+        <tbody>
+          <tr><td>IBM 1</td><td>0,98313</td><td class="sa">0,5643766</td>
+              <td class="sb">0,5608243</td><td>−0,00355</td><td>−0,00612</td></tr>
+          <tr><td>IBM 2</td><td>0,98098</td><td class="sa">0,5643766</td>
+              <td class="sb">0,5603681</td><td>−0,00401</td><td>−0,00365</td></tr>
+          <tr><td>IQM 3</td><td>0,99889</td><td class="sa">0,5643766</td>
+              <td class="sb">0,5641337</td><td>−0,00024</td><td>−0,01566</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="verdicts">
+      <div class="vd a">
+        <span class="lab">Contre le null pur</span>
+        <div class="big">p = 0,0187</div>
+        <p class="sub">z = −2,352 — « écart significatif, à expliquer »</p>
+      </div>
+      <div class="vd b">
+        <span class="lab">Contre le null corrigé</span>
+        <div class="big">p = 0,3904</div>
+        <p class="sub">z = −0,859 — rien à expliquer</p>
+      </div>
+    </div>
+
+    <div class="col">
+      <p>
+        L'impureté explique <strong>63&nbsp;%</strong> du décalage à elle seule&nbsp;; le
+        résidu, <span class="mono">−0,0021</span>, tient dans l'erreur standard de la
+        combinaison (<span class="mono">0,0024</span>).
+      </p>
+      <p>
+        Je ne prétends donc pas avoir expliqué le décalage à la dernière décimale. Je
+        prétends qu'il n'y a plus rien de significatif à expliquer — affirmation plus
+        faible, et suffisante.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">Trois signes lisibles plus tôt</div>
+      <h2 class="serif">Ce qu'un pipeline propre ne protège pas</h2>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <div class="ico" aria-hidden="true">◈</div>
+        <h4>Le résidu avait un signe</h4>
+        <p>
+          Négatif sur les trois campagnes, à toutes les valeurs de
+          <span class="mono">η</span>. Quand la moyenne d'un résidu égale sa RMS, il n'y a
+          pas de bruit&nbsp;: il n'y a qu'un biais.
+        </p>
+      </div>
+      <div class="card">
+        <div class="ico" aria-hidden="true">◈</div>
+        <h4>Le bootstrap ne pouvait pas le voir</h4>
+        <p>
+          Il rééchantillonnait le bruit de tir, la seule source modélisée. Il a resserré les
+          intervalles autour d'un centre biaisé — le pire des deux mondes.
+        </p>
+      </div>
+      <div class="card">
+        <div class="ico" aria-hidden="true">◈</div>
+        <h4>Le suivi était sous-dimensionné</h4>
+        <p>
+          À 512 tirs, 1&nbsp;σ sur une composante de Bloch vaut 0,044. Les écarts cherchés
+          étaient sous le seuil. La campagne n'aurait rien tranché.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="shell">
+    <div class="band-head">
+      <div class="k">La règle</div>
+      <h2 class="serif">Et pourquoi elle vaut aussi pour un protocole</h2>
+    </div>
+    <div class="col">
+      <div class="callout">
+        <span class="lab">Règle</span>
+        <p>
+          L'hypothèse nulle doit être calculée dans les mêmes conditions que l'estimateur.
+          Si l'estimateur consomme des quantités mesurées, le null doit les consommer aussi.
+        </p>
+      </div>
+      <p>
+        Tester un estimateur à entrées mesurées contre une prédiction à entrées idéales
+        fabrique de la significativité. Et plus les barres d'erreur sont petites, plus le
+        faux positif est convaincant&nbsp;: la rigueur du traitement en aval ne protège de
+        rien si le point de comparaison en amont est faux. Elle aggrave.
+      </p>
+      <p>
+        C'est la même raison pour laquelle
+        <a href="https://github.com/nailiwalid-del/obscura/blob/master/docs/STARK_STATEMENT.md">l'énoncé
+        STARK</a> d'Obscura range ses revendications en trois registres —
+        <em class="term">prouvé</em>, <em class="term">supposé</em>,
+        <em class="term">hors modèle</em> — et pourquoi le registre prouvé se rejoue par une
+        commande plutôt que de s'affirmer&nbsp;:
+      </p>
+      <div class="cmd">
+        <div class="cmd-head"><span>vérifier les revendications</span></div>
+        <pre><code>./verification/verifier.sh --complet</code></pre>
+      </div>
+      <p>
+        Dix-sept revendications, sortie 1 si l'une d'elles tombe. Ce harnais a d'ailleurs
+        trouvé, sur son premier passage, que huit des tests concernés étaient
+        <span class="mono">#[ignore]</span>és en debug&nbsp;: un auditeur lançant le
+        <span class="mono">cargo test</span> évident aurait vu une suite verte sans les
+        avoir évalués.
+      </p>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="shell">
+    <p>
+      Prototype de recherche. <a href="index.html">Accueil</a> &middot;
+      <a href="obscura.html">Le projet</a> &middot;
+      <a href="en/method.html" hreflang="en" lang="en">English version</a>
+    </p>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+<script src="assets/methode-fig.js"></script>
+</body>
+</html>

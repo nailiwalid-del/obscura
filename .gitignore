@@ -1,3 +1,6 @@
 /target
 **/*.rs.bk
 Cargo.lock.orig
+
+# Projet quantique distinct — versionné dans son propre dépôt (quant/.git)
+/quant/
