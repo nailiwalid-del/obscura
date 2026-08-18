@@ -180,7 +180,9 @@ impl Statut {
     }
 
     /// `true` si ce statut mérite l'attention de l'opérateur (et non un simple
-    /// `INFO` de routine) : aucun lien ouvert, ou des blocs refusés pour chaînage.
+    /// `INFO` de routine) : aucun lien ouvert, ou des blocs refusés pour chaînage à
+    /// une hauteur qu'on ne tient pas encore (le signe d'un nœud figé — un doublon de
+    /// relais d'une hauteur déjà appliquée n'est PAS compté, cf. `orchestration.rs`).
     ///
     /// Zéro lien n'est pas anodin — un nœud sans pair ne reçoit rien, ne diffuse
     /// rien, et continue pourtant de répondre normalement à qui l'interroge.
