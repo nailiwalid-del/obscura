@@ -464,6 +464,13 @@ est PROUVÉ, l'uniformité qui en découle est SUPPOSÉE (elle dépend du ROM).
 
 ### Prouvé — le code et les forges RED
 
+> **Rejouable.** `./verification/verifier.sh --complet` réévalue les dix-sept
+> revendications de ce registre et sort 1 si l'une d'elles tombe. La carte
+> revendication → preuve est dans `verification/revendications.psv`, lisible
+> sans rien exécuter. ⚠️ Le mode `--release` est obligatoire : en debug, huit
+> des tests ci-dessous sont `#[ignore]`és et la suite passe au vert sans les
+> avoir évalués.
+
 **Périmètre révélé (fait, winter-verifier 0.13.1).** La preuve révèle trois
 familles de valeurs — TOUTES fonctions déterministes de la trace COMMITTÉE
 COMPLÈTE, laquelle inclut la région de blinding :
